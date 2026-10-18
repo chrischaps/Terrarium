@@ -1,0 +1,7 @@
+*.love
+build/
+dist/
+renders/
+.DS_Store
+Thumbs.db
+desktop.ini
