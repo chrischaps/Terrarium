@@ -24,6 +24,7 @@ local DayCycle = require('jar.daycycle')
 local Plants = require('jar.plants')
 local Motes = require('jar.motes')
 local Scenery = require('jar.scenery')
+local Condensation = require('jar.condensation')
 local Ballistics = require('nav.ballistics')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
@@ -73,6 +74,7 @@ function love.load()
     world.flora = Plants
     Motes.init(rng.look, 120)
     Scenery.init(rng.scape, world.level)
+    Condensation.init(rng.scape) -- last, so the jar's composition doesn't shift
 
     for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
     for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
@@ -188,6 +190,7 @@ local function drawScene(light)
     Plants.drawGlow(light)
     Motes.drawFront(light)
     Scape.drawFront(light)
+    Condensation.draw(light) -- on the inside of the glass, under its dust
     Glass.drawFront(light, love.mouse.getX())
     love.graphics.setCanvas()
 end

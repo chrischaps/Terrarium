@@ -20,31 +20,42 @@ local DayCycle = {}
 --   room    : multiplier on the room and desk around the jar
 --   moon    : moonlight through the window (0..1)
 --   glow    : goblin's-gold moss and anything else that shows best in the dark
+--   damp    : Terrarium: condensation on the glass (0 = clear, 1 = fogged). It
+--             gathers as the jar cools after the lamp goes off, is heaviest
+--             before dawn, and the lamp burns it off through the morning
 local keys = {
     { h = 0.0, name = "night",
       ambient = { 0.30, 0.35, 0.52 }, fog = { 0.03, 0.045, 0.08 }, haze = 0.65,
-      bulb = { 1.00, 0.70, 0.42 }, lamp_i = 0.00, room = { 0.26, 0.31, 0.48 }, moon = 1.00, glow = 1.00 },
+      bulb = { 1.00, 0.70, 0.42 }, lamp_i = 0.00, room = { 0.26, 0.31, 0.48 }, moon = 1.00, glow = 1.00,
+      damp = 0.80 },
     { h = 5.5, name = "before dawn",
       ambient = { 0.33, 0.37, 0.50 }, fog = { 0.04, 0.05, 0.08 }, haze = 0.62,
-      bulb = { 1.00, 0.70, 0.42 }, lamp_i = 0.00, room = { 0.32, 0.36, 0.50 }, moon = 0.55, glow = 0.80 },
+      bulb = { 1.00, 0.70, 0.42 }, lamp_i = 0.00, room = { 0.32, 0.36, 0.50 }, moon = 0.55, glow = 0.80,
+      damp = 1.00 },
     { h = 7.0, name = "lamp on",
       ambient = { 0.74, 0.62, 0.54 }, fog = { 0.10, 0.08, 0.08 }, haze = 0.58,
-      bulb = { 1.00, 0.72, 0.44 }, lamp_i = 0.50, room = { 0.56, 0.50, 0.50 }, moon = 0.20, glow = 0.25 },
+      bulb = { 1.00, 0.72, 0.44 }, lamp_i = 0.50, room = { 0.56, 0.50, 0.50 }, moon = 0.20, glow = 0.25,
+      damp = 0.92 },
     { h = 8.5, name = "morning",
       ambient = { 0.94, 0.90, 0.84 }, fog = { 0.10, 0.10, 0.10 }, haze = 0.55,
-      bulb = { 1.00, 0.88, 0.68 }, lamp_i = 0.90, room = { 0.84, 0.84, 0.88 }, moon = 0.00, glow = 0.00 },
+      bulb = { 1.00, 0.88, 0.68 }, lamp_i = 0.90, room = { 0.84, 0.84, 0.88 }, moon = 0.00, glow = 0.00,
+      damp = 0.55 },
     { h = 13.0, name = "midday",
       ambient = { 1.00, 0.98, 0.94 }, fog = { 0.11, 0.11, 0.11 }, haze = 0.52,
-      bulb = { 1.00, 0.94, 0.82 }, lamp_i = 1.00, room = { 1.00, 1.00, 1.00 }, moon = 0.00, glow = 0.00 },
+      bulb = { 1.00, 0.94, 0.82 }, lamp_i = 1.00, room = { 1.00, 1.00, 1.00 }, moon = 0.00, glow = 0.00,
+      damp = 0.00 },
     { h = 17.0, name = "afternoon",
       ambient = { 0.98, 0.90, 0.78 }, fog = { 0.11, 0.10, 0.09 }, haze = 0.54,
-      bulb = { 1.00, 0.84, 0.60 }, lamp_i = 0.95, room = { 0.90, 0.82, 0.74 }, moon = 0.00, glow = 0.00 },
+      bulb = { 1.00, 0.84, 0.60 }, lamp_i = 0.95, room = { 0.90, 0.82, 0.74 }, moon = 0.00, glow = 0.00,
+      damp = 0.00 },
     { h = 20.0, name = "evening",
       ambient = { 0.80, 0.62, 0.48 }, fog = { 0.10, 0.07, 0.06 }, haze = 0.58,
-      bulb = { 1.00, 0.66, 0.38 }, lamp_i = 0.55, room = { 0.58, 0.46, 0.40 }, moon = 0.10, glow = 0.15 },
+      bulb = { 1.00, 0.66, 0.38 }, lamp_i = 0.55, room = { 0.58, 0.46, 0.40 }, moon = 0.10, glow = 0.15,
+      damp = 0.04 },
     { h = 21.5, name = "lamp off",
       ambient = { 0.36, 0.36, 0.50 }, fog = { 0.04, 0.04, 0.08 }, haze = 0.62,
-      bulb = { 1.00, 0.66, 0.38 }, lamp_i = 0.00, room = { 0.30, 0.30, 0.45 }, moon = 0.70, glow = 0.70 },
+      bulb = { 1.00, 0.66, 0.38 }, lamp_i = 0.00, room = { 0.30, 0.30, 0.45 }, moon = 0.70, glow = 0.70,
+      damp = 0.30 },
 }
 
 -- Named hours for --hour

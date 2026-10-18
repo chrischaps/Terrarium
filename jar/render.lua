@@ -41,7 +41,7 @@ local function makeBlob(size)
 end
 
 function Render.init()
-    for _, name in ipairs({ "object", "blur", "haze", "composite", "floor" }) do
+    for _, name in ipairs({ "object", "blur", "haze", "composite", "floor", "mist" }) do
         shaders[name] = loadShader(name)
     end
 
