@@ -7,6 +7,7 @@
 --   lovec . --hour <h|name>  open the jar at an hour (default: the clock; snaps: midday)
 --   lovec . --day <sec>      a time-compressed day, e.g. --day 120 to watch one pass
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
+--   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
 love.filesystem.setRequirePath("lib/?.lua;lib/?/init.lua;" .. love.filesystem.getRequirePath())
@@ -25,6 +26,7 @@ local Plants = require('jar.plants')
 local Motes = require('jar.motes')
 local Scenery = require('jar.scenery')
 local Condensation = require('jar.condensation')
+local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
@@ -35,6 +37,7 @@ local world
 local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
+local lantern = Lantern.new() -- you watch with it; the World never knows it's there
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -84,6 +87,12 @@ function love.load()
         for _ = 1, math.floor((args.snap.seconds or 1) / STEP) do step() end
         snapFrames = 0
     end
+    if args.follow then
+        for i, c in ipairs(world.creatures) do
+            if c.key == args.follow then lantern.who = i end
+        end
+        lantern:update(10, world) -- already up to full brightness
+    end
 end
 
 function love.update(dt)
@@ -92,6 +101,14 @@ function love.update(dt)
     while accumulator >= STEP do
         step()
         accumulator = accumulator - STEP
+    end
+    lantern:update(dt, world)
+
+    -- A hand over anyone you could follow
+    if love.mouse.isCursorSupported() then
+        local lx, ly = Tank.toLevel(love.mouse.getPosition())
+        local over = Lantern.creatureAt(world, lx, ly)
+        love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
 end
 
@@ -181,6 +198,7 @@ local function drawScene(light)
     Tank.pushPlane()
     Scenery.draw(light, world.time)
     drawCreatures(accumulator / STEP)
+    lantern:draw(light)
     if args.nav then drawNav() end
     love.graphics.pop()
 
@@ -192,6 +210,7 @@ local function drawScene(light)
     Scape.drawFront(light)
     Condensation.draw(light) -- on the inside of the glass, under its dust
     Glass.drawFront(light, love.mouse.getX())
+    lantern:drawGlass(light)
     love.graphics.setCanvas()
 end
 
@@ -228,6 +247,12 @@ function love.draw()
             love.event.quit()
         end
     end
+end
+
+-- Click a creature to follow it with the lantern; click anywhere else to let go
+function love.mousepressed(x, y, button)
+    if not world or button ~= 1 then return end
+    lantern:pick(world, Tank.toLevel(x, y))
 end
 
 function love.keypressed(key)

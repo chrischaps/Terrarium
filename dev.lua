@@ -14,6 +14,7 @@
 --   lovec . --seed <n>                    seed the simulation RNG
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
+--   lovec . --follow <who>                Terrarium: hold the lantern up to worm|blob|spider
 --
 -- The fixed-step sim makes all of this deterministic.
 
@@ -55,6 +56,7 @@ function dev.parse(args)
         -- Terrarium: the jar's hour at load, and a dev-compressed day length
         elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
+        elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
         end
         i = i + 1
@@ -215,6 +217,36 @@ function dev.selftest(World, level_data, fixed_dt)
     local a, b, c = run(1 / 30), run(1 / 60), run(1 / 240)
     check(results, a == b and b == c, 'frame-rate dependence: 30fps=%s 60fps=%s 240fps=%s', a, b, c)
     log.info('selftest', 'determinism  %s', (a == b and b == c) and 'identical at 30/60/240 fps' or 'MISMATCH')
+
+    -- Terrarium: 3b. The lantern only watches. A jar where it follows each
+    -- creature in turn (picked by clicking where it is) plays out exactly
+    -- like a jar where nobody ever picked it up.
+    local Lantern = require('jar.lantern')
+    local function watched(follow)
+        rng.seed(42)
+        local w = World.new(level_data, {wander = true, selected = 0})
+        local lantern = Lantern.new()
+        for s = 1, 2400 do
+            if follow and s % 600 == 1 then
+                local c = w.creatures[math.floor(s / 600) % #w.creatures + 1]
+                local x, y = c:anchor()
+                lantern:pick(w, x, y)
+            end
+            w:step(fixed_dt)
+            if follow then lantern:update(1 / 60, w) end
+        end
+        local out = {}
+        for _, c in ipairs(w.creatures) do
+            local x, y = c:anchor()
+            out[#out + 1] = string.format('%.6f,%.6f', x, y)
+        end
+        return table.concat(out, ' '), lantern.who
+    end
+    local plain = watched(false)
+    local followed, held = watched(true)
+    check(results, held ~= nil, 'lantern: clicking a creature did not pick it')
+    check(results, plain == followed, 'lantern changed the jar: %s vs %s', plain, followed)
+    log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
 
     -- 4. Audio: every event path runs without error (not a listening test)
     local ok_audio, err = pcall(function()
