@@ -4,14 +4,19 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 
 ## Running
 - `love .`: the game.
+- `lovec . --selftest`: Character's self-test, run against the jar (nav graph integrity, reachability, about 116 trips, determinism at 30/60/240 fps, audio smoke test). Exits 1 on failure.
+- `lovec . --snap - <sec> <file.png>`: fast-forward the sim, then save a screenshot to `%APPDATA%/LOVE/terrarium/`.
 - Headless self-tests and the 30-day population run will live under `tests/` (see M1/M3 issues). They must stay runnable in CI.
 
 ## Module map (from the proposal)
 - `genome.lua`: genes, ranges, crossover, mutation
-- `bodies/`: worm, blob and spider builders that take a genome
-- `nav/`: per-body navigation graph builder and A*
+- `bodies/`: worm, blob and spider builders that take a genome (`base.lua` holds the Mover anchor and Face; `fabrik.lua` is the spider's IK)
+- `nav/`: per-body navigation graph builder, A*, the ballistics jump model, and the path-following controller
+- `core/`: `rng` (the `sim` and `look` streams), `log`, `synth`
+- `dev.lua`: argument parsing and the self-test
 - `mind.lua`: needs and temperament choose goals
-- `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid
+- `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid. Right now it holds `world.lua` (creatures, graphs and controllers on the fixed step), `level.lua`/`collision.lua` (AABB solids), and `testroom.lua` (soil and one stone, in Character's level format)
+- Files copied from Character carry a `-- From chrischaps/Character @ <sha> (<path>)` header. Their internal requires were remapped (`creatures.` → `bodies.`, `core.navgraph` → `nav.navgraph`, `world.` → `jar.`). Other edits are marked `-- Terrarium:`.
 - `book.lua`: save data and the family book
 - Require path is `lib/?.lua`, so LoveLibs modules load as `require('LoveLibs.<area>.<module>')`, the same as in [Character](https://github.com/chrischaps/Character), where it's `libs/`. Code ported from Character keeps its requires unchanged.
 - `lib/LoveLibs/`: git subtree of chrischaps/LoveLibs. Don't edit it in place. Update with `git subtree pull --prefix=lib/LoveLibs https://github.com/chrischaps/LoveLibs.git master --squash`

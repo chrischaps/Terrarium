@@ -1,0 +1,369 @@
+-- From chrischaps/Character @ 925c35b (core/navgraph.lua)
+-- Navigation Graph: where a creature can stand, and how it can get between.
+--
+-- Built per creature profile, because a graph is a promise about a body:
+--   radius, height  - clearance needed to stand somewhere
+--   jump_vx/jump_vy - what ballistics.solve_jump may ask of it
+--   step            - largest ledge it can walk up or down without jumping
+--   climbs          - spiders get nodes on walls and ceilings too
+--
+-- Edge types:
+--   walk  - along a surface (or a small step between surfaces)
+--   crawl - along any surface incl. walls/ceilings and around corners (climbers)
+--   jump  - ballistic arc, vx/vy precomputed by ballistics.solve_jump
+--   fall  - step off an edge, vx precomputed by ballistics.solve_fall
+
+local ballistics = require('nav.ballistics')
+
+local NavGraph = {}
+NavGraph.__index = NavGraph
+
+NavGraph.WALK, NavGraph.CRAWL, NavGraph.JUMP, NavGraph.FALL = 'walk', 'crawl', 'jump', 'fall'
+
+local SPACING = 32        -- node spacing along a surface
+local FACE_SPACING = 28   -- node spacing along walls/ceilings (climbers)
+local MAX_JUMP_DX = 330
+local sqrt, abs = math.sqrt, math.abs
+
+local function dist(a, b)
+    local dx, dy = b.x - a.x, b.y - a.y
+    return sqrt(dx * dx + dy * dy)
+end
+
+function NavGraph.new(level, profile)
+    local self = setmetatable({}, NavGraph)
+    self.level = level
+    self.profile = profile
+    self.nodes = {}
+    self.edge_count = 0
+    if profile.climbs then
+        self:build_surface_nodes()
+    else
+        self:build_top_nodes()
+    end
+    self:build_ballistic_edges()
+    return self
+end
+
+function NavGraph:add_node(n)
+    n.id = #self.nodes + 1
+    n.edges = {}
+    self.nodes[n.id] = n
+    return n
+end
+
+function NavGraph:connect(a, b, kind, cost, extra)
+    for _, e in ipairs(a.edges) do
+        if e.to == b.id and e.kind == kind then return end
+    end
+    local e = {to = b.id, kind = kind, cost = cost}
+    if extra then for k, v in pairs(extra) do e[k] = v end end
+    a.edges[#a.edges + 1] = e
+    self.edge_count = self.edge_count + 1
+    return e
+end
+
+-- Can the body stand at (x, y) on a top surface?
+function NavGraph:fits(x, y)
+    local r = self.profile.radius
+    local level = self.level
+    return level:circle_clear(x, y - r - 1, r * 0.9)
+       and level:circle_clear(x, y - self.profile.height + r, r * 0.9)
+end
+
+--------------------------------------------------------------------------------
+-- Walkers: nodes along exposed top surfaces
+--------------------------------------------------------------------------------
+
+function NavGraph:build_top_nodes()
+    local level, p = self.level, self.profile
+    local margin = math.max(8, p.radius * 0.7)
+    self.spans = {}
+
+    for _, span in ipairs(level:top_spans()) do
+        local a, b = span.x0 + margin, span.x1 - margin
+        if b >= a then
+            local count = math.max(1, math.ceil((b - a) / SPACING))
+            local prev = nil
+            local list = {}
+            for i = 0, count do
+                local x = (count == 0) and a or (a + (b - a) * i / count)
+                if b == a and i > 0 then break end
+                if self:fits(x, span.y) then
+                    local n = self:add_node({
+                        x = x, y = span.y, nx = 0, ny = -1,
+                        solid = span.solid, span = span, kind = 'top'
+                    })
+                    list[#list + 1] = n
+                    if prev then
+                        self:connect(prev, n, 'walk', dist(prev, n))
+                        self:connect(n, prev, 'walk', dist(prev, n))
+                    end
+                    prev = n
+                else
+                    prev = nil
+                end
+            end
+            if #list > 0 then
+                list[1].end_left = true
+                list[#list].end_right = true
+                span.nodes = list
+                self.spans[#self.spans + 1] = span
+            end
+        end
+    end
+
+    -- Small steps between neighbouring spans are walkable
+    for _, a in ipairs(self.nodes) do
+        for _, b in ipairs(self.nodes) do
+            if a.span ~= b.span and abs(b.x - a.x) <= margin * 2 + 6
+               and abs(b.y - a.y) <= p.step then
+                local mx, my = (a.x + b.x) / 2, math.min(a.y, b.y)
+                if self.level:circle_clear(mx, my - p.radius - 1, p.radius * 0.8) then
+                    self:connect(a, b, 'walk', dist(a, b) + 4)
+                end
+            end
+        end
+    end
+
+    -- A span end is a real drop-off only if no step continues past it
+    for _, n in ipairs(self.nodes) do
+        for _, e in ipairs(n.edges) do
+            local m = self.nodes[e.to]
+            if e.kind == 'walk' and m.span ~= n.span then
+                if m.x > n.x then n.end_right = false else n.end_left = false end
+            end
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Climbers: nodes around the whole exposed perimeter of every solid
+--------------------------------------------------------------------------------
+
+function NavGraph:exposed(x, y, nx, ny)
+    local level = self.level
+    local ox, oy = x + nx * 3, y + ny * 3
+    if ox < 1 or ox > level.width - 1 or oy < 1 or oy > level.height - 1 then
+        return false
+    end
+    -- Room for the body on this side of the surface
+    local r = self.profile.radius
+    return level:solid_at(ox, oy) == nil
+       and level:circle_clear(x + nx * (r + 2), y + ny * (r + 2), r * 0.7)
+end
+
+function NavGraph:build_surface_nodes()
+    local level = self.level
+    local inv = 1 / sqrt(2)
+
+    for _, s in ipairs(level.solids) do
+        local L, T, R, B = s.x, s.y, s.x + s.w, s.y + s.h
+        local ring = {}
+        local function face(x0, y0, x1, y1, nx, ny)
+            local len = sqrt((x1 - x0) ^ 2 + (y1 - y0) ^ 2)
+            local count = math.max(1, math.ceil(len / FACE_SPACING))
+            for i = 1, count - 1 do
+                local t = i / count
+                ring[#ring + 1] = {x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t, nx = nx, ny = ny}
+            end
+        end
+        -- Clockwise from top-left corner
+        ring[#ring + 1] = {x = L, y = T, nx = -inv, ny = -inv, corner = true}
+        face(L, T, R, T, 0, -1)
+        ring[#ring + 1] = {x = R, y = T, nx = inv, ny = -inv, corner = true}
+        face(R, T, R, B, 1, 0)
+        ring[#ring + 1] = {x = R, y = B, nx = inv, ny = inv, corner = true}
+        face(R, B, L, B, 0, 1)
+        ring[#ring + 1] = {x = L, y = B, nx = -inv, ny = inv, corner = true}
+        face(L, B, L, T, -1, 0)
+
+        local made = {}
+        for i, pt in ipairs(ring) do
+            if self:exposed(pt.x, pt.y, pt.nx, pt.ny) then
+                pt.solid = s
+                pt.kind = (pt.ny == -1) and 'top' or (pt.corner and 'corner' or 'face')
+                made[i] = self:add_node(pt)
+            end
+        end
+        local count = #ring
+        for i = 1, count do
+            local a, b = made[i], made[i % count + 1]
+            if a and b then
+                self:connect(a, b, 'crawl', dist(a, b))
+                self:connect(b, a, 'crawl', dist(a, b))
+            end
+        end
+    end
+
+    -- Concave joins between different solids (wall meets floor, etc.)
+    local level_ref = self.level
+    for _, a in ipairs(self.nodes) do
+        for _, b in ipairs(self.nodes) do
+            if a.solid ~= b.solid and abs(a.x - b.x) < 40 and abs(a.y - b.y) < 40 then
+                local d = dist(a, b)
+                if d < 40 then
+                    local ax, ay = a.x + a.nx * 6, a.y + a.ny * 6
+                    local bx, by = b.x + b.nx * 6, b.y + b.ny * 6
+                    local clear = true
+                    for k = 0, 6 do
+                        local t = k / 6
+                        if level_ref:solid_at(ax + (bx - ax) * t, ay + (by - ay) * t) then
+                            clear = false
+                            break
+                        end
+                    end
+                    if clear then
+                        self:connect(a, b, 'crawl', d + 2)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Top nodes double as standing spots for jumps; mark span ends
+    for _, n in ipairs(self.nodes) do
+        if n.kind == 'top' then
+            n.end_left, n.end_right = false, false
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Jumps and falls (shared by everyone)
+--------------------------------------------------------------------------------
+
+function NavGraph:build_ballistic_edges()
+    local p, level = self.profile, self.level
+    local tops = {}
+    for _, n in ipairs(self.nodes) do
+        if n.kind == 'top' then tops[#tops + 1] = n end
+    end
+
+    for _, a in ipairs(tops) do
+        for _, b in ipairs(tops) do
+            local dx, dy = b.x - a.x, b.y - a.y
+            if a.solid ~= b.solid and abs(dx) <= MAX_JUMP_DX and not self:has_step(a, b) then
+                -- Jump: any standing node to any other surface
+                local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p)
+                if vx and ballistics.arc_clear(level, a.x, a.y, vx, vy, t, p.radius) then
+                    local d = dist(a, b)
+                    self:connect(a, b, 'jump', d * 1.25 + 60, {vx = vx, vy = vy, t = t})
+                end
+
+                -- Fall: only off the end of a span, in the direction of the drop
+                if dy > p.step and not p.climbs then
+                    local dir = (a.end_right and dx > 0) and 1 or ((a.end_left and dx < 0) and -1 or 0)
+                    if dir ~= 0 then
+                        local ex = (dir > 0) and a.span.x1 or a.span.x0
+                        local fx, fvy, ft = ballistics.solve_fall(ex, a.y, b.x, b.y, p)
+                        if fx and fx * dir > 20
+                           and ballistics.arc_clear(level, ex, a.y, fx, 0, ft, p.radius) then
+                            self:connect(a, b, 'fall', dist(a, b) + 30,
+                                {vx = fx, vy = 0, t = ft, ex = ex, dir = dir})
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function NavGraph:has_step(a, b)
+    for _, e in ipairs(a.edges) do
+        if e.to == b.id and (e.kind == 'walk' or e.kind == 'crawl') then return true end
+    end
+    return false
+end
+
+--------------------------------------------------------------------------------
+-- Queries
+--------------------------------------------------------------------------------
+
+-- Nearest node to a creature standing on `solid` at (x, y) with normal (nx, ny)
+function NavGraph:node_near(x, y, solid, nx, ny)
+    local best, best_d = nil, math.huge
+    for _, n in ipairs(self.nodes) do
+        local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+        if solid and n.solid ~= solid then d = d + 1e6 end
+        if nx and (n.nx * nx + n.ny * ny) < 0.5 then d = d + 4000 end
+        if d < best_d then best, best_d = n, d end
+    end
+    return best
+end
+
+-- Turn a click into a goal node, or nil if the click can't be stood on.
+function NavGraph:snap_goal(x, y)
+    local level = self.level
+
+    if self.profile.climbs then
+        -- Any surface within reach of the click: wall, ceiling or floor,
+        -- even if the click itself landed a little inside the stone
+        local best, best_d = nil, 60 * 60
+        for _, n in ipairs(self.nodes) do
+            local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+            if d < best_d then best, best_d = n, d end
+        end
+        if best then return best end
+    end
+
+    local inside = level:solid_at(x, y)
+    if inside then
+        if y - inside.y < 36 and not level:solid_at(x, inside.y - 1) then
+            y = inside.y - 1
+        else
+            return nil
+        end
+    end
+
+    local sy, solid = level:surface_below(x, y)
+    if not sy then return nil end
+    local best, best_d = nil, math.huge
+    for _, n in ipairs(self.nodes) do
+        if n.solid == solid and n.kind == 'top' and abs(n.y - sy) < 1 then
+            local d = abs(n.x - x)
+            if d < best_d then best, best_d = n, d end
+        end
+    end
+    return best
+end
+
+-- Random reachable node from `start` (used by idle wandering)
+function NavGraph:random_node(gen, kinds)
+    local pool = {}
+    for _, n in ipairs(self.nodes) do
+        if not kinds or kinds[n.kind] then pool[#pool + 1] = n end
+    end
+    if #pool == 0 then return nil end
+    return pool[gen:random(1, #pool)]
+end
+
+function NavGraph:draw_debug(alpha)
+    local k = alpha or 1
+    local colors = {
+        walk = {0.45, 0.95, 0.55, 0.35 * k}, crawl = {0.4, 0.8, 1.0, 0.35 * k},
+        jump = {1.0, 0.85, 0.3, 0.16 * k}, fall = {1.0, 0.55, 0.3, 0.22 * k},
+    }
+    love.graphics.setLineWidth(1)
+    for _, n in ipairs(self.nodes) do
+        for _, e in ipairs(n.edges) do
+            local m = self.nodes[e.to]
+            love.graphics.setColor(colors[e.kind])
+            if e.kind == 'jump' or e.kind == 'fall' then
+                local x0 = e.ex or n.x
+                local pts = ballistics.sample_arc(x0, n.y, e.vx, e.vy, e.t, 12)
+                love.graphics.line(pts)
+            else
+                love.graphics.line(n.x, n.y, m.x, m.y)
+            end
+        end
+    end
+    for _, n in ipairs(self.nodes) do
+        love.graphics.setColor(0.9, 1, 0.9, 0.8 * k)
+        love.graphics.circle('fill', n.x, n.y, 2)
+        love.graphics.setColor(0.9, 1, 0.9, 0.3 * k)
+        love.graphics.line(n.x, n.y, n.x + n.nx * 6, n.y + n.ny * 6)
+    end
+end
+
+return NavGraph
