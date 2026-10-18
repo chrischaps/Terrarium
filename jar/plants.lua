@@ -111,8 +111,8 @@ local function addFern(x, y, d, count, size)
     list[#list + 1] = p
 end
 
-local function addSpores(x, d, count)
-    local p = { kind = "plant", type = "spore", x = x, d = d, y = soilY(x, d) + 1, blades = {}, cushion = {} }
+local function addSpores(x, d, count, y)
+    local p = { kind = "plant", type = "spore", x = x, d = d, y = y or (soilY(x, d) + 1), blades = {}, cushion = {} }
     for i = 1, count do
         p.blades[i] = {
             ox = (random() - 0.5) * 16, len = 9 + random() * 16,
@@ -129,7 +129,8 @@ local function addSpores(x, d, count)
 end
 
 --- Compose the plants for this jar. Ferns take root behind the larger stones.
-function Plants.init(generator, stones)
+-- Terrarium: `ledges` are the level's mossed solids; a few tufts grow on top.
+function Plants.init(generator, stones, ledges)
     gen = generator
     list = {}
     time = 0
@@ -156,6 +157,16 @@ function Plants.init(generator, stones)
     for _ = 1, 5 do
         local x = C.GLASS_L + 16 + random() * (C.GLASS_R - C.GLASS_L - 32)
         if abs(x - C.LAMP_X) > 140 then addSpores(x, 0.86 + random() * 0.1, random(4, 8)) end
+    end
+
+    -- Terrarium: on the scenery's tops, just behind the creatures' plane, so
+    -- the stalks rise from the far edge and part as something walks past
+    for _, s in ipairs(ledges or {}) do
+        local tufts = math.floor(s.w / 70 + random())
+        for _ = 1, tufts do
+            local x = s.x + 10 + random() * (math.min(s.x + s.w, C.GLASS_R) - s.x - 20)
+            addSpores(x, C.PLANE_D - 0.004, random(3, 6), s.y + 1)
+        end
     end
 end
 

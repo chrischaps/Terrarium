@@ -3,8 +3,9 @@
 -- toward the back glass, its layers seen through the front glass, and stones.
 -- Terrarium: composed once from rng.scape, so a jar's seed always gives the same
 -- scape. The bakes hold the scape's own colours; the day cycle's light is put
--- on as they're drawn (the bed through floor.glsl). The shelf, bridge and arch
--- that bodies can stand on are level geometry (#4), not scape.
+-- on as they're drawn (the bed through floor.glsl). The arch, twig, cairn and
+-- shelf that bodies stand on are level geometry (jar/room.lua), drawn by
+-- jar/scenery.lua.
 
 local C = require("jar.config")
 local Tank = require("jar.tank")

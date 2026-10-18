@@ -1,5 +1,5 @@
 -- Terrarium: a sealed jar of moss where soft-bodied creatures live their whole lives.
--- For now the jar is a test room (soil and one stone) with Character's worm, blob and spider.
+-- Character's worm, blob and spider live among its soil, cork arch, twig bridge, cairn and shelf.
 --
 --   love .                   watch the jar
 --   lovec . --selftest       graph integrity, reachability, trips, determinism, audio (see dev.lua)
@@ -14,7 +14,7 @@ love.filesystem.setRequirePath("lib/?.lua;lib/?/init.lua;" .. love.filesystem.ge
 local dev = require('dev')
 local rng = require('core.rng')
 local World = require('jar.world')
-local room = require('jar.testroom')
+local room = require('jar.room')
 local C = require('jar.config')
 local Tank = require('jar.tank')
 local Render = require('jar.render')
@@ -23,6 +23,8 @@ local Glass = require('jar.glass')
 local DayCycle = require('jar.daycycle')
 local Plants = require('jar.plants')
 local Motes = require('jar.motes')
+local Scenery = require('jar.scenery')
+local Ballistics = require('nav.ballistics')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history
@@ -37,12 +39,6 @@ local objects = {} -- stones and plants, back to front
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
 local startHour, daySeconds
 
-local palette = {
-    moss     = { 0.36, 0.52, 0.24 },
-    stone    = { 0.42, 0.40, 0.37 },
-    stoneLit = { 0.55, 0.53, 0.48 },
-}
-
 local function step()
     world:snapshot()
     world:step(STEP) -- steps the plants too, as the world's flora
@@ -55,6 +51,11 @@ function love.load()
         love.event.quit(dev.selftest(World, room, STEP) and 0 or 1)
         return
     end
+    if args.navdump then
+        dev.navdump(World, room, args.navdump.who, args.navdump.solid)
+        love.event.quit(0)
+        return
+    end
 
     Render.init()
     Scape.init(rng.scape)
@@ -64,9 +65,14 @@ function love.load()
     daySeconds = args.day or C.DAY_SECONDS
 
     world = World.new(room, { wander = not args.nowander, selected = 0 })
-    Plants.init(rng.scape, Scape.getStones())
+    local ledges = {}
+    for _, s in ipairs(world.level.solids) do
+        if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
+    end
+    Plants.init(rng.scape, Scape.getStones(), ledges)
     world.flora = Plants
     Motes.init(rng.look, 120)
+    Scenery.init(rng.scape, world.level)
 
     for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
     for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
@@ -87,20 +93,31 @@ function love.update(dt)
     end
 end
 
--- Ledges and stones from the room (the soil is drawn as bands below)
-local function drawStones()
-    Render.useObject(C.PLANE_D)
-    for _, s in ipairs(world.level.solids) do
-        if s.kind == 'ledge' then
-            love.graphics.setColor(0, 0, 0, 0.18)
-            love.graphics.ellipse("fill", s.x + s.w / 2, world.level.by_id.soil.y, s.w * 0.55, 6)
-            love.graphics.setColor(palette.stone)
-            love.graphics.rectangle("fill", s.x, s.y, s.w, s.h, 10, 10)
-            love.graphics.setColor(palette.stoneLit)
-            love.graphics.rectangle("fill", s.x + 4, s.y + 2, s.w - 8, s.h * 0.35, 6, 6)
-            if s.moss then
-                love.graphics.setColor(palette.moss)
-                love.graphics.rectangle("fill", s.x + 6, s.y - 2, s.w - 12, 5, 2, 2)
+-- Terrarium: --nav shows every creature's graph in its own colour; --nav <who>
+-- shows one, with its jumps and falls
+local function drawNav()
+    love.graphics.setShader()
+    love.graphics.setLineWidth(1)
+    for i = #world.graphs, 1, -1 do
+        local g, who = world.graphs[i], world.creatures[i]
+        if args.nav == true or args.nav == who.key then
+            local c = who.color_name or { 1, 1, 1 }
+            local off = args.nav == true and (i - 2) * 1.5 or 0
+            for _, n in ipairs(g.nodes) do
+                for _, e in ipairs(n.edges) do
+                    local m = g.nodes[e.to]
+                    if e.kind == 'walk' or e.kind == 'crawl' then
+                        love.graphics.setColor(c[1], c[2], c[3], 0.6)
+                        love.graphics.line(n.x, n.y + off, m.x, m.y + off)
+                    elseif args.nav ~= true then
+                        love.graphics.setColor(c[1], c[2], c[3], e.kind == 'fall' and 0.22 or 0.12)
+                        love.graphics.line(Ballistics.sample_arc(e.ex or n.x, n.y, e.vx, e.vy, e.t, 12))
+                    end
+                end
+            end
+            for _, n in ipairs(g.nodes) do
+                love.graphics.setColor(c[1], c[2], c[3], 0.95)
+                love.graphics.circle('fill', n.x, n.y + off, 2)
             end
         end
     end
@@ -160,8 +177,9 @@ local function drawScene(light)
 
     -- The creatures' plane, in level coordinates
     Tank.pushPlane()
-    drawStones()
+    Scenery.draw(light, world.time)
     drawCreatures(accumulator / STEP)
+    if args.nav then drawNav() end
     love.graphics.pop()
 
     for j = i, #objects do drawObject(objects[j]) end
