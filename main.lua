@@ -9,7 +9,7 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
---   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, replay, audio)
+--   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, audio)
 --   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
@@ -59,12 +59,14 @@ end
 
 -- Compose the jar from its seed: the scape, glass, plants and scenery draw
 -- from rng.scape in this order, the creatures from rng.sim, the motes from
--- rng.look. The replay check in dev.lua opens jars the same way.
-local function openJar(seed)
+-- rng.look. The replay check in dev.lua opens jars the same way (at midday,
+-- with a full-length day). The hour and day length are inputs like the seed:
+-- minds sleep and wake by them.
+local function openJar(seed, hour, day)
     rng.seed(seed)
     Scape.init(rng.scape)
     Glass.init(rng.scape)
-    local w = World.new(room, { wander = not args.nowander, selected = 0 })
+    local w = World.new(room, { wander = not args.nowander, selected = 0, hour = hour, day = day })
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
@@ -80,7 +82,7 @@ end
 function love.load()
     rng.seed(args.seed or SEED)
     if args.selftest then
-        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test)
+        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed)
         if err then print('[selftest] ' .. err) end
         love.event.quit(ok and 0 or (err and 2 or 1))
         return
@@ -103,7 +105,7 @@ function love.load()
     startHour = DayCycle.parseHour(args.hour) or (args.snap and DayCycle.presets.midday) or DayCycle.clockHour()
     daySeconds = args.day or C.DAY_SECONDS
 
-    world = openJar(args.seed or SEED)
+    world = openJar(args.seed or SEED, startHour, daySeconds)
 
     for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
     for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
@@ -143,9 +145,10 @@ end
 local function drawNav()
     love.graphics.setShader()
     love.graphics.setLineWidth(1)
-    for i = #world.graphs, 1, -1 do
-        local g, who = world.graphs[i], world.creatures[i]
-        if args.nav == true or args.nav == who.key then
+    for i = #World.CREATURES, 1, -1 do
+        local key = World.CREATURES[i].key
+        local g, who = world.graph_of[key], world.creatures[world:first(key)]
+        if args.nav == true or args.nav == key then
             local c = who.color_name or { 1, 1, 1 }
             local off = args.nav == true and (i - 2) * 1.5 or 0
             for _, n in ipairs(g.nodes) do

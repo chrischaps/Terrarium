@@ -58,10 +58,14 @@ return {
     -- Decoration only: the water dish sunk into the soil under the twig
     water = {x0 = 482, x1 = 570, y = 420},
 
-    -- Where each creature starts (surface x, solid id)
-    spawns = {
-        worm   = {solid = 'soil', x = 100},
-        blob   = {solid = 'soil', x = 390},
-        spider = {solid = 'soil', x = 720},
+    -- Terrarium: who lives here and where each starts (solid id, surface x).
+    -- The names are placeholders until naming (#29); a jar's own come from its book.
+    residents = {
+        {key = 'worm',   name = 'Loam',  solid = 'soil',  x = 100},
+        {key = 'worm',   name = 'Rill',  solid = 'arch',  x = 250},
+        {key = 'blob',   name = 'Dew',   solid = 'soil',  x = 390},
+        {key = 'blob',   name = 'Bead',  solid = 'cairn', x = 600},
+        {key = 'spider', name = 'Wick',  solid = 'soil',  x = 720},
+        {key = 'spider', name = 'Tansy', solid = 'shelf', x = 740},
     },
 }

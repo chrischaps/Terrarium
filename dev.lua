@@ -3,7 +3,8 @@
 --
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
---                                         framerate, lantern, replay, audio, or all)
+--                                         framerate, lantern, day, replay, audio, or all;
+--                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
@@ -112,8 +113,9 @@ test('graphs', function(j, results)
     local ballistics = require('nav.ballistics')
     rng.seed(1)
     local world = World.new(level_data, {wander = false})
-    for i, c in ipairs(world.creatures) do
-        local g = world.graphs[i]
+    for _, def in ipairs(World.CREATURES) do -- Terrarium: one graph per kind
+        local i = world:first(def.key)
+        local c, g = world.creatures[i], world.graphs[i]
         local inside, bad_arcs, edges = 0, 0, 0
         for _, n in ipairs(g.nodes) do
             if world.level:solid_at(n.x + n.nx * 2, n.y + n.ny * 2) then inside = inside + 1 end
@@ -167,12 +169,13 @@ test('trips', function(j, results)
     local world
     local trips = 0
     local fails_by = {}
-    for i, def in ipairs(World.CREATURES) do
-        rng.seed(100 + i)
+    for k, def in ipairs(World.CREATURES) do
+        rng.seed(100 + k)
         world = World.new(level_data, {wander = false})
+        local i = world:first(def.key) -- Terrarium: the first of each kind
         world:select(i)
         local c, ctrl, g = world.creatures[i], world.controllers[i], world.graphs[i]
-        local gen = love.math.newRandomGenerator(500 + i)
+        local gen = love.math.newRandomGenerator(500 + k)
         local ok_count, n_trips = 0, 0
         local kinds = c.profile.climbs and nil or {top = true}
         for _ = 1, 40 do
@@ -215,9 +218,10 @@ test('framerate', function(j, results)
     local function run(frame_dt)
         rng.seed(42)
         local w = World.new(level_data, {wander = true})
-        for i = 1, #w.creatures do
+        local goals = {worm = {620, 300}, blob = {120, 300}, spider = {400, 40}}
+        for i, c in ipairs(w.creatures) do
             w:select(i)
-            w:click(i == 1 and 620 or (i == 2 and 120 or 400), i == 3 and 40 or 300)
+            w:click(goals[c.key][1], goals[c.key][2])
         end
         w:select(1)
         local acc, steps = 0, 0
@@ -274,7 +278,60 @@ test('lantern', function(j, results)
     log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
 end)
 
--- Terrarium: 3c. Replay. The whole jar (scape, plants, creatures) opened
+-- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole
+-- day, compressed to DAY seconds, starting at midday. Each wanders and grazes
+-- by lamplight, rests through the night and lies still once it gets there,
+-- and is up and about again by noon. Nobody leaves the jar, comes apart into
+-- NaNs or ends up sunk in the scenery.
+local DAY = 900
+test('day', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    rng.seed(j.seed or 20261018)
+    local w = World.new(level_data, {wander = true, selected = 0, hour = 13, day = DAY})
+    local level = w.level
+    local lost, still_for, moved_at_rest = {}, {}, {}
+    local last = {}
+    local steps = math.floor(DAY / fixed_dt + 0.5)
+    for s = 1, steps do
+        w:step(fixed_dt)
+        if s % 30 == 0 then
+            for i, c in ipairs(w.creatures) do
+                local x, y = c:anchor()
+                if not lost[i] and (x ~= x or y ~= y or x < 0 or x > level.data.width or y < 0 or y > 440) then
+                    lost[i] = string.format('(%.0f,%.0f) at %.0fs', x, y, w.time)
+                end
+                -- Asleep means still: once resting, the anchor barely moves
+                local m = w.minds[i]
+                if m.doing == 'rest' and last[i] then
+                    still_for[i] = (still_for[i] or 0) + 30 * fixed_dt
+                    local d = math.abs(x - last[i][1]) + math.abs(y - last[i][2])
+                    moved_at_rest[i] = math.max(moved_at_rest[i] or 0, d)
+                end
+                last[i] = m.doing == 'rest' and {x, y} or nil
+            end
+        end
+    end
+    for i, c in ipairs(w.creatures) do
+        local m, who = w.minds[i], string.format('%s the %s', c.name, c.key)
+        local sunk, n = 0, 0
+        for _, p in ipairs(c:interp_points()) do
+            n = n + 1
+            if level:solid_at(p.x, p.y) then sunk = sunk + 1 end
+        end
+        check(results, not lost[i], '%s left the jar %s', who, lost[i] or '')
+        check(results, sunk <= n / 2, '%s ended the day sunk in a solid (%d of %d points)', who, sunk, n)
+        check(results, m.wanders >= 3, '%s wandered only %d times', who, m.wanders)
+        check(results, m.grazes >= 1, '%s never grazed', who)
+        check(results, m.nights == 1, '%s rested %d times in one night', who, m.nights)
+        check(results, (still_for[i] or 0) > DAY * 0.2, '%s rested only %.0fs of the night', who, still_for[i] or 0)
+        check(results, (moved_at_rest[i] or 0) < 4, '%s moved %.1fpx while resting', who, moved_at_rest[i] or 0)
+        check(results, m:awake(w:hour()) and m.doing ~= 'rest', '%s is still asleep at noon', who)
+        log.info('selftest', 'day   %-6s %-6s wandered %2d, grazed %d, rested %3.0fs', c.name, c.key, m.wanders, m.grazes,
+            still_for[i] or 0)
+    end
+end)
+
+-- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
@@ -313,8 +370,8 @@ end
 -- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
 -- Returns true when every check passed, or nil and a message for a name it
 -- doesn't know.
-function dev.selftest(World, level_data, fixed_dt, open_jar, step, only)
-    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step}
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed)
+    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step, seed = seed}
     local want
     if only and only ~= 'all' then
         want = {}
@@ -369,20 +426,17 @@ end
 -- Print every node on one solid with its edges, for a creature's graph
 function dev.navdump(World, level_data, who, solid_id)
     local world = World.new(level_data, {wander = false})
-    for i, c in ipairs(world.creatures) do
-        if c.key == who then
-            local g = world.graphs[i]
-            for _, n in ipairs(g.nodes) do
-                if n.solid.id == solid_id then
-                    local es = {}
-                    for _, e in ipairs(n.edges) do
-                        local m = g.nodes[e.to]
-                        es[#es + 1] = string.format('%s->%d(%s)', e.kind, m.id, m.solid.id)
-                    end
-                    print(string.format('#%d %s (%.0f,%.0f) n=(%.2f,%.2f) L=%s R=%s : %s', n.id, n.kind, n.x, n.y,
-                        n.nx, n.ny, tostring(n.end_left), tostring(n.end_right), table.concat(es, ' ')))
-                end
+    local g = world.graph_of[who]
+    if not g then return end
+    for _, n in ipairs(g.nodes) do
+        if n.solid.id == solid_id then
+            local es = {}
+            for _, e in ipairs(n.edges) do
+                local m = g.nodes[e.to]
+                es[#es + 1] = string.format('%s->%d(%s)', e.kind, m.id, m.solid.id)
             end
+            print(string.format('#%d %s (%.0f,%.0f) n=(%.2f,%.2f) L=%s R=%s : %s', n.id, n.kind, n.x, n.y,
+                n.nx, n.ny, tostring(n.end_left), tostring(n.end_right), table.concat(es, ' ')))
         end
     end
 end
