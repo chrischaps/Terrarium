@@ -42,7 +42,99 @@ function NavGraph.new(level, profile)
         self:build_top_nodes()
     end
     self:build_ballistic_edges()
+    self:keep_home() -- Terrarium
     return self
+end
+
+-- Terrarium: keep only the largest set of nodes that can all reach each other.
+-- Soil roofed over at both ends (under the arch, under the twig) can't be
+-- walked into or jumped out of, so a walker's graph drops it and never offers
+-- it as a goal. A climber gets in over the walls, so its graph keeps it.
+function NavGraph:keep_home()
+    local nodes = self.nodes
+    local n = #nodes
+    if n == 0 then return end
+
+    -- Kosaraju: finish order on the graph, then components on its reverse
+    local back = {}
+    for i = 1, n do back[i] = {} end
+    for _, a in ipairs(nodes) do
+        for _, e in ipairs(a.edges) do
+            local list = back[e.to]
+            list[#list + 1] = a.id
+        end
+    end
+    local seen, order = {}, {}
+    for root = 1, n do
+        if not seen[root] then
+            seen[root] = true
+            local stack = {{root, 1}}
+            while #stack > 0 do
+                local top = stack[#stack]
+                local edges = nodes[top[1]].edges
+                local e = edges[top[2]]
+                if e then
+                    top[2] = top[2] + 1
+                    if not seen[e.to] then
+                        seen[e.to] = true
+                        stack[#stack + 1] = {e.to, 1}
+                    end
+                else
+                    order[#order + 1] = top[1]
+                    stack[#stack] = nil
+                end
+            end
+        end
+    end
+    local comp, sizes = {}, {}
+    for k = n, 1, -1 do
+        local root = order[k]
+        if not comp[root] then
+            local c = #sizes + 1
+            sizes[c] = 0
+            comp[root] = c
+            local stack = {root}
+            while #stack > 0 do
+                local id = table.remove(stack)
+                sizes[c] = sizes[c] + 1
+                for _, from in ipairs(back[id]) do
+                    if not comp[from] then
+                        comp[from] = c
+                        stack[#stack + 1] = from
+                    end
+                end
+            end
+        end
+    end
+    local home = 1
+    for c, size in ipairs(sizes) do
+        if size > sizes[home] then home = c end
+    end
+    if sizes[home] == n then return end
+
+    -- Renumber what's kept; drop edges into what isn't
+    local kept, new_id = {}, {}
+    for _, a in ipairs(nodes) do
+        if comp[a.id] == home then
+            kept[#kept + 1] = a
+            new_id[a.id] = #kept
+        end
+    end
+    self.edge_count = 0
+    for _, a in ipairs(kept) do
+        a.id = new_id[a.id]
+        local edges = {}
+        for _, e in ipairs(a.edges) do
+            if new_id[e.to] then
+                e.to = new_id[e.to]
+                edges[#edges + 1] = e
+            end
+        end
+        a.edges = edges
+        self.edge_count = self.edge_count + #edges
+    end
+    self.nodes = kept
+    self.dropped = n - #kept
 end
 
 function NavGraph:add_node(n)

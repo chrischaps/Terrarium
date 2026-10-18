@@ -35,7 +35,11 @@ function dev.parse(args)
             i = i + 2
         elseif a == '--seed' then o.seed = tonumber(args[i + 1]); i = i + 1
         elseif a == '--debug' then o.debug = true
-        elseif a == '--nav' then o.nav = true
+        elseif a == '--nav' then
+            o.nav = true
+            -- Terrarium: --nav <who> shows one creature's graph, jumps and all
+            local who = args[i + 1]
+            if who == 'worm' or who == 'blob' or who == 'spider' then o.nav = who; i = i + 1 end
         elseif a == '--zoom' then
             o.zoom = {x = tonumber(args[i + 1]), y = tonumber(args[i + 2]), z = tonumber(args[i + 3])}
             i = i + 3
@@ -111,7 +115,7 @@ function dev.selftest(World, level_data, fixed_dt)
         check(results, inside == 0, '%s: %d nodes inside solids', c.key, inside)
         check(results, bad_arcs == 0, '%s: %d arcs hit geometry', c.key, bad_arcs)
         check(results, #g.nodes > 20 and edges > 40, '%s: graph too small (%d nodes)', c.key, #g.nodes)
-        log.info('selftest', '%-6s graph  %3d nodes  %4d edges', c.key, #g.nodes, edges)
+        log.info('selftest', '%-6s graph  %3d nodes  %4d edges  (%d sealed off)', c.key, #g.nodes, edges, g.dropped or 0)
 
         -- Every surface the creature can stand on should be reachable from
         -- its spawn, and it should be able to get back again.
@@ -130,6 +134,14 @@ function dev.selftest(World, level_data, fixed_dt)
         end
         check(results, #unreachable == 0, '%s: cannot reach %s', c.key, table.concat(unreachable, ', '))
         check(results, #stranded == 0, '%s: stranded on %s', c.key, table.concat(stranded, ', '))
+
+        -- Terrarium: every piece of scenery with moss on it is somewhere this
+        -- body can stand (the moss grid grows there, and selection happens there)
+        local missing = {}
+        for _, s in ipairs(world.level.solids) do
+            if s.moss and not seen[s.id] then missing[#missing + 1] = s.id end
+        end
+        check(results, #missing == 0, '%s: no footing on %s', c.key, table.concat(missing, ', '))
     end
 
     -- 2. Arrival: chained trips between random reachable goals
