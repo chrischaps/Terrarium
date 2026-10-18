@@ -13,6 +13,7 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 - `mind.lua`: needs and temperament choose goals
 - `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid
 - `book.lua`: save data and the family book
+- Require path is `lib/?.lua`, so LoveLibs modules load as `require('LoveLibs.<area>.<module>')`, the same as in [Character](https://github.com/chrischaps/Character), where it's `libs/`. Code ported from Character keeps its requires unchanged.
 - `lib/LoveLibs/`: git subtree of chrischaps/LoveLibs. Don't edit it in place. Update with `git subtree pull --prefix=lib/LoveLibs https://github.com/chrischaps/LoveLibs.git master --squash`
 
 ## Rules

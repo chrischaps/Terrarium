@@ -1,8 +1,8 @@
 -- Terrarium: a sealed jar of moss where soft-bodied creatures live their whole lives.
 -- This is the placeholder scene from the repo scaffold: an empty jar, lit from above.
 
-local lib = "lib/LoveLibs/"
-package.path = package.path .. ";" .. lib .. "?.lua;" .. lib .. "?/init.lua"
+-- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
+love.filesystem.setRequirePath("lib/?.lua;lib/?/init.lua;" .. love.filesystem.getRequirePath())
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history

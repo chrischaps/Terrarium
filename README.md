@@ -36,7 +36,7 @@ Work is tracked in [issues](https://github.com/chrischaps/Terrarium/issues) and 
 ## Lineage
 
 Terrarium brings two earlier projects together:
-- **Character**: verlet, pressure-blob and FABRIK creatures that navigate by what their bodies can actually do.
+- **[Character](https://github.com/chrischaps/Character)**: verlet, pressure-blob and FABRIK creatures that navigate by what their bodies can actually do.
 - **[Fishbowl](https://github.com/chrischaps/Fishbowl)**: a tank that lives through a day and remembers you.
 
 Shared libraries come from [LoveLibs](https://github.com/chrischaps/LoveLibs), vendored as a git subtree in `lib/LoveLibs`.
