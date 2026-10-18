@@ -15,7 +15,8 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 - `core/`: `rng` (the `sim` and `look` streams), `log`, `synth`
 - `dev.lua`: argument parsing and the self-test
 - `mind.lua`: needs and temperament choose goals
-- `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid. Right now it holds `world.lua` (creatures, graphs and controllers on the fixed step), `level.lua`/`collision.lua` (AABB solids), and `testroom.lua` (soil and one stone, in Character's level format)
+- `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid. Right now it holds `world.lua` (creatures, graphs and controllers on the fixed step), `level.lua`/`collision.lua` (AABB solids), and `testroom.lua` (soil and one stone, in Character's level format). The view comes from Fishbowl: `config.lua` (projection, box, creature plane `PLANE_D`), `tank.lua` (project/unproject, and `Tank.pushPlane()` for drawing in level coordinates), `render.lua` (canvases, depth-of-field blur), `scape.lua` (room, desk, soil bed and layers, stones) and `glass.lua` (panes, lid, front glass). Shaders live in `shaders/`.
+- `core/rng.lua` has three streams: `sim`, `look`, and `scape`. `scape` is the jar's fixed composition. It's seeded from the jar seed and drawn from only at load
 - Files copied from Character carry a `-- From chrischaps/Character @ <sha> (<path>)` header. Their internal requires were remapped (`creatures.` → `bodies.`, `core.navgraph` → `nav.navgraph`, `world.` → `jar.`). Other edits are marked `-- Terrarium:`.
 - `book.lua`: save data and the family book
 - Require path is `lib/?.lua`, so LoveLibs modules load as `require('LoveLibs.<area>.<module>')`, the same as in [Character](https://github.com/chrischaps/Character), where it's `libs/`. Code ported from Character keeps its requires unchanged.
