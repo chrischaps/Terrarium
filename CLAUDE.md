@@ -6,11 +6,14 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 - `love .`: the game.
 - `lovec . --selftest`: Character's self-test, run against the jar (nav graph integrity, reachability, about 116 trips, determinism at 30/60/240 fps, a 10-minute replay of the whole jar, audio smoke test). Exits 1 on failure.
 - `lovec . --replay <sec>`: open the jar twice from its seed, step both, and compare state hashes (`core/statehash.lua`). Prints `hash <hex>`, so separate runs can be compared too. A mismatch names the first part that drifted.
+- `lovec . --test <name>[,<name>]`: just those self-tests (`graphs`, `trips`, `framerate`, `lantern`, `replay`, `audio`). A test is a `test(name, fn)` in `dev.lua`; new ones go there. Exits 2 on an unknown name.
+- Test modes (`--test`, `--selftest`, `--replay`, `--navdump`, `--headless`) run with no window: `conf.lua` turns it off and `core/headless.lua` stands in a null `love.graphics`, so composing the jar still bakes and draws from `rng.scape` the same way. `--window` opens one anyway. A headless jar must hash the same as a windowed one.
+- `LOVE=lovec sh tests/ci.sh`: everything CI runs (`.github/workflows/selftest.yml`, Linux and Windows): the lint, the self-test, the replay hash compared across two processes, and with `WINDOW="xvfb-run -a"` a windowed jar against a headless one.
 - `sh tests/check_random.sh`: fails on any `math.random`, `love.math.random` or stray `newRandomGenerator` outside `core/rng.lua`.
 - `lovec . --snap - <sec> <file.png>`: fast-forward the sim, then save a screenshot to `%APPDATA%/LOVE/terrarium/`. Add `--nav` for every nav graph, or `--nav worm|blob|spider` for one with its jump arcs.
 - `lovec . --navdump <who> <solid>`: print a creature's nodes and edges on one solid.
 - `--hour <h|name>` opens the jar at an hour (snaps default to midday), and `--day <sec>` compresses the day: `love . --day 120 --hour lampon`.
-- Headless self-tests and the 30-day population run will live under `tests/` (see M1/M3 issues). They must stay runnable in CI.
+- The 200-genome and 30-day population runs (M2/M3) register as named tests in `dev.lua` and must stay runnable in CI.
 
 ## Module map (from the proposal)
 - `genome.lua`: genes, ranges, crossover, mutation

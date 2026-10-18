@@ -2,6 +2,10 @@
 -- Dev modes: verification without a human at the mouse.
 --
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
+--   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
+--                                         framerate, lantern, replay, audio, or all)
+--   lovec . --headless                    Terrarium: no window (implied by --test,
+--                                         --selftest, --replay and --navdump; --window undoes it)
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
 --                                         run <sec> of sim, save a screenshot
 --                                         to the save dir (who: worm|blob|spider)
@@ -30,6 +34,8 @@ function dev.parse(args)
     while i <= #args do
         local a = args[i]
         if a == '--selftest' then o.selftest = true
+        -- Terrarium: one named test, or a comma list (see dev.tests())
+        elseif a == '--test' then o.selftest = true; o.test = args[i + 1]; i = i + 1
         elseif a == '--snap' then
             o.snap = {who = args[i + 1], seconds = tonumber(args[i + 2]), file = args[i + 3]}
             i = i + 3
@@ -92,14 +98,18 @@ local function drive(world, ctrl, seconds, dt)
     return false, seconds
 end
 
-function dev.selftest(World, level_data, fixed_dt, open_jar, step)
-    local rng = require('core.rng')
+-- Terrarium: the self-test is a list of named tests, so --test <name> runs
+-- one and later tests (200 genomes, the 30-day population run) slot in here.
+-- Each takes the jar's parts in `j` and records into `results`.
+local rng = require('core.rng')
+local TESTS = {}
+local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
+
+-- 1. Graph integrity
+test('graphs', function(j, results)
+    local World, level_data = j.World, j.level_data
     local Pathfinder = require('nav.pathfinder')
     local ballistics = require('nav.ballistics')
-    local results = {total = 0, pass = 0, fail = {}}
-    local t0 = love.timer.getTime()
-
-    -- 1. Graph integrity
     rng.seed(1)
     local world = World.new(level_data, {wander = false})
     for i, c in ipairs(world.creatures) do
@@ -148,8 +158,13 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step)
         end
         check(results, #missing == 0, '%s: no footing on %s', c.key, table.concat(missing, ', '))
     end
+end)
 
-    -- 2. Arrival: chained trips between random reachable goals
+-- 2. Arrival: chained trips between random reachable goals
+test('trips', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local Pathfinder = require('nav.pathfinder')
+    local world
     local trips = 0
     local fails_by = {}
     for i, def in ipairs(World.CREATURES) do
@@ -191,8 +206,12 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step)
         log.info('selftest', '%-6s trips  %d/%d arrived', def.key, ok_count, n_trips)
         fails_by[def.key] = n_trips - ok_count
     end
+    results.trips = (results.trips or 0) + trips
+end)
 
-    -- 3. Frame-rate independence: same steps, different frame groupings
+-- 3. Frame-rate independence: same steps, different frame groupings
+test('framerate', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local function run(frame_dt)
         rng.seed(42)
         local w = World.new(level_data, {wander = true})
@@ -220,10 +239,13 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step)
     local a, b, c = run(1 / 30), run(1 / 60), run(1 / 240)
     check(results, a == b and b == c, 'frame-rate dependence: 30fps=%s 60fps=%s 240fps=%s', a, b, c)
     log.info('selftest', 'determinism  %s', (a == b and b == c) and 'identical at 30/60/240 fps' or 'MISMATCH')
+end)
 
-    -- Terrarium: 3b. The lantern only watches. A jar where it follows each
-    -- creature in turn (picked by clicking where it is) plays out exactly
-    -- like a jar where nobody ever picked it up.
+-- Terrarium: 3b. The lantern only watches. A jar where it follows each
+-- creature in turn (picked by clicking where it is) plays out exactly
+-- like a jar where nobody ever picked it up.
+test('lantern', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local Lantern = require('jar.lantern')
     local function watched(follow)
         rng.seed(42)
@@ -250,14 +272,17 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step)
     check(results, held ~= nil, 'lantern: clicking a creature did not pick it')
     check(results, plain == followed, 'lantern changed the jar: %s vs %s', plain, followed)
     log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
+end)
 
-    -- Terrarium: 3c. Replay. The whole jar (scape, plants, creatures) opened
-    -- twice from one seed is the same jar after ten minutes of its life.
-    if open_jar then
-        check(results, dev.replay(open_jar, 7, 600, fixed_dt, step), 'replay: two runs of seed 7 diverged')
-    end
+-- Terrarium: 3c. Replay. The whole jar (scape, plants, creatures) opened
+-- twice from one seed is the same jar after ten minutes of its life.
+test('replay', function(j, results)
+    check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
+end)
 
-    -- 4. Audio: every event path runs without error (not a listening test)
+-- 4. Audio: every event path runs without error (not a listening test)
+test('audio', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local ok_audio, err = pcall(function()
         local Synth = require('core.synth')
         local synth = Synth.new()
@@ -277,8 +302,34 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step)
         love.audio.stop()
     end)
     check(results, ok_audio, 'audio: %s', tostring(err))
+end)
 
-    log.info('selftest', '%d/%d checks passed (%d trips) in %.1fs', results.pass, results.total, trips,
+function dev.tests()
+    local names = {}
+    for _, t in ipairs(TESTS) do names[#names + 1] = t.name end
+    return names
+end
+
+-- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
+-- Returns true when every check passed, or nil and a message for a name it
+-- doesn't know.
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only)
+    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step}
+    local want
+    if only and only ~= 'all' then
+        want = {}
+        for name in only:gmatch('[^,]+') do want[name] = true end
+        for _, t in ipairs(TESTS) do want[t.name] = want[t.name] and t end
+        for name, t in pairs(want) do
+            if t == true then return nil, string.format('no test %q (there are: %s)', name, table.concat(dev.tests(), ', ')) end
+        end
+    end
+    local results = {total = 0, pass = 0, fail = {}}
+    local t0 = love.timer.getTime()
+    for _, t in ipairs(TESTS) do
+        if not want or want[t.name] then t.fn(j, results) end
+    end
+    log.info('selftest', '%d/%d checks passed (%d trips) in %.1fs', results.pass, results.total, results.trips or 0,
         love.timer.getTime() - t0)
     for _, f in ipairs(results.fail) do log.info('selftest', 'FAIL %s', f) end
     return #results.fail == 0
