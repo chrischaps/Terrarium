@@ -1,0 +1,45 @@
+# The jar's self-checks on every push and PR: the randomness lint, the whole
+# self-test with no window, the replay hash compared across processes, and (on
+# Linux, under xvfb) a windowed jar against a headless one. See tests/ci.sh.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  selftest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ALSOFT_DRIVERS: "null" # OpenAL Soft's silent output; CI has no sound card
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LÖVE 11.5 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq xvfb libgl1-mesa-dri
+          cd "$RUNNER_TEMP" # outside the checkout, or the lint reads LÖVE's own Lua
+          curl -fsSL -o love.AppImage https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage
+          chmod +x love.AppImage && ./love.AppImage --appimage-extract > /dev/null
+          echo "LOVE=$RUNNER_TEMP/squashfs-root/AppRun" >> "$GITHUB_ENV"
+          echo "WINDOW=xvfb-run -a" >> "$GITHUB_ENV"
+
+      - name: Install LÖVE 11.5 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o love.zip https://github.com/love2d/love/releases/download/11.5/love-11.5-win64.zip
+          unzip -q love.zip
+          echo "LOVE=$RUNNER_TEMP/love-11.5-win64/lovec.exe" >> "$GITHUB_ENV"
+
+      - name: Self-test
+        run: sh tests/ci.sh

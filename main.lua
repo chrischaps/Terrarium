@@ -9,9 +9,15 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
+--   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, replay, audio)
+--   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
 love.filesystem.setRequirePath("lib/?.lua;lib/?/init.lua;" .. love.filesystem.getRequirePath())
+
+-- No window (conf.lua): stand in a null renderer before anything that draws loads
+local headless = require('core.headless')
+if headless.active() then headless.install() end
 
 local dev = require('dev')
 local rng = require('core.rng')
@@ -74,7 +80,9 @@ end
 function love.load()
     rng.seed(args.seed or SEED)
     if args.selftest then
-        love.event.quit(dev.selftest(World, room, STEP, openJar, step) and 0 or 1)
+        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test)
+        if err then print('[selftest] ' .. err) end
+        love.event.quit(ok and 0 or (err and 2 or 1))
         return
     end
     if args.navdump then
