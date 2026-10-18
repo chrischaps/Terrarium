@@ -12,6 +12,8 @@
 --                                         returns {run = function(api)}, see main.lua
 --   lovec . --bench <sec>                 run the real game uncapped, report frame times
 --   lovec . --seed <n>                    seed the simulation RNG
+--   lovec . --hour <h|name>               Terrarium: start the jar at this hour
+--   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --
 -- The fixed-step sim makes all of this deterministic.
 
@@ -46,6 +48,9 @@ function dev.parse(args)
         elseif a == '--nolight' then o.nolight = true
         elseif a == '--nopost' then o.nopost = true
         elseif a == '--nowander' then o.nowander = true
+        -- Terrarium: the jar's hour at load, and a dev-compressed day length
+        elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
+        elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
         end
         i = i + 1

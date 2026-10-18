@@ -1,7 +1,8 @@
 -- From chrischaps/Fishbowl @ b0624e4 (fx/render.lua)
 -- Render helpers: shaders, canvases and the shared object-lighting pass.
 -- Terrarium: no water, so the caustics are gone. Depth of field blurs two layers:
--- the far scape at the back of the jar, and the room the jar stands in.
+-- the far scape at the back of the jar, and the room the jar stands in. The
+-- light comes from the day cycle's env (jar/daycycle.lua).
 
 local C = require("jar.config")
 local Tank = require("jar.tank")
@@ -40,7 +41,7 @@ local function makeBlob(size)
 end
 
 function Render.init()
-    for _, name in ipairs({ "object", "blur", "haze", "composite" }) do
+    for _, name in ipairs({ "object", "blur", "haze", "composite", "floor" }) do
         shaders[name] = loadShader(name)
     end
 
@@ -83,7 +84,25 @@ function Render.beginObjects(light)
     if not sh then return end
     sh:send("ambient", light.ambient)
     sh:send("fog", light.fog)
+    sh:send("lamp", light.lamp)
+    sh:send("pool", { C.OX + C.LAMP_X, C.LAMP_CONE.bottom })
     objectHaze = -1
+end
+
+--- Bind the floor shader for the soil bed (Terrarium: relit by the day cycle)
+function Render.useFloor(light)
+    local sh = shaders.floor
+    if not sh then return end
+    love.graphics.setShader(sh)
+    sh:send("ambient", light.ambient)
+    sh:send("fog", light.fog)
+    sh:send("hazeMax", light.haze * 0.8)
+    sh:send("lamp", light.lamp)
+    sh:send("view", { C.CX, C.CY, C.K_BACK })
+    sh:send("floorY", C.OY + C.SOIL_Y)
+    sh:send("floorRise", C.SOIL_RISE)
+    sh:send("planeD", C.PLANE_D)
+    sh:send("pool", { C.OX + C.LAMP_X, C.LAMP_CONE.bottom })
 end
 
 --- Bind the object shader for something at depth d
@@ -141,7 +160,7 @@ function Render.drawSoft(name, spread, haze, fog)
     local hz = shaders.haze
     if hz then
         love.graphics.setShader(hz)
-        hz:send("fog", fog or C.LIGHT.fog)
+        hz:send("fog", fog or { 0, 0, 0 })
         hz:send("haze", haze or 0)
     end
     love.graphics.draw(soft, 0, 0, 0, scale, scale)

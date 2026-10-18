@@ -3,7 +3,8 @@
 -- front glass with its film of dust, its edges and a soft glare.
 -- Terrarium: no water, so no algae, snail or tap ripple. The film is dust and
 -- the dried rings of old condensation (live condensation is #5). The jar's
--- glass edges and its cork-knobbed lid are new.
+-- glass edges and its cork-knobbed lid are new, and so is the lamp's cone of
+-- light through the lid. Everything on the glass takes the day cycle's light.
 
 local C = require("jar.config")
 local Tank = require("jar.tank")
@@ -64,6 +65,34 @@ local function quad(ax, ay, ad, bx, by, bd, cx, cy, cd, dx, dy, dd)
     return p
 end
 
+-- Terrarium: the lamp's cone, as a fan of strips that fade toward the soil and
+-- the cone's edges (rebuilt each frame; it's a handful of vertices)
+local coneMesh
+local function cone(l)
+    local cw = C.LAMP_CONE
+    local x, d = C.LAMP_X, 0.5
+    local top, bottom = C.GLASS_T, C.SOIL_Y
+    local verts = {}
+    local cols = { 0, 0.5, 1, 0.5, 0 }
+    local rows = 6
+    for j = 0, rows - 1 do
+        for i = 1, #cols - 1 do
+            local function v(ii, jj)
+                local t = jj / rows
+                local hw = Tank.lerp(cw.top, cw.bottom, t)
+                local sx, sy = at(x - hw + 2 * hw * (ii - 1) / (#cols - 1), Tank.lerp(top, bottom, t), d)
+                local a = cols[ii] * (1 - t * 0.85) ^ 1.6 * 0.10
+                return { sx, sy, 0, 0, l[1] * a, l[2] * a, l[3] * a, 1 }
+            end
+            local a, b, c, e = v(i, j), v(i + 1, j), v(i + 1, j + 1), v(i, j + 1)
+            for _, q in ipairs({ a, b, c, a, c, e }) do verts[#verts + 1] = q end
+        end
+    end
+    if coneMesh then coneMesh:setVertices(verts)
+    else coneMesh = love.graphics.newMesh(verts, "triangles", "stream") end
+    return coneMesh
+end
+
 --- The far panes: the back glass, the side glass and the underside of the lid,
 -- seen from inside. Drawn before anything in the jar.
 function Glass.drawBack(light)
@@ -86,6 +115,12 @@ function Glass.drawBack(light)
     local cx, cy = at((gl + gr) / 2, gt, 0.5)
     love.graphics.setColor(l[1] * 0.10, l[2] * 0.10, l[3] * 0.10, 1)
     Render.drawBlob(cx, cy + 30, 360, 90)
+
+    -- Terrarium: and falls in a soft cone to the moss, brightest under the lid
+    if light.lamp_i > 0.01 then
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(cone(l), 0, 0)
+    end
     love.graphics.setBlendMode("alpha")
 
     -- Edges where the panes meet
@@ -106,18 +141,23 @@ function Glass.drawFront(light, mouseX)
     local x0, y0, x1, y1 = Glass.frontRect()
     local w, h = x1 - x0, y1 - y0
     love.graphics.push("all")
+    -- Terrarium: the glass is only as bright as the light that's on it
+    local amb = light.ambient
+    local function tint(r, g, b, a)
+        love.graphics.setColor(r * amb[1], g * amb[2], b * amb[3], a)
+    end
 
     -- A faint green cast, the way thick glass tints what's behind it
-    love.graphics.setColor(0.55, 0.78, 0.74, 0.035)
+    tint(0.55, 0.78, 0.74, 0.035)
     love.graphics.rectangle("fill", x0, y0, w, h)
-    love.graphics.setColor(1, 1, 1, 1)
+    tint(1, 1, 1, 1)
     love.graphics.draw(film)
 
     -- Glare: a soft diagonal sheen that shifts a little as you move
     local par = ((mouseX or C.W / 2) - C.W / 2) * 0.04
     love.graphics.setScissor(x0, y0, w, h)
     love.graphics.setBlendMode("add")
-    local glare = 0.045
+    local glare = 0.015 + 0.03 * light.lamp_i
     for i, g in ipairs({ { x = 0.12, w = 70, a = 1 }, { x = 0.24, w = 20, a = 0.7 }, { x = 0.83, w = 40, a = 0.45 } }) do
         love.graphics.setColor(1, 1, 1, glare * g.a)
         love.graphics.push()
@@ -137,36 +177,36 @@ function Glass.drawFront(light, mouseX)
     local inL, inR = C.OX + C.GLASS_L, C.OX + C.GLASS_R
     local lidB, baseT = C.OY + C.GLASS_T, C.OY + B - C.GLASS_THICK
     love.graphics.setBlendMode("alpha")
-    love.graphics.setColor(edge[1], edge[2], edge[3], 0.22)
+    tint(edge[1], edge[2], edge[3], 0.22)
     love.graphics.rectangle("fill", x0, lidB, inL - x0, baseT - lidB)
     love.graphics.rectangle("fill", inR, lidB, x1 - inR, baseT - lidB)
-    love.graphics.setColor(edge[1], edge[2], edge[3], 0.30)
+    tint(edge[1], edge[2], edge[3], 0.30)
     love.graphics.rectangle("fill", x0, baseT, w, y1 - baseT)
-    love.graphics.setColor(1, 1, 1, 0.30)
+    tint(1, 1, 1, 0.30)
     love.graphics.setLineWidth(1)
     love.graphics.line(x0 + 0.5, lidB, x0 + 0.5, y1)
     love.graphics.line(x1 - 0.5, lidB, x1 - 0.5, y1)
     love.graphics.line(x0, baseT + 0.5, x1, baseT + 0.5)
-    love.graphics.setColor(1, 1, 1, 0.12)
+    tint(1, 1, 1, 0.12)
     love.graphics.line(inL - 0.5, lidB, inL - 0.5, baseT)
     love.graphics.line(inR + 0.5, lidB, inR + 0.5, baseT)
 
     -- The lid: a slab of glass, a little wider than the jar, with a cork knob
     local lx0, lx1 = x0 - 5, x1 + 5
-    love.graphics.setColor(edge[1] * 0.55, edge[2] * 0.55, edge[3] * 0.55, 0.85)
+    tint(edge[1] * 0.55, edge[2] * 0.55, edge[3] * 0.55, 0.85)
     love.graphics.rectangle("fill", lx0, y0, lx1 - lx0, lidB - y0, 2, 2)
-    love.graphics.setColor(edge[1], edge[2], edge[3], 0.55)
+    tint(edge[1], edge[2], edge[3], 0.55)
     love.graphics.rectangle("fill", lx0, y0, lx1 - lx0, 2)
-    love.graphics.setColor(1, 0.95, 0.85, 0.20)
+    tint(1, 0.95, 0.85, 0.20)
     love.graphics.rectangle("fill", lx0 + 2, lidB - 3, lx1 - lx0 - 4, 1.5)
 
     local kw, kh = 58, 18
     local kx, ky = C.CX - kw / 2, y0 - kh + 2
-    love.graphics.setColor(0.52, 0.38, 0.24, 1)
+    tint(0.52, 0.38, 0.24, 1)
     love.graphics.rectangle("fill", kx, ky, kw, kh, 5, 5)
-    love.graphics.setColor(0.66, 0.50, 0.33, 1)
+    tint(0.66, 0.50, 0.33, 1)
     love.graphics.rectangle("fill", kx + 3, ky + 2, kw - 6, 6, 3, 3)
-    love.graphics.setColor(0.30, 0.20, 0.12, 0.6)
+    tint(0.30, 0.20, 0.12, 0.6)
     for i = 0, 26 do
         -- Cork's pores, in a fixed scatter so the knob never shimmers
         local px = kx + 4 + (i * 37 % 56)

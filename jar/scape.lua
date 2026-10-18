@@ -2,7 +2,8 @@
 -- The scape: the room and the desk the jar stands on, the soil bed receding
 -- toward the back glass, its layers seen through the front glass, and stones.
 -- Terrarium: composed once from rng.scape, so a jar's seed always gives the same
--- scape. The day cycle relights all of this in #3; the shelf, bridge and arch
+-- scape. The bakes hold the scape's own colours; the day cycle's light is put
+-- on as they're drawn (the bed through floor.glsl). The shelf, bridge and arch
 -- that bodies can stand on are level geometry (#4), not scape.
 
 local C = require("jar.config")
@@ -156,7 +157,6 @@ local function bakeBed()
     local xs, ds = 48, 14
     local x0, x1 = C.GLASS_L, C.GLASS_R
     local verts = {}
-    local fog, hz = C.LIGHT.fog, C.LIGHT.haze
     local function vert(x, d)
         local sx, sy = Tank.project(C.OX + x, Tank.floorY(x, d), d)
         local m = mossiness(x, d)
@@ -164,8 +164,7 @@ local function bakeBed()
         local r = Tank.lerp(0.26, 0.27, m) + n
         local g = Tank.lerp(0.19, 0.38, m) + n
         local b = Tank.lerp(0.14, 0.16, m) + n * 0.8
-        local h = Tank.haze(d) * hz * 0.8
-        return { sx, sy, 0, 0, Tank.lerp(r, fog[1], h), Tank.lerp(g, fog[2], h), Tank.lerp(b, fog[3], h), 1 }
+        return { sx, sy, 0, 0, r, g, b, 1 }
     end
     for i = 0, xs - 1 do
         local xa = x0 + (x1 - x0) * i / xs
@@ -190,8 +189,6 @@ local function bakeBed()
         local sx, sy, k = Tank.project(C.OX + s.x, Tank.floorY(s.x, s.d), s.d)
         local moss = random() < mossiness(s.x, s.d)
         local r, g, b = pick(moss and mossTones or soilTones)
-        local h = Tank.haze(s.d) * hz * 0.8
-        r, g, b = Tank.lerp(r, fog[1], h), Tank.lerp(g, fog[2], h), Tank.lerp(b, fog[3], h)
         -- Seen at a grazing angle, cushions squash vertically
         pebble(sx, sy - s.r * k * 0.2, s.r * k, s.r * k * 0.5, r, g, b, moss and 1 or 0.4)
     end
@@ -509,13 +506,34 @@ function Scape.getStones() return stones end
 
 --- The room and desk (drawn into the room layer, which is blurred)
 function Scape.drawRoom(light)
-    love.graphics.setColor(1, 1, 1, 1)
+    local rm = light.room
+    love.graphics.setColor(rm[1], rm[2], rm[3], 1)
     love.graphics.draw(roomCanvas)
 
     love.graphics.push("all")
-    -- The jar's shadow on the desk
+    -- Terrarium: after the lamp goes off, the moon through a window to the left
+    -- lays its panes across the wall and the desk
+    if light.moon > 0.01 then
+        local m = light.moon
+        love.graphics.setBlendMode("add")
+        love.graphics.push()
+        love.graphics.translate(150, 120)
+        love.graphics.shear(0.42, 0)
+        for i = 0, 3 do
+            local px, py = (i % 2) * 74, math.floor(i / 2) * 104
+            love.graphics.setColor(0.035 * m, 0.045 * m, 0.075 * m, 1)
+            love.graphics.rectangle("fill", px, py, 66, 96)
+            Render.drawBlob(px + 33, py + 48, 52, 70)
+        end
+        love.graphics.pop()
+        love.graphics.setColor(0.05 * m, 0.07 * m, 0.11 * m, 1)
+        Render.drawBlob(260, DESK_Y + 30, 360, 60)
+        love.graphics.setBlendMode("alpha")
+    end
+
+    -- The jar's shadow on the desk: sharp under the lamp, faint by moonlight
     local sx, sy = Tank.project(C.CX, DESK_Y, 0.55)
-    love.graphics.setColor(0, 0, 0, 0.55)
+    love.graphics.setColor(0, 0, 0, 0.18 + 0.37 * light.lamp_i)
     Render.drawBlob(sx, sy + 6, (C.GLASS_R - C.GLASS_L) * 0.62, 46)
 
     -- The lamp's pool of light, on the wall and on the desk around the jar
@@ -528,7 +546,7 @@ function Scape.drawRoom(light)
 
     -- The lamp itself, hung just above the jar: a dark shade, a lit rim
     love.graphics.setBlendMode("alpha")
-    love.graphics.setColor(0.05, 0.045, 0.04, 1)
+    love.graphics.setColor(0.05 * rm[1], 0.045 * rm[2], 0.04 * rm[3], 1)
     love.graphics.polygon("fill", C.CX - 38, -10, C.CX + 38, -10, C.CX + 92, 58, C.CX - 92, 58)
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.9, l[2] * 0.9, l[3] * 0.9, 1)
@@ -538,15 +556,19 @@ function Scape.drawRoom(light)
     love.graphics.pop()
 end
 
---- The soil top
-function Scape.drawBed()
+--- The soil top, lit and hazed per pixel by its depth
+function Scape.drawBed(light)
     love.graphics.setColor(1, 1, 1, 1)
+    Render.useFloor(light)
     love.graphics.draw(bedCanvas)
+    love.graphics.setShader()
 end
 
---- The soil's layers through the front glass (in front of everything in the jar)
-function Scape.drawFront()
-    love.graphics.setColor(1, 1, 1, 1)
+--- The soil's layers through the front glass (in front of everything in the jar).
+-- Terrarium: lit by the room, not the lamp, which is above and behind the glass.
+function Scape.drawFront(light)
+    local a = light.ambient
+    love.graphics.setColor(a[1] * 0.92, a[2] * 0.92, a[3] * 0.92, 1)
     love.graphics.draw(frontCanvas)
 end
 

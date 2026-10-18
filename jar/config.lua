@@ -33,13 +33,12 @@ C.DESK_FRONT_D = 1.55
 
 C.FAR_D = 0.32              -- scape behind this is drawn soft (depth of field)
 
--- Terrarium: until the day cycle arrives (#3), one still evening light
-C.LIGHT = {
-    ambient = { 0.92, 0.88, 0.82 },
-    fog     = { 0.10, 0.10, 0.11 },  -- what the back of the jar fades into
-    haze    = 0.55,
-    lamp    = { 1.00, 0.86, 0.62 },
-}
+-- Terrarium: a jar day is a real day (the light itself is jar/daycycle.lua)
+C.DAY_SECONDS = 24 * 60 * 60
+
+-- Terrarium: the lamp hangs over the middle of the lid; its light falls in a cone
+C.LAMP_X = (C.GLASS_L + C.GLASS_R) / 2
+C.LAMP_CONE = { top = 150, bottom = 360 }  -- half-widths at the lid and at the soil
 
 -- The scape (stones, soil, the grain of the desk) is composed from its own
 -- stream, seeded from the jar's seed, so the same jar always looks the same and
