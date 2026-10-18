@@ -1,7 +1,7 @@
 -- From chrischaps/Character @ 925c35b (dev.lua)
 -- Dev modes: verification without a human at the mouse.
 --
---   lovec . --selftest                    nav integrity, arrival, determinism
+--   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
 --                                         run <sec> of sim, save a screenshot
 --                                         to the save dir (who: worm|blob|spider)
@@ -15,6 +15,8 @@
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to worm|blob|spider
+--   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
+--                                         print the state hash, exit 1 if they differ
 --
 -- The fixed-step sim makes all of this deterministic.
 
@@ -57,6 +59,7 @@ function dev.parse(args)
         elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
+        elseif a == '--replay' then o.replay = tonumber(args[i + 1]); i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
         end
         i = i + 1
@@ -89,7 +92,7 @@ local function drive(world, ctrl, seconds, dt)
     return false, seconds
 end
 
-function dev.selftest(World, level_data, fixed_dt)
+function dev.selftest(World, level_data, fixed_dt, open_jar, step)
     local rng = require('core.rng')
     local Pathfinder = require('nav.pathfinder')
     local ballistics = require('nav.ballistics')
@@ -248,6 +251,12 @@ function dev.selftest(World, level_data, fixed_dt)
     check(results, plain == followed, 'lantern changed the jar: %s vs %s', plain, followed)
     log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
 
+    -- Terrarium: 3c. Replay. The whole jar (scape, plants, creatures) opened
+    -- twice from one seed is the same jar after ten minutes of its life.
+    if open_jar then
+        check(results, dev.replay(open_jar, 7, 600, fixed_dt, step), 'replay: two runs of seed 7 diverged')
+    end
+
     -- 4. Audio: every event path runs without error (not a listening test)
     local ok_audio, err = pcall(function()
         local Synth = require('core.synth')
@@ -273,6 +282,37 @@ function dev.selftest(World, level_data, fixed_dt)
         love.timer.getTime() - t0)
     for _, f in ipairs(results.fail) do log.info('selftest', 'FAIL %s', f) end
     return #results.fail == 0
+end
+
+-- Terrarium: a jar is its seed plus its history. Open the jar twice from the
+-- same seed, step each for <seconds> the way the game does, and compare state
+-- hashes. --replay prints the hash so separate processes (and CI runs) can compare
+-- them too: a mismatch there means something read the wall clock, a table
+-- address, or pairs() order.
+function dev.replay(open_jar, seed, seconds, fixed_dt, step)
+    local statehash = require('core.statehash')
+    local Plants = require('jar.plants')
+    local steps = math.floor(seconds / fixed_dt + 0.5)
+    local function run()
+        local t0 = love.timer.getTime()
+        local w = open_jar(seed)
+        for _ = 1, steps do step(w) end
+        local h = statehash.of(w, Plants.all())
+        log.info('dev', 'replay  seed %d  %d steps (%.0fs of jar)  hash %s  in %.1fs', seed, steps, seconds, h.total,
+            love.timer.getTime() - t0)
+        return h
+    end
+    local a, b = run(), run()
+    local where = statehash.diverged(a, b)
+    if where then
+        log.info('dev', 'replay  FAIL the two runs diverged, first in %s', where)
+        for i, p in ipairs(a.parts) do
+            log.info('dev', 'replay    %-12s %s  %s', p[1], p[2], b.parts[i] and b.parts[i][2] or '-')
+        end
+    else
+        log.info('dev', 'replay  identical')
+    end
+    return where == nil, a.total
 end
 
 -- Print every node on one solid with its edges, for a creature's graph

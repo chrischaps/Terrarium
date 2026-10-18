@@ -4,7 +4,9 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 
 ## Running
 - `love .`: the game.
-- `lovec . --selftest`: Character's self-test, run against the jar (nav graph integrity, reachability, about 116 trips, determinism at 30/60/240 fps, audio smoke test). Exits 1 on failure.
+- `lovec . --selftest`: Character's self-test, run against the jar (nav graph integrity, reachability, about 116 trips, determinism at 30/60/240 fps, a 10-minute replay of the whole jar, audio smoke test). Exits 1 on failure.
+- `lovec . --replay <sec>`: open the jar twice from its seed, step both, and compare state hashes (`core/statehash.lua`). Prints `hash <hex>`, so separate runs can be compared too. A mismatch names the first part that drifted.
+- `sh tests/check_random.sh`: fails on any `math.random`, `love.math.random` or stray `newRandomGenerator` outside `core/rng.lua`.
 - `lovec . --snap - <sec> <file.png>`: fast-forward the sim, then save a screenshot to `%APPDATA%/LOVE/terrarium/`. Add `--nav` for every nav graph, or `--nav worm|blob|spider` for one with its jump arcs.
 - `lovec . --navdump <who> <solid>`: print a creature's nodes and edges on one solid.
 - `--hour <h|name>` opens the jar at an hour (snaps default to midday), and `--day <sec>` compresses the day: `love . --day 120 --hour lampon`.
@@ -14,7 +16,7 @@ A LÖVE 11.5 / Lua game. Soft-bodied creatures (verlet worm, pressure blob, FABR
 - `genome.lua`: genes, ranges, crossover, mutation
 - `bodies/`: worm, blob and spider builders that take a genome (`base.lua` holds the Mover anchor and Face; `fabrik.lua` is the spider's IK)
 - `nav/`: per-body navigation graph builder, A*, the ballistics jump model, and the path-following controller
-- `core/`: `rng` (the `sim` and `look` streams), `log`, `synth`
+- `core/`: `rng` (the `sim` and `look` streams), `statehash` (a fingerprint of the World for replay checks), `log`, `synth`
 - `dev.lua`: argument parsing and the self-test
 - `mind.lua`: needs and temperament choose goals
 - `jar/`: tank, glass, day cycle and environment (from Fishbowl), plus the moss grid. Right now it holds `world.lua` (creatures, graphs and controllers on the fixed step), `level.lua`/`collision.lua` (AABB solids), and `room.lua` (the jar's solids in Character's level format: soil, a one-footed cork arch, a standing stone and cairn with a twig between them over a water dish, and a slate shelf; `moss = true` tags the tops the moss grid will cover). `scenery.lua` bakes and draws those solids from `rng.scape`. Seen side-on, a roof grounded at both ends seals the floor under it, so `NavGraph:keep_home` keeps only each body's largest mutually reachable set of nodes. The view comes from Fishbowl: `config.lua` (projection, box, creature plane `PLANE_D`), `tank.lua` (project/unproject, and `Tank.pushPlane()` for drawing in level coordinates), `render.lua` (canvases, depth-of-field blur), `scape.lua` (room, desk, soil bed and layers, stones) and `glass.lua` (panes, lid, front glass, the lamp's cone). Light comes from `daycycle.lua`: a jar day is a real day, and the hour is `DayCycle.hourAt(startHour, world.time)`, so it's sim time, never the wall clock (that's read once at load, like the seed). `plants.lua` (ferns, moss sporophytes; it's World's `flora`, stepped on the fixed step) and `motes.lua`. `condensation.lua` fogs the inside of the front glass from `env.damp` (a day-cycle key) and the hour. It's a pure function of the jar's clock, composed from `rng.scape` last, and drawn with `shaders/mist.glsl`. `lantern.lua` is the watch-only follow light. It lives in `main.lua`, outside the World, and reads only `interp_points()`. Never route it through `world.selected`, because selection changes who wanders. Shaders live in `shaders/` (`floor.glsl` relights the soil bed).
