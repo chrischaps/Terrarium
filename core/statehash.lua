@@ -101,11 +101,11 @@ function statehash.of(world, flora)
     part('rng.sim', rng.sim)
     part('level', world.level)
     for i, c in ipairs(world.creatures) do
-        part(c.key or ('creature' .. i), c)
+        part(c.name and (c.key .. ' ' .. c.name) or c.key or ('creature' .. i), c)
     end
     part('graphs', world.graphs)
     part('controllers', world.controllers)
-    part('idle', world.idle_timers)
+    part('minds', world.minds)
     if flora then part('flora', flora) end
     part('world', world) -- whatever else the World keeps, now that the rest is seen
     return {total = bit.tohex(total), parts = parts}

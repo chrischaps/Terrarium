@@ -1,15 +1,17 @@
 -- From chrischaps/Character @ 925c35b (world/world.lua)
 -- World: everything that lives in the cave, stepped at a fixed rate.
 --
--- Three creatures share the cave. The one you've selected follows your clicks;
--- the others wander on their own, so the cave feels inhabited rather than
--- staged. Visual systems (flora, ambience, particles) step here too so that
+-- Terrarium: six creatures share the jar, two of each kind (the room's
+-- residents). Each has a mind (mind.lua) that wanders, grazes and rests by the
+-- jar's hour. In dev a selected one follows clicks instead. Bodies of a kind
+-- share one nav graph, since it's built from the body. Visual systems (flora, ambience, particles) step here too so that
 -- what you see is always in sync with the physics.
 
 local Level = require('jar.level')
 local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
-local rng = require('core.rng')
+local Mind = require('mind')
+local DayCycle = require('jar.daycycle')
 local log = require('core.log')
 
 local World = {}
@@ -20,6 +22,8 @@ World.CREATURES = {
     {key = 'blob',   class = require('bodies.blob')},
     {key = 'spider', class = require('bodies.spider')},
 }
+local CLASS = {}
+for _, def in ipairs(World.CREATURES) do CLASS[def.key] = def.class end
 
 -- Tiny event bus: emit during a step, flush to listeners after it
 local Bus = {}
@@ -41,10 +45,14 @@ function World.new(level_data, opts)
     self.level = Level.new(level_data)
     self.events = Bus.new()
     self.time = 0
+    -- Terrarium: the hour the jar opened at and how long its day is (inputs, like the seed)
+    self.start_hour = opts.hour or DayCycle.presets.midday
+    self.day_seconds = opts.day
     self.selected = opts.selected or 1 -- 0: nobody is guided and everyone wanders
     self.wander = opts.wander ~= false
     self.creatures, self.graphs, self.controllers = {}, {}, {}
-    self.idle_timers = {}
+    self.minds = {}
+    self.graph_of = {} -- one graph per kind
 
     local mouth = level_data.lamp or level_data.mouth -- Terrarium: the lamp above the jar
     self.light_dir = function(x, y)
@@ -53,24 +61,38 @@ function World.new(level_data, opts)
         return dx / d, dy / d
     end
 
-    for i, def in ipairs(World.CREATURES) do
+    for _, def in ipairs(World.CREATURES) do
         local graph = NavGraph.new(self.level, def.class.profile)
-        local spawn = level_data.spawns[def.key]
-        local solid = self.level.by_id[spawn.solid]
-        local c = def.class.new(spawn.x, solid.y, self)
-        c.key = def.key
+        self.graph_of[def.key] = graph
+        log.info('nav', '%s graph: %d nodes, %d edges', def.key, #graph.nodes, graph.edge_count)
+    end
+    for i, r in ipairs(level_data.residents) do
+        local solid = self.level.by_id[r.solid]
+        local c = CLASS[r.key].new(r.x, solid.y, self)
+        c.key, c.name = r.key, r.name
         c.mover.solid = solid
         if c.profile.climbs then
             c.solid = solid
             c:plant_all()
         end
         self.creatures[i] = c
-        self.graphs[i] = graph
-        self.controllers[i] = Controller.new(c, graph)
-        self.idle_timers[i] = rng.range(rng.sim, 2, 6)
-        log.info('nav', '%s graph: %d nodes, %d edges', def.key, #graph.nodes, graph.edge_count)
+        self.graphs[i] = self.graph_of[r.key]
+        self.controllers[i] = Controller.new(c, self.graphs[i])
+        self.minds[i] = Mind.new()
     end
     return self
+end
+
+-- Terrarium: the jar's hour now
+function World:hour()
+    return DayCycle.hourAt(self.start_hour, self.time, self.day_seconds)
+end
+
+-- The first resident of a kind, by index
+function World:first(key)
+    for i, c in ipairs(self.creatures) do
+        if c.key == key then return i end
+    end
 end
 
 function World:selected_creature()
@@ -80,7 +102,6 @@ end
 function World:select(i)
     if self.creatures[i] then
         self.selected = i
-        self.idle_timers[i] = 0
     end
 end
 
@@ -96,12 +117,13 @@ end
 
 function World:reset()
     for i, c in ipairs(self.creatures) do
-        local spawn = self.level.data.spawns[c.key]
-        local solid = self.level.by_id[spawn.solid]
-        c:reset(spawn.x, solid.y)
+        local r = self.level.data.residents[i]
+        local solid = self.level.by_id[r.solid]
+        c:reset(r.x, solid.y)
         c.mover.solid = solid
         if c.profile.climbs then c.solid = solid; c:plant_all() end
         self.controllers[i]:clear()
+        self.minds[i] = Mind.new()
     end
 end
 
@@ -158,27 +180,21 @@ end
 
 function World:step(dt)
     self.time = self.time + dt
+    local hour = self:hour()
 
     for i, c in ipairs(self.creatures) do
-        local ctrl = self.controllers[i]
+        local ctrl, mind = self.controllers[i], self.minds[i]
 
-        -- Unselected creatures wander now and then
-        if self.wander and i ~= self.selected and not ctrl:has_path() then
-            self.idle_timers[i] = self.idle_timers[i] - dt
-            if self.idle_timers[i] <= 0 then
-                self.idle_timers[i] = rng.range(rng.sim, 5, 14)
-                local graph = self.graphs[i]
-                local kinds = c.profile.climbs and nil or {top = true}
-                local goal = graph:random_node(rng.sim, kinds)
-                ctrl:go_to(goal)
-            end
+        -- Terrarium: everyone but a dev-selected creature lives by its mind
+        if self.wander and i ~= self.selected then
+            mind:update(dt, hour, c, ctrl, self.graphs[i])
         end
 
         ctrl:update(dt)
         local look = ctrl.path and ctrl:current_node() or nil
         c:update(dt, self.level, {
             events = self.events,
-            look_at = look and {x = look.x, y = look.y - 10} or nil,
+            look_at = look and {x = look.x, y = look.y - 10} or mind:look(c),
             light_dir = self.light_dir,
         })
         if ctrl.arrived then
