@@ -8,6 +8,7 @@
 --   lovec . --day <sec>      a time-compressed day, e.g. --day 120 to watch one pass
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
+--   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
 love.filesystem.setRequirePath("lib/?.lua;lib/?/init.lua;" .. love.filesystem.getRequirePath())
@@ -43,16 +44,37 @@ local lantern = Lantern.new() -- you watch with it; the World never knows it's t
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
 local startHour, daySeconds
 
-local function step()
-    world:snapshot()
-    world:step(STEP) -- steps the plants too, as the world's flora
+local function step(w)
+    w = w or world
+    w:snapshot()
+    w:step(STEP) -- steps the plants too, as the world's flora
     Motes.update(STEP)
+end
+
+-- Compose the jar from its seed: the scape, glass, plants and scenery draw
+-- from rng.scape in this order, the creatures from rng.sim, the motes from
+-- rng.look. The replay check in dev.lua opens jars the same way.
+local function openJar(seed)
+    rng.seed(seed)
+    Scape.init(rng.scape)
+    Glass.init(rng.scape)
+    local w = World.new(room, { wander = not args.nowander, selected = 0 })
+    local ledges = {}
+    for _, s in ipairs(w.level.solids) do
+        if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
+    end
+    Plants.init(rng.scape, Scape.getStones(), ledges)
+    w.flora = Plants
+    Motes.init(rng.look, 120)
+    Scenery.init(rng.scape, w.level)
+    Condensation.init(rng.scape) -- last, so the jar's composition doesn't shift
+    return w
 end
 
 function love.load()
     rng.seed(args.seed or SEED)
     if args.selftest then
-        love.event.quit(dev.selftest(World, room, STEP) and 0 or 1)
+        love.event.quit(dev.selftest(World, room, STEP, openJar, step) and 0 or 1)
         return
     end
     if args.navdump then
@@ -62,22 +84,18 @@ function love.load()
     end
 
     Render.init()
-    Scape.init(rng.scape)
-    Glass.init(rng.scape)
+    if args.replay then
+        -- open the jar twice and step both for <sec>; print the hash
+        local same, hash = dev.replay(openJar, args.seed or SEED, args.replay, STEP, step)
+        print('hash ' .. hash)
+        love.event.quit(same and 0 or 1)
+        return
+    end
 
     startHour = DayCycle.parseHour(args.hour) or (args.snap and DayCycle.presets.midday) or DayCycle.clockHour()
     daySeconds = args.day or C.DAY_SECONDS
 
-    world = World.new(room, { wander = not args.nowander, selected = 0 })
-    local ledges = {}
-    for _, s in ipairs(world.level.solids) do
-        if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
-    end
-    Plants.init(rng.scape, Scape.getStones(), ledges)
-    world.flora = Plants
-    Motes.init(rng.look, 120)
-    Scenery.init(rng.scape, world.level)
-    Condensation.init(rng.scape) -- last, so the jar's composition doesn't shift
+    world = openJar(args.seed or SEED)
 
     for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
     for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
