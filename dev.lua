@@ -891,6 +891,149 @@ test('spider', function(j, results)
     log.info('selftest', 'spider       %s', table.concat(report, '; '))
 end)
 
+-- Terrarium: graphs by size bucket, built a slice at a time (#16). A bucket's
+-- graph must be honest for every body in the bucket, a sliced build must be
+-- the graph a whole one makes, and a clutch of sixteen hatching at once must
+-- never cost a frame.
+test('hatch', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local NavGraph = require('nav.navgraph')
+    local Level = require('jar.level')
+    local ballistics = require('nav.ballistics')
+    local statehash = require('core.statehash')
+    local Genome = require('genome')
+    local Worm, Blob, Spider = require('bodies.worm'), require('bodies.blob'), require('bodies.spider')
+    local level = Level.new(level_data)
+    local report = {}
+
+    -- Every body in a bucket can travel its graph: each jump is one it can make
+    -- and fly clear of the level, each fall one it drops clear through, each
+    -- step one it can walk up. Bodies are tried every hundredth of the gene.
+    local graphs = {}
+    local function honest(nav, body, what)
+        graphs[nav] = graphs[nav] or NavGraph.new(level, nav)
+        local g = graphs[nav]
+        local bad = {}
+        for _, n in ipairs(g.nodes) do
+            for _, e in ipairs(n.edges) do
+                local m = g.nodes[e.to]
+                if e.kind == 'jump' and not ballistics.solve_jump(n.x, n.y, m.x, m.y, body, level) then
+                    bad[#bad + 1] = string.format('jump %d->%d', n.id, m.id)
+                elseif e.kind == 'fall' and not ballistics.arc_clear(level, e.ex, n.y, e.vx, 0, e.t, body.radius) then
+                    bad[#bad + 1] = string.format('fall %d->%d', n.id, m.id)
+                elseif e.kind == 'walk' and n.solid ~= m.solid and math.abs(m.y - n.y) > body.step then
+                    bad[#bad + 1] = string.format('step %d->%d', n.id, m.id)
+                end
+            end
+        end
+        check(results, body.radius <= nav.radius and body.step >= nav.step and body.jump_vy >= nav.jump_vy
+            and (body.span or 0) >= (nav.span or 0), 'hatch: %s is more able than its graph assumes', what)
+        check(results, #bad == 0, 'hatch: %s cannot travel its bucket graph (%s)', what, table.concat(bad, ', '))
+        return g
+    end
+    local blobs, spiders = {}, {}
+    for k = 0, Blob.BUCKETS - 1 do
+        local nav = Blob.nav_profile({size = 0.6 + (k + 0.5) * 0.8 / Blob.BUCKETS})
+        check(results, nav.bucket == k, 'hatch: blob bucket %d is filed as %s', k, tostring(nav.bucket))
+        for size = nav.sizes[1], nav.sizes[2] + 1e-9, 0.01 do
+            size = math.floor(size * 1000 + 0.5) / 1000
+            honest(nav, Blob.profile_for(size), 'blob size ' .. size)
+        end
+        blobs[#blobs + 1] = nav
+    end
+    for k = 0, Spider.BUCKETS - 1 do
+        local nav = Spider.nav_profile({reach = 0.7 + (k + 0.5) * 0.6 / Spider.BUCKETS})
+        check(results, nav.bucket == k, 'hatch: spider bucket %d is filed as %s', k, tostring(nav.bucket))
+        for reach = nav.reaches[1], nav.reaches[2] + 1e-9, 0.0075 do
+            reach = math.floor(reach * 1000 + 0.5) / 1000
+            honest(nav, Spider.profile_for(reach), 'spider reach ' .. reach)
+        end
+        spiders[#spiders + 1] = nav
+    end
+    -- Neighbours meet: the top of one bucket is the bottom of the next
+    check(results, Blob.nav_profile({size = 0.6}).bucket == 0 and Blob.nav_profile({size = 1.4}).bucket == 7
+        and Blob.nav_profile({size = 0.7}).bucket == 1 and Blob.nav_profile({size = 0.699}).bucket == 0,
+        'hatch: blob sizes are filed in the wrong buckets')
+    check(results, Blob.nav_profile({size = 0.83}) == Blob.nav_profile({size = 0.87}),
+        'hatch: two blobs of one bucket have different nav profiles')
+
+    -- A sliced build is the whole build, whatever the slice
+    local hash = function(g) return statehash.of({time = 0, level = level, creatures = {}, graphs = {g}}).total end
+    for _, nav in ipairs({Worm.nav_profile(), blobs[1], spiders[8]}) do
+        local whole = hash(NavGraph.new(level, nav))
+        for _, slice in ipairs({1000, World.BUILD_SLICE}) do
+            local b, g = NavGraph.builder(level, nav, slice), nil
+            repeat g = b:step() until g
+            check(results, hash(g) == whole and b.slices > 1, 'hatch: %s built in slices of %d is not the whole graph',
+                nav.name, slice)
+        end
+    end
+
+    -- The worst clutch: sixteen eggs laid in one step where each plan's
+    -- residents hatched, a blob in every size bucket and a spider in every
+    -- reach bucket (their other genes random), so every graph the residents
+    -- don't already have is built at once. Each egg waits for its bucket's.
+    local function clutch()
+        rng.seed(16)
+        local w = World.new(level_data, {wander = true, selected = 0})
+        local spots = {}
+        for _, r in ipairs(level_data.residents) do spots[r.key] = spots[r.key] or r end
+        for k = 1, 16 do
+            local key = k <= 8 and 'blob' or 'spider'
+            local g, b = Genome.random(key, rng.sim), (k - 1) % 8 + 0.5
+            if key == 'blob' then g.size = 0.6 + b * 0.1 else g.reach = 0.7 + b * 0.075 end
+            local r = spots[key]
+            w:lay(g, r.x + (k % 5 - 2) * 6, r.solid, 'egg ' .. k)
+        end
+        local residents, builds = #w.creatures, #w.building
+        local frames, worst, hatched_at = {}, 0, nil
+        local steps = 0
+        while steps < 2400 do
+            local t0 = love.timer.getTime()
+            w:step(dt); w:step(dt) -- a frame at 60 fps
+            local took = love.timer.getTime() - t0
+            steps = steps + 2
+            if #w.eggs > 0 or hatched_at == steps - 2 then
+                worst = math.max(worst, took)
+            else
+                frames[#frames + 1] = took
+            end
+            if #w.eggs == 0 and not hatched_at then hatched_at = steps end
+        end
+        table.sort(frames)
+        return w, {residents = residents, builds = builds, hatched_at = hatched_at, worst = worst,
+            typical = frames[math.floor(#frames / 2) + 1] or 0, settled = frames[#frames] or 0}
+    end
+    local w, s = clutch()
+    check(results, s.hatched_at and #w.creatures == s.residents + 16, 'hatch: %d of 16 eggs hatched in 20 s',
+        #w.creatures - s.residents)
+    local residents_have = {}
+    for i = 1, s.residents do residents_have[w.creatures[i].nav] = true end
+    local need = 0
+    for _, nav in ipairs(blobs) do need = need + (residents_have[nav] and 0 or 1) end
+    for _, nav in ipairs(spiders) do need = need + (residents_have[nav] and 0 or 1) end
+    check(results, s.builds == need, 'hatch: a clutch needing %d graphs queued %d builds', need, s.builds)
+    local wrong = 0
+    for i, c in ipairs(w.creatures) do
+        if w.graphs[i] ~= w.navs[c.nav] or w.controllers[i].graph ~= w.graphs[i] then wrong = wrong + 1 end
+    end
+    check(results, wrong == 0, 'hatch: %d creatures walk a graph that is not their bucket\'s', wrong)
+    -- The same clutch again from the same seed is the same jar
+    local again, s2 = clutch()
+    check(results, statehash.of(w).total == statehash.of(again).total, 'hatch: two clutches from one seed differ')
+    -- Never a dropped frame: no frame of the clutch (two steps, building and
+    -- hatching) takes a 60 fps frame. A real cost slows every run; a hiccup
+    -- from the collector or the machine doesn't, so a slow one gets a third.
+    local worst = math.min(s.worst, s2.worst)
+    if worst >= 1 / 60 then worst = math.min(worst, select(2, clutch()).worst) end
+    s.worst = worst
+    check(results, worst < 1 / 60, 'hatch: a frame of the clutch took %.1f ms', worst * 1000)
+    report[#report + 1] = string.format('%d builds, all 16 out after %.2f s; frames while hatching at most %.2f ms '
+        .. '(after: typically %.2f, at most %.2f)', s.builds, s.hatched_at * dt, s.worst * 1000, s.typical * 1000,
+        s.settled * 1000)
+    log.info('selftest', 'hatch        %s', table.concat(report, '; '))
+end)
+
 -- 4. Audio: every event path runs without error (not a listening test)
 test('audio', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt

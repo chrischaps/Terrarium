@@ -39,6 +39,11 @@ Worm.profile = {
     anticipation = 0.16,
 }
 
+-- Terrarium: the profile a worm's nav graph is built from (#16). A worm's
+-- length and stiffness change how it crawls, not where it fits or how far it
+-- jumps, so every worm shares Character's graph.
+function Worm.nav_profile(genome) return Worm.profile end
+
 local SEGMENTS = 13 -- Terrarium: a worm built without a genome (Character's)
 local SEG_LEN = 8.5
 -- Terrarium: the stiffness every tone below was tuned at (Character's worm).
@@ -61,6 +66,7 @@ function Worm.new(x, y, world, genome)
     local self = setmetatable({}, Worm)
     self.world = world
     self.profile = Worm.profile
+    self.nav = Worm.nav_profile(genome)
     self.mover = Base.Mover.new(x, y, Worm.profile)
     self.face = Base.Face.new()
     -- Terrarium: the body from its genes

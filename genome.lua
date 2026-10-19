@@ -234,6 +234,19 @@ function Genome.child(a, b, gen)
     return out
 end
 
+-- Terrarium: which of `n` equal stretches of a real gene's range `v` falls in
+-- (#16). Returns the stretch (0 to n-1) and its two ends. Worked in thousandths,
+-- the way genes are kept, so a value on a boundary always lands on the same
+-- side: the higher stretch, except at the top of the range.
+function Genome.bucket(key, name, v, n)
+    local g = plan_of(key).by_name[name]
+    local lo, hi = floor(g.real[1] * 1000 + 0.5), floor(g.real[2] * 1000 + 0.5)
+    local at = floor(hold(g, v) * 1000 + 0.5)
+    local k = math.min(n - 1, floor((at - lo) * n / (hi - lo)))
+    local function edge(i) return floor(lo + (hi - lo) * i / n + 0.5) / 1000 end
+    return k, edge(k), edge(k + 1)
+end
+
 -- True when every gene the plan has is present and in range. A pick gene is
 -- in range only if it's one of the plan's values; a real one only if it's on
 -- the thousandths.

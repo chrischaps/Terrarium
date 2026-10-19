@@ -57,6 +57,21 @@ function Spider.profile_for(reach)
     return p
 end
 
+-- Terrarium: the profile a spider's nav graph is built from (#16). Reaches
+-- come in Spider.BUCKETS stretches that share a graph, built for the shortest
+-- legs in the stretch: only the gaps those can step across.
+Spider.BUCKETS = 8
+local navs = {}
+function Spider.nav_profile(genome)
+    local k, lo, hi = Genome.bucket('spider', 'reach', genome and genome.reach or 1, Spider.BUCKETS)
+    if navs[k] then return navs[k] end
+    local p = {}
+    for key, v in pairs(Spider.profile_for(lo)) do p[key] = v end
+    p.reach, p.reaches, p.bucket = nil, {lo, hi}, k
+    navs[k] = p
+    return p
+end
+
 local RIDE = 12
 local BONES = {14, 15, 11}
 local STEP_DIST = 13
@@ -112,6 +127,7 @@ function Spider.new(x, y, world, genome)
     self.genome = genome
     self.scale = scale
     self.profile = Spider.profile_for(scale)
+    self.nav = Spider.nav_profile(genome)
     self.layout = layout(genome and genome.legs or 8, scale)
     self.bones = {BONES[1] * scale, BONES[2] * scale, BONES[3] * scale}
     self.ride = RIDE * (0.6 + 0.4 * scale) -- long legs stand it taller

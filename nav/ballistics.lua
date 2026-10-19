@@ -35,7 +35,7 @@ function ballistics.solve_jump(x0, y0, x1, y1, profile, level)
         local t = t_up + t_down
         local vx = (x1 - x0) / t
         if abs(vx) <= profile.jump_vx
-           and (not level or ballistics.arc_clear(level, x0, y0, vx, vy, t, profile.radius)) then
+           and (not level or ballistics.arc_clear(level, x0, y0, vx, vy, t, profile.radius, profile.min_radius)) then
             return vx, vy, t
         end
     end
@@ -71,16 +71,20 @@ end
 -- Does a body of radius r (centred r above the anchor) fly the arc without
 -- touching any solid? The first and last few pixels are exempt because the
 -- body is resting on its takeoff and landing surfaces there.
-function ballistics.arc_clear(level, x0, y0, vx, vy, t_total, r)
+-- Terrarium: with r0, for every body of radius r0 to r at once (a size
+-- bucket's, #16). A smaller body flies lower, so neither end alone will do:
+-- the check is one circle around all of theirs, and the smallest exemption.
+function ballistics.arc_clear(level, x0, y0, vx, vy, t_total, r, r0)
+    r0 = r0 or r
     local steps = math.max(12, math.floor(t_total * 90))
-    local pad = r * 0.85
+    local pad = r * 0.85 + (r - r0) / 2
     for i = 1, steps - 1 do
         local t = t_total * i / steps
         local x, y = ballistics.at(x0, y0, vx, vy, t)
-        local cy = y - r
+        local cy = y - (r + r0) / 2
         local from_start = math.min(abs(x - x0), abs(y - y0))
         local from_end_y = abs(y - (y0 + vy * t_total + 0.5 * ballistics.GRAVITY * t_total * t_total))
-        local near_end = from_end_y < 3 and abs(x - (x0 + vx * t_total)) < r
+        local near_end = from_end_y < 3 and abs(x - (x0 + vx * t_total)) < r0
         if not (from_start < 2 and i < 3) and not near_end then
             if level:solid_at(x, cy, pad) then
                 return false
