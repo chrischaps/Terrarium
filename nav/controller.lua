@@ -172,7 +172,7 @@ function Controller:update(dt)
         else
             -- A step up onto a different surface: the blob hops it
             if c.profile.hop_steps and e and n.solid ~= support(c) and n.y < y - 5 then
-                local vx, vy = ballistics.solve_jump(x, y, n.x, n.y, c.profile)
+                local vx, vy = ballistics.solve_jump(x, y, n.x, n.y, c.profile, self.graph.level)
                 if vx then
                     c.mover:launch(vx, vy, 0.08)
                     self.flight = {node = n, kind = 'hop'}
@@ -202,7 +202,8 @@ function Controller:update(dt)
             end
             return
         end
-        local vx, vy = ballistics.solve_jump(x, y, n.x, n.y, c.profile)
+        -- Terrarium: the same lowest clear arc the graph found, from where it stands
+        local vx, vy = ballistics.solve_jump(x, y, n.x, n.y, c.profile, self.graph.level)
         if not vx then vx, vy = e.vx, e.vy end
         if climbs(c) then c:launch(vx, vy) else c.mover:launch(vx, vy) end
         self.flight = {node = n, kind = 'jump'}

@@ -9,7 +9,7 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
---   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, audio)
+--   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
 --   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
@@ -89,7 +89,7 @@ function love.load()
         return
     end
     if args.navdump then
-        dev.navdump(World, room, args.navdump.who, args.navdump.solid)
+        dev.navdump(World, room, args.navdump.who, args.navdump.solid, args.genomes)
         love.event.quit(0)
         return
     end

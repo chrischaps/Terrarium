@@ -337,8 +337,8 @@ function NavGraph:build_ballistic_edges()
             local dx, dy = b.x - a.x, b.y - a.y
             if a.solid ~= b.solid and abs(dx) <= MAX_JUMP_DX and not self:has_step(a, b) then
                 -- Jump: any standing node to any other surface
-                local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p)
-                if vx and ballistics.arc_clear(level, a.x, a.y, vx, vy, t, p.radius) then
+                local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p, level) -- Terrarium: the lowest clear arc
+                if vx then
                     local d = dist(a, b)
                     self:connect(a, b, 'jump', d * 1.25 + 60, {vx = vx, vy = vy, t = t})
                 end
