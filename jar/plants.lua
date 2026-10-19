@@ -28,7 +28,7 @@ local function random(a, b)
     return gen:random()
 end
 
-local function soilY(x, d) return Tank.floorY(x, d) - C.OY end
+local function soilY(x, d) return Tank.ly(Tank.floorY(x, d)) end
 
 --------------------------------------------------------------------------------
 -- Angular spring chains
@@ -135,28 +135,34 @@ function Plants.init(generator, stones, ledges)
     list = {}
     time = 0
 
+    -- Terrarium: a stone's size is in world px, and a fern keeps its size on
+    -- screen, so it towers over the residents (whose level units are 1/C.S px)
+    local big = 1 / C.S
     for _, s in ipairs(stones or {}) do
         if s.canvas and random() < 0.75 then
             local side = random() < 0.5 and -1 or 1
-            local x = s.x + side * s.w * (0.18 + random() * 0.2)
-            addFern(x, soilY(x, s.d) - s.h * (0.15 + random() * 0.25), s.d - 0.01, random(4, 6), 0.9 + random() * 0.5)
+            local x = s.x + side * s.w * big * (0.18 + random() * 0.2)
+            addFern(x, soilY(x, s.d) - s.h * big * (0.15 + random() * 0.25), s.d - 0.01, random(4, 6),
+                (0.9 + random() * 0.5) * big)
         end
     end
     -- And in the back corners, where the glass meets
-    addFern(C.GLASS_L + 30 + random() * 30, soilY(60, 0.03), 0.03, random(5, 7), 1.3)
-    addFern(C.GLASS_R - 30 - random() * 30, soilY(740, 0.05), 0.05, random(5, 7), 1.2)
+    local x = C.GLASS_L + 50 + random() * 50
+    addFern(x, soilY(x, 0.03), 0.03, random(5, 7), 1.3 * big)
+    x = C.GLASS_R - 50 - random() * 50
+    addFern(x, soilY(x, 0.05), 0.05, random(5, 7), 1.2 * big)
 
     -- Sporophyte tufts: scattered behind, a few where the creatures walk through
     -- them, a few just inside the front glass
-    for _ = 1, 14 do
+    for _ = 1, 24 do
         addSpores(C.GLASS_L + 20 + random() * (C.GLASS_R - C.GLASS_L - 40), 0.10 + random() * 0.5, random(5, 10))
     end
-    for _ = 1, 6 do
+    for _ = 1, 12 do
         addSpores(C.GLASS_L + 30 + random() * (C.GLASS_R - C.GLASS_L - 60), C.PLANE_D + (random() - 0.5) * 0.06, random(6, 11))
     end
-    for _ = 1, 5 do
+    for _ = 1, 8 do
         local x = C.GLASS_L + 16 + random() * (C.GLASS_R - C.GLASS_L - 32)
-        if abs(x - C.LAMP_X) > 140 then addSpores(x, 0.86 + random() * 0.1, random(4, 8)) end
+        if abs(x - C.LAMP_X) > 240 then addSpores(x, 0.86 + random() * 0.1, random(4, 8)) end
     end
 
     -- Terrarium: on the scenery's tops, just behind the creatures' plane, so

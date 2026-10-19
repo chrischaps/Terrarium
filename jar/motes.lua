@@ -22,7 +22,7 @@ local time = 0
 
 local function random() return gen:random() end
 
-local function soilY(x, d) return Tank.floorY(x, d) - C.OY end
+local function soilY(x, d) return Tank.ly(Tank.floorY(x, d)) end
 
 local function respawn(m)
     m.d = random()

@@ -12,6 +12,7 @@
 -- of it touches the simulation.
 
 local C = require("jar.config")
+local Tank = require("jar.tank")
 local Render = require("jar.render")
 
 local Condensation = {}
@@ -21,9 +22,9 @@ local SOFT = 0.09         -- how gradually a spot fogs past its threshold
 local REFILL = 1.4        -- hours for a run's trail to fog over again
 local NIGHT0 = 18         -- runs are timed in hours since six in the evening
 
-local x0, y0 = C.OX + C.GLASS_L, C.OY + C.GLASS_T
-local x1, y1 = C.OX + C.GLASS_R, C.OY + C.GLASS_B - C.GLASS_THICK
-local soilY = C.OY + C.SOIL_Y
+local x0, y0 = Tank.wx(C.GLASS_L), Tank.wy(C.GLASS_T)
+local x1, y1 = Tank.wx(C.GLASS_R), Tank.wy(C.GLASS_B - C.GLASS_THICK)
+local soilY = Tank.wy(C.SOIL_Y)
 
 local mist, field, dry
 local beads, runs = {}, {}

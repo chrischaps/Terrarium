@@ -12,6 +12,11 @@
 -- hump, a long one ripples with three. `stiffness` is muscle tone: a stiff worm
 -- carries its own weight and holds a line out over a ledge, a loose one bears
 -- less of it and drapes, and bunches deeper as it crawls.
+--
+-- Terrarium: a worm never crawls tail-first. When its way lies back along its
+-- own body it turns: the head rears a little and crawls back over its back,
+-- and the body follows it like a rope (its segments only pull, never push),
+-- so a fold runs down the body until the tail comes round behind.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
@@ -116,6 +121,7 @@ function Worm:reset(x, y, facing)
     self.mover = Base.Mover.new(x, y, Worm.profile)
     local dir = Worm.layout_dir(self.world and self.world.level, x, y, facing, self.n)
     self.mover.facing = dir
+    self.turning = nil
     for i, p in ipairs(self.points) do
         p.x, p.y = x - (i - 1) * SEG_LEN * dir, y - 7
         p.px, p.py = p.x, p.y
@@ -135,6 +141,33 @@ function Worm:light()
     return p.x, p.y, 0, 0, 0, 0
 end
 
+-- Terrarium: turning. It starts when the head sets off back along its own
+-- body, and goes on until the fold has run out of the body (nothing lies
+-- further back than the tail) with the tail behind the head. A worm that stops
+-- halfway lies folded until it moves again. Heading back the other way is
+-- another turn, and leaving the ground ends it.
+function Worm:update_turn()
+    local m, pts = self.mover, self.points
+    local going = (m.state == 'ground' and abs(m.vx) > 5) and (m.vx > 0 and 1 or -1) or 0
+    local head, tail = pts[1], pts[#pts]
+    if self.turning then
+        if m.state ~= 'ground' then
+            self.turning = nil
+        elseif going ~= 0 then
+            self.turning = going
+            local t, folded = going, false
+            for i = 1, #pts - 1 do
+                if pts[i].x * t < tail.x * t - 2 then folded = true break end
+            end
+            if not folded and (head.x - tail.x) * t > SEG_LEN then self.turning = nil end
+        end
+    end
+    if not self.turning and going ~= 0 then
+        local mid = pts[math.ceil(#pts / 2)]
+        if (head.x - mid.x) * going < -SEG_LEN then self.turning = going end
+    end
+end
+
 function Worm:update(dt, level, ctx)
     local m = self.mover
     self.clock = (self.clock or 0) + dt
@@ -142,8 +175,11 @@ function Worm:update(dt, level, ctx)
     if m.want_dir and m.want_dir ~= 0 then
         local surge = 0.5 + 0.5 * sin(self.phase + 1.2)
         m.want_speed = (m.want_speed or self.profile.walk_speed) * (0.55 + 0.75 * surge)
+        -- Terrarium: and slows to come round
+        if self.turning then m.want_speed = m.want_speed * 0.6 end
     end
     m:update(level, dt)
+    self:update_turn()
     for _, ev in ipairs(m:drain()) do
         if ev.kind == 'land' then
             self.squash = min(1, ev.impact / 500)
@@ -162,6 +198,7 @@ function Worm:update(dt, level, ctx)
     -- Head target: anchor, lifted a little when idle, dipped while coiling
     local idle = m.state == 'ground' and not moving
     local want_lift = idle and (3.5 + 1.8 * sin(self.clock * 1.3)) or (moving and 2 or 0)
+    if self.turning then want_lift = self.radii[1] * 1.4 end -- Terrarium: rears to cross its back
     if m.state == 'anticipate' then want_lift = -2 end
     self.head_lift = self.head_lift + (want_lift - self.head_lift) * min(1, dt * 6)
     self.coil = self.coil + (((m.state == 'anticipate') and 1 or 0) - self.coil) * min(1, dt * 14)
@@ -200,13 +237,14 @@ function Worm:update(dt, level, ctx)
         for i = 1, #self.points - 1 do
             local a, b = self.points[i], self.points[i + 1]
             local rest = SEG_LEN
-            if moving then
+            if moving and not self.turning then
                 rest = rest * (1 - self.squeeze * max(0, sin(self.phase - i * self.wave)))
             end
             rest = rest * (1 - 0.3 * self.coil)
             local dx, dy = b.x - a.x, b.y - a.y
             local d = sqrt(dx * dx + dy * dy)
-            if d > 0.0001 then
+            -- Terrarium: turning, the body only follows (see the top)
+            if d > 0.0001 and not (self.turning and d < rest) then
                 local diff = (d - rest) / d
                 if i == 1 then
                     b.x, b.y = b.x - dx * diff, b.y - dy * diff
@@ -218,7 +256,9 @@ function Worm:update(dt, level, ctx)
         end
         -- Bending stiffness: nudge each joint toward its neighbours' midpoint
         -- so the spine curves instead of kinking
-        for i = 2, #self.points - 1 do
+        -- (Terrarium: not while turning; with nothing pushing back it would
+        -- gather the body into a lump instead of letting it fold)
+        for i = 2, self.turning and 0 or #self.points - 1 do
             local a, p, b = self.points[i - 1], self.points[i], self.points[i + 1]
             local mx, my = (a.x + b.x) * 0.5, (a.y + b.y) * 0.5
             local k = ((i == 2) and 0.22 or 0.12) * (air and 1 or 1.6) * self.bend
@@ -236,6 +276,7 @@ function Worm:update(dt, level, ctx)
                 local rise = b.y - a.y
                 local ex, ey = b.x + (b.x - a.x), b.y + (rise < 0 and rise * 0.5 or rise)
                 local k = 0.09 * self.tone * (1 - (i - 3) / #self.points) ^ self.reach
+                if self.turning then k = k * 0.25 end -- Terrarium: let the fold bend
                 p.x, p.y = p.x + (ex - p.x) * k, p.y + (ey - p.y) * k
             end
         end
