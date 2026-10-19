@@ -6,8 +6,16 @@
 -- is carried by the anchor and rolls as it travels; landings are an impulse
 -- into the floor, so the squash is real physics, not an animation. Pressure is
 -- also the jump: it squats (pressure drops) and springs off (pressure spikes).
+--
+-- Terrarium: built from a genome (#13). `size` scales the ring, and with it
+-- the body's profile: the clearance it needs, the step it rolls up, and how
+-- hard it can spring, so a big blob jumps higher but no longer fits where a
+-- small one goes, and each size gets its own nav graph. `pressure` is how
+-- firmly it holds itself: a firm blob stays round and barely dents when it
+-- lands, a soft one sags into a dome, squashes flat and wobbles back.
 
 local Base = require('bodies.base')
+local Genome = require('genome')
 local rng = require('core.rng')
 
 local Blob = {}
@@ -25,7 +33,29 @@ Blob.profile = {
 }
 
 local N = 18
-local R = 21
+local R = 21 -- Terrarium: the ring's radius at size 1 (Character's blob)
+
+-- Terrarium: the profile of a blob `size` times the standard one. A bigger
+-- blob springs higher, but not in proportion to its size (jump height goes
+-- with size^0.4), so the smallest still clears the stone from the soil, and
+-- the biggest can no longer fit through the gaps it jumps over. One table per
+-- size, so blobs of a size share it (and a nav graph).
+local profiles = {}
+function Blob.profile_for(size)
+    if size == 1 then return Blob.profile end
+    local p = profiles[size]
+    if p then return p end
+    local b, spring = Blob.profile, size ^ 0.2
+    p = {}
+    for k, v in pairs(b) do p[k] = v end
+    p.size = size
+    p.radius, p.height, p.step = b.radius * size, b.height * size, b.step * size
+    p.walk_speed = b.walk_speed * size ^ 0.4
+    p.jump_vx, p.jump_vy = b.jump_vx * spring, b.jump_vy * spring
+    p.anticipation = b.anticipation * size ^ 0.5 -- a big blob squats longer
+    profiles[size] = p
+    return p
+end
 
 local COLORS = {
     core    = {0.56, 0.92, 0.84, 0.86},
@@ -38,17 +68,30 @@ local COLORS = {
     trail   = {0.55, 1.00, 0.88},
 }
 
-function Blob.new(x, y, world)
+function Blob.new(x, y, world, genome)
     local self = setmetatable({}, Blob)
-    self.profile = Blob.profile
-    self.mover = Base.Mover.new(x, y, Blob.profile)
+    -- Terrarium: the body from its genes
+    if genome then Genome.clamp(genome) end
+    local size = genome and genome.size or 1
+    local firm = genome and genome.pressure or 1
+    self.genome = genome
+    self.size, self.R = size, R * size
+    self.profile = Blob.profile_for(size)
+    self.edge_k = min(0.95, 0.8 * firm ^ 0.4)    -- how hard the skin holds its length
+    self.area_k = min(1, 0.9 * firm ^ 0.5)       -- how hard it holds its volume
+    self.sag = 260 / firm ^ 2                    -- a soft blob slumps into a dome
+    self.sit = 0.96 + 0.1 * (firm - 1)           -- and its middle sits lower
+    self.give = 0.55 / firm                      -- how far a landing carries into the floor
+    self.dent = 0.08 / firm                      -- how much pressure a landing knocks out
+    self.recover = 7 * firm                      -- how fast it fills back out
+    self.mover = Base.Mover.new(x, y, self.profile)
     self.face = Base.Face.new()
     self.color_name = {0.55, 1, 0.88}
     self.points = {}
     self.ax, self.ay = x, y
     self:layout(x, y)
-    self.rest_edge = 2 * R * sin(pi / N)
-    self.area0 = 0.5 * N * R * R * sin(2 * pi / N)
+    self.rest_edge = 2 * self.R * sin(pi / N)
+    self.area0 = 0.5 * N * self.R * self.R * sin(2 * pi / N)
     self.pressure = 1
     self.rot = 0
     self.trail = {}
@@ -57,7 +100,7 @@ function Blob.new(x, y, world)
     for i = 1, 6 do
         self.bubbles[i] = {
             a = rng.range(rng.look, 0, 2 * pi), f = rng.range(rng.look, 0.15, 0.7),
-            r = rng.range(rng.look, 1.1, 2.6), drift = rng.range(rng.look, -0.4, 0.4),
+            r = rng.range(rng.look, 1.1, 2.6) * size, drift = rng.range(rng.look, -0.4, 0.4),
         }
     end
     self.mesh = love.graphics.newMesh(N * 4 + 2, 'fan', 'stream')
@@ -65,6 +108,7 @@ function Blob.new(x, y, world)
 end
 
 function Blob:layout(x, y)
+    local R = self.R
     for i = 1, N do
         local a = (i - 1) / N * 2 * pi
         local px, py = x + cos(a) * R, y - R + sin(a) * R
@@ -79,7 +123,7 @@ function Blob:anchor() return self.mover.x, self.mover.y end
 function Blob:interp_points() return self.points end
 
 function Blob:reset(x, y)
-    self.mover = Base.Mover.new(x, y, Blob.profile)
+    self.mover = Base.Mover.new(x, y, self.profile)
     self.ax, self.ay = x, y
     self:layout(x, y)
 end
@@ -102,12 +146,12 @@ end
 
 function Blob:influencers(out)
     local cx, cy = self:centroid()
-    out[#out + 1] = {x = cx, y = cy, r = R + 5, vx = self.mover.vx, vy = self.mover.vy}
+    out[#out + 1] = {x = cx, y = cy, r = self.R + 5, vx = self.mover.vx, vy = self.mover.vy}
 end
 
 function Blob:light()
     local cx, cy = self:centroid()
-    return cx, cy, 0.30, 0.95, 0.80, 95
+    return cx, cy, 0.30, 0.95, 0.80, 95 * self.size
 end
 
 -- Add a velocity (px/s) to every point
@@ -118,14 +162,15 @@ function Blob:kick(vx, vy, dt)
 end
 
 function Blob:update(dt, level, ctx)
+    local R = self.R
     local m = self.mover
     local prev_state = m.state
     m:update(level, dt)
     for _, ev in ipairs(m:drain()) do
         if ev.kind == 'land' then
             -- Real squash: the body keeps falling into the floor for a moment
-            self:kick(0, min(ev.impact, 700) * 0.55, dt)
-            self.pressure = 0.92
+            self:kick(0, min(ev.impact, 700) * self.give, dt)
+            self.pressure = 1 - self.dent
             ctx.events:emit('land', {x = m.x, y = m.y, impact = ev.impact, who = self})
         elseif ev.kind == 'jump' then
             -- Spring off: stretch upward, pressure spike
@@ -157,10 +202,10 @@ function Blob:update(dt, level, ctx)
     -- Squat while anticipating a jump
     local squat = m.state == 'anticipate' and 1 or 0
     local target_pressure = 1 - 0.2 * squat
-    self.pressure = self.pressure + (target_pressure - self.pressure) * min(1, dt * 7)
+    self.pressure = self.pressure + (target_pressure - self.pressure) * min(1, dt * self.recover)
 
     -- Jiggle: integrate relative motion with a little sag
-    local g = 260 * dt * dt
+    local g = self.sag * dt * dt
     for _, p in ipairs(self.points) do
         local vx, vy = (p.x - p.px) * 0.982, (p.y - p.py) * 0.982
         p.px, p.py = p.x, p.y
@@ -169,7 +214,7 @@ function Blob:update(dt, level, ctx)
 
     -- Soft tether of the centre to where the anchor says it should be
     cx, cy = self:centroid()
-    local tx, ty = m.x, m.y - R * (0.96 - 0.22 * squat)
+    local tx, ty = m.x, m.y - R * (self.sit - 0.22 * squat)
     local k = 0.16
     local ox, oy = (tx - cx) * k, (ty - cy) * k
     for _, p in ipairs(self.points) do
@@ -186,7 +231,7 @@ function Blob:update(dt, level, ctx)
             local ex, ey = b.x - a.x, b.y - a.y
             local d = sqrt(ex * ex + ey * ey)
             if d > 1e-5 then
-                local c = (d - self.rest_edge) / d * 0.5 * 0.8
+                local c = (d - self.rest_edge) / d * 0.5 * self.edge_k
                 a.x, a.y = a.x + ex * c, a.y + ey * c
                 b.x, b.y = b.x - ex * c, b.y - ey * c
             end
@@ -201,7 +246,7 @@ function Blob:update(dt, level, ctx)
             sum = sum + gx * gx + gy * gy
         end
         if sum > 1e-6 then
-            local lambda = (target_area - A) / sum * 0.9
+            local lambda = (target_area - A) / sum * self.area_k
             for i = 1, N do
                 local p = pts[i]
                 p.x, p.y = p.x + grads[i] * lambda, p.y + grads[i + N] * lambda
@@ -217,7 +262,7 @@ function Blob:update(dt, level, ctx)
         self.trail_dist = self.trail_dist + abs(dx)
         if self.trail_dist > 7 then
             self.trail_dist = 0
-            table.insert(self.trail, {x = m.x, y = m.y, life = 1, w = rng.range(rng.look, 4, 8)})
+            table.insert(self.trail, {x = m.x, y = m.y, life = 1, w = rng.range(rng.look, 4, 8) * self.size})
             if #self.trail > 120 then table.remove(self.trail, 1) end
         end
     end
@@ -273,6 +318,8 @@ function Blob:draw_trail()
 end
 
 function Blob:draw(ctx)
+    local R, k = self.R, self.size
+    local e = k ^ 0.6 -- Terrarium: small blobs have bigger eyes for their size
     local cx, cy = self:centroid()
     local out = self:outline_points(4)
     local count = #out / 2
@@ -288,7 +335,7 @@ function Blob:draw(ctx)
     local sx, sy = (maxx - minx) / (2 * R), (maxy - miny) / (2 * R)
 
     -- Body fan: bright core offset toward the light, deep rim
-    local verts = {{cx + lx * 4, cy + ly * 4, 0, 0, COLORS.core[1], COLORS.core[2], COLORS.core[3], COLORS.core[4]}}
+    local verts = {{cx + lx * 4 * k, cy + ly * 4 * k, 0, 0, COLORS.core[1], COLORS.core[2], COLORS.core[3], COLORS.core[4]}}
     for i = 0, count do
         local k = (i % count) + 1
         local x, y = out[k * 2 - 1], out[k * 2]
@@ -330,26 +377,26 @@ function Blob:draw(ctx)
     -- Specular highlight toward the light
     love.graphics.setColor(1, 1, 1, 0.55)
     local hx, hy = cx + lx * R * 0.55 * sx, cy + ly * R * 0.55 * sy - 2
-    love.graphics.ellipse('fill', hx, hy, 4.2 * sx, 2.4 * sy)
+    love.graphics.ellipse('fill', hx, hy, 4.2 * k * sx, 2.4 * k * sy)
     love.graphics.setColor(1, 1, 1, 0.9)
-    love.graphics.circle('fill', hx + 1, hy - 0.5, 1.2)
+    love.graphics.circle('fill', hx + k, hy - 0.5 * k, 1.2 * k)
 
     -- Eyes: upright frame, squished with the body
     local f = self.mover.facing
     local gx = self.face.gaze_x
-    local ex = cx + (f * 3 + gx * 2) * sx
+    local ex = cx + (f * 3 + gx * 2) * k * sx
     local ey = cy - R * 0.28 * sy
-    local sep = 6.5 * sx
-    Base.draw_eye(self.face, ex - sep, ey, 3.6, sx, sy, COLORS, false)
-    Base.draw_eye(self.face, ex + sep, ey, 3.6, sx, sy, COLORS, false)
+    local sep = 6.5 * e * sx
+    Base.draw_eye(self.face, ex - sep, ey, 3.6 * e, sx, sy, COLORS, false)
+    Base.draw_eye(self.face, ex + sep, ey, 3.6 * e, sx, sy, COLORS, false)
     -- A small mouth that opens in the air
     local m = self.mover
     love.graphics.setColor(COLORS.outline)
     if m.state == 'air' then
-        love.graphics.ellipse('fill', ex, ey + 7 * sy, 2.2 * sx, 2.6 * sy)
+        love.graphics.ellipse('fill', ex, ey + 7 * e * sy, 2.2 * e * sx, 2.6 * e * sy)
     else
         love.graphics.setLineWidth(1.2)
-        love.graphics.arc('line', 'open', ex, ey + 4 * sy, 3 * sx, 0.5, pi - 0.5)
+        love.graphics.arc('line', 'open', ex, ey + 4 * e * sy, 3 * e * sx, 0.5, pi - 0.5)
         love.graphics.setLineWidth(1)
     end
 end

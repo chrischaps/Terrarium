@@ -3,8 +3,8 @@
 --
 -- Terrarium: six creatures share the jar, two of each kind (the room's
 -- residents). Each has a mind (mind.lua) that wanders, grazes and rests by the
--- jar's hour. In dev a selected one follows clicks instead. Bodies of a kind
--- share one nav graph, since it's built from the body. Visual systems (flora, ambience, particles) step here too so that
+-- jar's hour. In dev a selected one follows clicks instead. Each body gets
+-- the nav graph of its own profile; bodies with the same one share it. Visual systems (flora, ambience, particles) step here too so that
 -- what you see is always in sync with the physics.
 
 local Level = require('jar.level')
@@ -54,7 +54,7 @@ function World.new(level_data, opts)
     self.wander = opts.wander ~= false
     self.creatures, self.graphs, self.controllers = {}, {}, {}
     self.minds = {}
-    self.graph_of = {} -- one graph per kind
+    self.graph_of = {} -- the first resident's graph, per kind
 
     local mouth = level_data.lamp or level_data.mouth -- Terrarium: the lamp above the jar
     self.light_dir = function(x, y)
@@ -63,11 +63,6 @@ function World.new(level_data, opts)
         return dx / d, dy / d
     end
 
-    for _, def in ipairs(World.CREATURES) do
-        local graph = NavGraph.new(self.level, def.class.profile)
-        self.graph_of[def.key] = graph
-        log.info('nav', '%s graph: %d nodes, %d edges', def.key, #graph.nodes, graph.edge_count)
-    end
     -- Terrarium: each resident is built from a genome. A jar draws its own from
     -- rng.sim; opts.genomes (strings or tables) stand in for the first residents
     -- of their plans, in order, so a dev run can look at a chosen body.
@@ -83,6 +78,7 @@ function World.new(level_data, opts)
         self.genomes[i] = Genome.clamp(mine or (r.genome and Genome.copy(r.genome)) or Genome.random(r.key, rng.sim))
     end
 
+    local by_profile = {}
     for i, r in ipairs(level_data.residents) do
         local solid = self.level.by_id[r.solid]
         local c = CLASS[r.key].new(r.x, solid.y, self, Genome.copy(self.genomes[i]))
@@ -93,7 +89,17 @@ function World.new(level_data, opts)
             c:plant_all()
         end
         self.creatures[i] = c
-        self.graphs[i] = self.graph_of[r.key]
+        -- Terrarium: a graph is built from the body's profile, so bodies that
+        -- share one (worms and spiders for now, blobs of a size) share a graph
+        local graph = by_profile[c.profile]
+        if not graph then
+            graph = NavGraph.new(self.level, c.profile)
+            by_profile[c.profile] = graph
+            log.info('nav', '%s graph%s: %d nodes, %d edges', r.key,
+                c.profile.size and string.format(' (size %.3f)', c.profile.size) or '', #graph.nodes, graph.edge_count)
+        end
+        self.graph_of[r.key] = self.graph_of[r.key] or graph
+        self.graphs[i] = graph
         self.controllers[i] = Controller.new(c, self.graphs[i])
         self.minds[i] = Mind.new()
     end

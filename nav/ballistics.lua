@@ -19,7 +19,10 @@ local CLEARANCES = {14, 22, 34, 50, 72}
 -- Solve launch velocity from (x0, y0) to land at (x1, y1).
 -- profile: {jump_vy = max upward speed, jump_vx = max horizontal speed}
 -- Returns vx, vy, flight_time - or nil if out of reach.
-function ballistics.solve_jump(x0, y0, x1, y1, profile)
+-- Terrarium: given a level, the lowest arc a body of profile.radius flies
+-- clear of it, so a jump that would clip a corner low goes over it higher
+-- (the nav graph and the controller ask the same question, so they agree).
+function ballistics.solve_jump(x0, y0, x1, y1, profile, level)
     local g = ballistics.GRAVITY
     local max_rise = profile.jump_vy * profile.jump_vy / (2 * g)
     for _, clearance in ipairs(CLEARANCES) do
@@ -31,7 +34,8 @@ function ballistics.solve_jump(x0, y0, x1, y1, profile)
         local t_down = sqrt(2 * (y1 - apex) / g)
         local t = t_up + t_down
         local vx = (x1 - x0) / t
-        if abs(vx) <= profile.jump_vx then
+        if abs(vx) <= profile.jump_vx
+           and (not level or ballistics.arc_clear(level, x0, y0, vx, vy, t, profile.radius)) then
             return vx, vy, t
         end
     end

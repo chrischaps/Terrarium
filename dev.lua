@@ -120,9 +120,11 @@ test('graphs', function(j, results)
     local ballistics = require('nav.ballistics')
     rng.seed(1)
     local world = World.new(level_data, {wander = false})
-    for _, def in ipairs(World.CREATURES) do -- Terrarium: one graph per kind
-        local i = world:first(def.key)
-        local c, g = world.creatures[i], world.graphs[i]
+    local checked = {}
+    for i, c in ipairs(world.creatures) do -- Terrarium: every graph, once (a blob's is its size's)
+        local g = world.graphs[i]
+        if checked[g] then goto next_graph end
+        checked[g] = true
         local inside, bad_arcs, edges = 0, 0, 0
         for _, n in ipairs(g.nodes) do
             if world.level:solid_at(n.x + n.nx * 2, n.y + n.ny * 2) then inside = inside + 1 end
@@ -166,6 +168,7 @@ test('graphs', function(j, results)
             if s.moss and not seen[s.id] then missing[#missing + 1] = s.id end
         end
         check(results, #missing == 0, '%s: no footing on %s', c.key, table.concat(missing, ', '))
+        ::next_graph::
     end
 end)
 
@@ -565,6 +568,129 @@ test('worm', function(j, results)
     log.info('selftest', 'worm         %s', table.concat(report, '; '))
 end)
 
+-- Terrarium: blobs from their genes (#13). Size sets the profile and so the
+-- nav graph; pressure, how round it holds itself and how deep a landing goes.
+test('blob', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Pathfinder = require('nav.pathfinder')
+    local function blob(genome)
+        rng.seed(13)
+        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local i = w:first('blob')
+        return w, i, w.creatures[i]
+    end
+
+    -- Every size gets to every mossy top from where it hatched, and back,
+    -- and its graph is its own: a bigger blob has fewer places it fits
+    local report, jumps_at = {}, {}
+    for k = 0, 8 do
+        local size = 0.6 + k * 0.1
+        local w, i = blob(string.format('blob size=%.1f', size))
+        local g = w.graphs[i]
+        local start = w.controllers[i]:start_node()
+        -- (Dew hatches on the soil between the arch and the stone, a pit for
+        -- a body that can't jump out of it)
+        local x = w.creatures[i]:anchor()
+        check(results, start and math.abs(start.x - x) < 30, 'blob: size %.1f hatched at x=%.0f, its nearest node is at %.0f',
+            size, x, start and start.x or -1)
+        local seen, cut, jumps = {}, {}, 0
+        for _, n in ipairs(g.nodes) do
+            if n.kind == 'top' and not seen[n.solid.id] and Pathfinder.find(g, start, n) and Pathfinder.find(g, n, start) then
+                seen[n.solid.id] = true
+            end
+            for _, e in ipairs(n.edges) do if e.kind == 'jump' then jumps = jumps + 1 end end
+        end
+        for _, s in ipairs(w.level.solids) do
+            if s.moss and not seen[s.id] then cut[#cut + 1] = s.id end
+        end
+        check(results, #cut == 0, 'blob: size %.1f cannot get to and from %s', size, table.concat(cut, ', '))
+        jumps_at[k] = jumps
+    end
+    report[#report + 1] = string.format('jumps %d at size 0.6, %d at 1, %d at 1.4', jumps_at[0], jumps_at[4], jumps_at[8])
+    check(results, jumps_at[0] > jumps_at[4] and jumps_at[4] > jumps_at[8],
+        'blob: jumps by size %d, %d, %d (the graph should shrink as it grows)', jumps_at[0], jumps_at[4], jumps_at[8])
+
+    -- Height over width of the ring
+    local function aspect(c)
+        local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
+        for _, p in ipairs(c.points) do
+            x0, x1, y0, y1 = math.min(x0, p.x), math.max(x1, p.x), math.min(y0, p.y), math.max(y1, p.y)
+        end
+        return (y1 - y0) / (x1 - x0)
+    end
+    -- At rest on the soil, then at its flattest after a 150px drop onto it
+    local function land(genome)
+        local w, _, c = blob(genome)
+        local soil = w.level.by_id.soil
+        c:reset(120, soil.y)
+        c.mover.solid = soil
+        for _ = 1, math.floor(2 / dt) do w:step(dt) end
+        local rest, flat, landed = aspect(c), math.huge, false
+        c:reset(120, soil.y - 150)
+        c.mover:release(0, 0)
+        for _ = 1, math.floor(2 / dt) do
+            w:step(dt)
+            landed = landed or c.mover.state == 'ground'
+            if landed then flat = math.min(flat, aspect(c)) end
+        end
+        return rest, flat
+    end
+    local soft_rest, soft_flat = land('blob size=1 pressure=0.5')
+    local firm_rest, firm_flat = land('blob size=1 pressure=1.5')
+    report[#report + 1] = string.format('pressure 0.5/1.5 rests %.2f/%.2f, lands %.2f/%.2f', soft_rest, firm_rest,
+        soft_flat, firm_flat)
+    check(results, firm_rest > soft_rest + 0.08, 'blob: at rest a firm blob is %.2f tall for its width, a soft one %.2f',
+        firm_rest, soft_rest)
+    check(results, firm_flat > soft_flat + 0.2, 'blob: landing, a firm blob flattens to %.2f, a soft one %.2f',
+        firm_flat, soft_flat)
+    -- The ticket's pair: a small firm blob and a large soft one
+    local _, small_flat = land('blob size=0.6 pressure=1.5')
+    local _, large_flat = land('blob size=1.4 pressure=0.5')
+    report[#report + 1] = string.format('small firm lands %.2f, large soft %.2f', small_flat, large_flat)
+    check(results, small_flat > large_flat + 0.12, 'blob: a small firm blob flattens to %.2f, a large soft one %.2f',
+        small_flat, large_flat)
+
+    -- The extremes travel their own graphs: chained trips between tops
+    for _, genome in ipairs({'blob size=0.6 pressure=1.5', 'blob size=1.4 pressure=0.5'}) do
+        local w, i, c = blob(genome)
+        w:select(i)
+        local ctrl, g = w.controllers[i], w.graphs[i]
+        local gen = love.math.newRandomGenerator(1300)
+        local ok, n = 0, 0
+        for _ = 1, 16 do
+            local goal, start = g:random_node(gen, {top = true}), ctrl:start_node()
+            if goal and start and goal ~= start and Pathfinder.find(g, start, goal) then
+                n = n + 1
+                ctrl:go_to(goal)
+                local arrived = drive(w, ctrl, 25, dt)
+                local x, y = c:anchor()
+                if arrived and math.abs(x - goal.x) < 6 and math.abs(y - goal.y) < 6 then
+                    ok = ok + 1
+                else
+                    local step = ctrl.path and ctrl.path[ctrl.i]
+                    results.fail[#results.fail + 1] = string.format('blob: %s trip %s->%s stopped at (%.0f,%.0f) on %s, edge %s',
+                        genome, start.solid.id, goal.solid.id, x, y, c.mover.state,
+                        step and step.edge and step.edge.kind or '-')
+                    ctrl:clear()
+                    c:reset(goal.x, goal.y)
+                    c.mover.solid = goal.solid
+                end
+            end
+        end
+        report[#report + 1] = string.format('%s %d/%d trips', genome:match('size=%S+'), ok, n)
+        check(results, n > 8 and ok == n, 'blob: %s arrived on %d of %d trips', genome, ok, n)
+        results.trips = (results.trips or 0) + n
+    end
+
+    -- With no genome it's Character's blob, and a genome reaches the body
+    local Blob = require('bodies.blob')
+    check(results, Blob.new(100, 100).profile == Blob.profile, "blob: built without a genome, it is not Character's")
+    local _, _, c = blob(nil)
+    check(results, c.genome and c.profile.radius == Blob.profile_for(c.genome.size).radius,
+        "blob: a resident's profile is not its size's")
+    log.info('selftest', 'blob         %s', table.concat(report, '; '))
+end)
+
 -- 4. Audio: every event path runs without error (not a listening test)
 test('audio', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
@@ -652,8 +778,8 @@ function dev.replay(open_jar, seed, seconds, fixed_dt, step)
 end
 
 -- Print every node on one solid with its edges, for a creature's graph
-function dev.navdump(World, level_data, who, solid_id)
-    local world = World.new(level_data, {wander = false})
+function dev.navdump(World, level_data, who, solid_id, genomes)
+    local world = World.new(level_data, {wander = false, genomes = genomes})
     local g = world.graph_of[who]
     if not g then return end
     for _, n in ipairs(g.nodes) do
