@@ -698,6 +698,124 @@ test('blob', function(j, results)
     log.info('selftest', 'blob         %s', table.concat(report, '; '))
 end)
 
+-- Terrarium: spiders from their genes (#14). Legs set the gait's groups;
+-- reach the legs' length, and with it the stride and the gaps its graph steps.
+test('spider', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Spider = require('bodies.spider')
+    local function spider(genome)
+        rng.seed(14)
+        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local i = w:first('spider')
+        return w, i, w.creatures[i]
+    end
+    local report = {}
+
+    -- The gait: two groups of half the legs, each standing on both sides
+    for _, legs in ipairs({4, 6, 8}) do
+        local _, _, c = spider(string.format('spider legs=%d reach=1', legs))
+        local count = {0, 0}
+        local sides = {{}, {}}
+        for _, leg in ipairs(c.legs) do
+            count[leg.def.group] = count[leg.def.group] + 1
+            sides[leg.def.group][leg.def.near] = true
+        end
+        check(results, #c.legs == legs and count[1] == legs / 2 and count[2] == legs / 2,
+            'spider: %d legs built as %d, in groups of %d and %d', legs, #c.legs, count[1], count[2])
+        check(results, sides[1][true] and sides[1][false] and sides[2][true] and sides[2][false],
+            'spider: %d legs, a gait group stands on one side only', legs)
+    end
+
+    -- Reach is the graph's: longer legs step across wider gaps between solids
+    local joins = {}
+    for _, reach in ipairs({0.7, 1.3}) do
+        local w, i = spider(string.format('spider legs=8 reach=%.1f', reach))
+        local n = 0
+        for _, node in ipairs(w.graphs[i].nodes) do
+            for _, e in ipairs(node.edges) do
+                if e.kind == 'crawl' and w.graphs[i].nodes[e.to].solid ~= node.solid then n = n + 1 end
+            end
+        end
+        joins[#joins + 1] = n
+        -- (and a short reach still has all of the jar: solids that touch
+        -- join however far apart their nearest nodes are)
+        check(results, (w.graphs[i].dropped or 0) == 0, 'spider: at reach %.1f its graph seals off %d nodes', reach,
+            w.graphs[i].dropped or 0)
+    end
+    report[#report + 1] = string.format('joins %d/%d at reach 0.7/1.3', joins[1], joins[2])
+    check(results, joins[2] > joins[1], 'spider: %d joins between solids at reach 0.7, %d at 1.3', joins[1], joins[2])
+
+    -- The ticket's walk: a lap of the cork arch, over its top, down to the
+    -- soil past its lip and back along its underside, with every leg count
+    -- at both ends of reach. A stumble is a planted foot the leg can't reach
+    -- (the chain's tip off the foothold), a foot planted on nothing, or fewer
+    -- than half the legs on the ground.
+    local laps
+    local function lap(w)
+        local arch, soil = w.level.by_id.arch, w.level.by_id.soil
+        return {
+            {arch.x - 70, soil.y, soil, 0, -1}, {arch.x + arch.w / 2, arch.y, arch, 0, -1},
+            {arch.x + arch.w + 60, soil.y, soil, 0, -1}, {arch.x + arch.w / 2, arch.y + arch.h, arch, 0, 1},
+            {arch.x - 70, soil.y, soil, 0, -1},
+        }
+    end
+    for _, legs in ipairs({4, 6, 8}) do
+        for _, reach in ipairs({0.7, 1, 1.3}) do
+            local genome = string.format('spider legs=%d reach=%.1f', legs, reach)
+            local w, i, c = spider(genome)
+            w:select(i)
+            local ctrl, g = w.controllers[i], w.graphs[i]
+            laps = lap(w)
+            c:reset(laps[1][1], laps[1][2])
+            c.solid = laps[1][3]
+            c:plant_all()
+            local frames, slipped, bare, unsupported, missed = 0, 0, 0, 0, {}
+            for k = 2, #laps do
+                local p = laps[k]
+                local goal = g:node_near(p[1], p[2], p[3], p[4], p[5])
+                local arrived = goal and ctrl:go_to(goal)
+                for _ = 1, math.floor(20 / dt) do
+                    w:step(dt)
+                    if c.mode == 'attached' then
+                        frames = frames + 1
+                        local planted = 0
+                        for _, leg in ipairs(c.legs) do
+                            if not leg.stepping and not (c.tap and c.legs[c.tap.leg] == leg) then
+                                planted = planted + 1
+                                local tip = leg.chain.joints[#leg.chain.joints]
+                                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 4 then slipped = slipped + 1 end
+                                if not leg.grounded then bare = bare + 1 end
+                            end
+                        end
+                        if planted < legs / 2 then unsupported = unsupported + 1 end
+                    end
+                    if not ctrl:has_path() then break end
+                end
+                local x, y = c:anchor()
+                if not (arrived and not ctrl:has_path() and math.abs(x - goal.x) < 6 and math.abs(y - goal.y) < 6) then
+                    missed[#missed + 1] = string.format('%d (%.0f,%.0f)', k, x, y)
+                    ctrl:clear()
+                end
+            end
+            -- (per leg-frame for feet, per frame for support)
+            local slip, air, alone = slipped / (frames * legs), bare / (frames * legs), unsupported / frames
+            report[#report + 1] = string.format('%d/%.1f slip %.3f air %.3f alone %.3f', legs, reach, slip, air, alone)
+            check(results, #missed == 0, 'spider: %s did not make the lap of the arch at %s', genome, table.concat(missed, ', '))
+            check(results, slip < 0.01 and air < 0.01 and alone < 0.01,
+                'spider: %s stumbled on the arch: %.1f%% of feet slipped, %.1f%% stood on nothing, %.1f%% of the time on too few legs',
+                genome, slip * 100, air * 100, alone * 100)
+        end
+    end
+
+    -- With no genome it's Character's spider, and a genome reaches the body
+    check(results, Spider.new(100, 100).profile == Spider.profile and #Spider.new(100, 100).legs == 8,
+        "spider: built without a genome, it is not Character's")
+    local _, _, c = spider(nil)
+    check(results, c.genome and #c.legs == c.genome.legs and c.profile == Spider.profile_for(c.genome.reach),
+        "spider: a resident's body is not its genome's")
+    log.info('selftest', 'spider       %s', table.concat(report, '; '))
+end)
+
 -- 4. Audio: every event path runs without error (not a listening test)
 test('audio', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt

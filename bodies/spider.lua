@@ -7,15 +7,24 @@
 -- planted foot falls too far behind its rest spot, it lifts and arcs to the
 -- new one; alternating leg groups keep it walking on four legs at a time.
 -- Jumps hand the body to the shared ballistic mover; the legs tuck in flight.
+--
+-- Terrarium: built from a genome (#14). `legs` (4, 6 or 8) is half on each
+-- side, and the gait is two alternating groups of half of them: a trot on
+-- four, a tripod on six, Character's tetrapod on eight. `reach` is leg length,
+-- and with it the stride, the body's height, how far a foot looks for ground,
+-- and the gap between two solids it can step across (the profile's `span`,
+-- which its nav graph is built with).
 
 local Base = require('bodies.base')
 local fabrik = require('bodies.fabrik')
 local rng = require('core.rng')
+local Genome = require('genome')
 
 local Spider = {}
 Spider.__index = Spider
 
 local sqrt, sin, cos, abs, min, max, pi, atan2 = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max, math.pi, math.atan2
+local floor = math.floor
 
 Spider.profile = {
     name = 'spider',
@@ -25,12 +34,30 @@ Spider.profile = {
     anticipation = 0.15,
     climbs = true,
     crawl_speed = 115,
+    reach = 1, span = 40, -- Terrarium
 }
+
+-- Terrarium: one profile per reach, so spiders with the same legs share a graph
+local profiles = {}
+function Spider.profile_for(reach)
+    if reach == 1 then return Spider.profile end
+    local p = profiles[reach]
+    if p then return p end
+    local b = Spider.profile
+    p = {}
+    for k, v in pairs(b) do p[k] = v end
+    p.reach = reach
+    p.span = b.span * reach
+    p.crawl_speed = b.crawl_speed * reach ^ 0.5 -- a longer stride, a slower cadence
+    profiles[reach] = p
+    return p
+end
 
 local RIDE = 12
 local BONES = {14, 15, 11}
 local STEP_DIST = 13
 local STEP_TIME = 0.1
+local FAN = {0.35, 0.8, 1.25, 1.7, -0.35} -- Terrarium: radians off straight down, toward the foot's side
 
 -- Leg layout: reach along the body tangent (front positive), depth for near/far
 local LEGS = {
@@ -44,6 +71,30 @@ local LEGS = {
     {reach = -29, hip = -3.0, near = false, group = 1},
 }
 
+-- Terrarium: `count` legs, half a side, spread front to back along each side
+-- of Character's eight (so eight is exactly it). Along a side the groups
+-- alternate, and across the body they're opposite, so every group stands on
+-- both sides at once. Reach and the knees scale with `scale`.
+local function layout(count, scale)
+    local per, out = count / 2, {}
+    for side = 0, 1 do
+        local near = side == 0
+        for k = 0, per - 1 do
+            local u = per > 1 and k / (per - 1) * 3 or 0 -- a place along LEGS 1..4
+            local i0 = min(2, floor(u))
+            local f = u - i0
+            local a, b = LEGS[side * 4 + i0 + 1], LEGS[side * 4 + i0 + 2]
+            out[#out + 1] = {
+                reach = (a.reach + (b.reach - a.reach) * f) * scale,
+                hip = a.hip + (b.hip - a.hip) * f,
+                near = near,
+                group = (k + side) % 2 + 1,
+            }
+        end
+    end
+    return out
+end
+
 local COLORS = {
     body     = {0.26, 0.17, 0.27},
     body_hi  = {0.56, 0.38, 0.48},
@@ -55,9 +106,18 @@ local COLORS = {
     eye      = {1.00, 0.80, 0.45},
 }
 
-function Spider.new(x, y, world)
+function Spider.new(x, y, world, genome)
     local self = setmetatable({}, Spider)
-    self.profile = Spider.profile
+    -- Terrarium: the body from its genes
+    if genome then Genome.clamp(genome) end
+    local scale = genome and genome.reach or 1
+    self.genome = genome
+    self.scale = scale
+    self.profile = Spider.profile_for(scale)
+    self.layout = layout(genome and genome.legs or 8, scale)
+    self.bones = {BONES[1] * scale, BONES[2] * scale, BONES[3] * scale}
+    self.ride = RIDE * (0.6 + 0.4 * scale) -- long legs stand it taller
+    self.step_dist = STEP_DIST * scale
     self.world = world
     self.color_name = {1, 0.78, 0.5}
     self.a = {x = x, y = y}                 -- anchor on the surface
@@ -65,20 +125,22 @@ function Spider.new(x, y, world)
     self.tnx, self.tny = 0, -1              -- target normal
     self.facing = 1
     self.mode = 'attached'                  -- attached | anticipate | air
-    self.mover = Base.Mover.new(x, y, Spider.profile)
+    self.mover = Base.Mover.new(x, y, self.profile)
     self.solid = nil
     self.face = Base.Face.new()
     self.clock = 0
     self.speed = 0
+    self.gait = 1 -- Terrarium: how freely the legs let it go
+    self.pace, self.crawled = 0, false -- Terrarium: how fast the body is really going
     self.bob = 0
     self.tap = nil
     self.next_tap = rng.range(rng.look, 3, 7)
     self.legs = {}
-    for i, def in ipairs(LEGS) do
+    for i, def in ipairs(self.layout) do
         local hx, hy = self:hip(def)
         local leg = {
             def = def,
-            chain = fabrik.chain(hx, hy, BONES, 0, 1),
+            chain = fabrik.chain(hx, hy, self.bones, 0, 1),
             foot = {x = x + def.reach, y = y},
             from = {x = 0, y = 0}, to = {x = 0, y = 0},
             t = 1, stepping = false, planted = true,
@@ -90,7 +152,7 @@ function Spider.new(x, y, world)
 end
 
 function Spider:get_name() return "Cave Spider" end
-function Spider:get_description() return "Eight FABRIK legs that step to real footholds" end
+function Spider:get_description() return #self.legs .. " FABRIK legs that step to real footholds" end
 
 function Spider:anchor() return self.a.x, self.a.y end
 
@@ -106,7 +168,8 @@ function Spider:reset(x, y)
     self.a.x, self.a.y = x, y
     self.nx, self.ny, self.tnx, self.tny = 0, -1, 0, -1
     self.mode = 'attached'
-    self.mover = Base.Mover.new(x, y, Spider.profile)
+    self.mover = Base.Mover.new(x, y, self.profile)
+    self.gait, self.pace = 1, 0 -- Terrarium
     self:plant_all()
 end
 
@@ -119,7 +182,7 @@ end
 
 function Spider:body_center()
     local tx, ty, nx, ny = self:frame()
-    local ride = RIDE + self.bob
+    local ride = self.ride + self.bob
     return self.a.x + nx * ride, self.a.y + ny * ride
 end
 
@@ -129,39 +192,70 @@ function Spider:hip(def)
     return bx + tx * def.hip + nx * 1.5, by + ty * def.hip + ny * 1.5
 end
 
--- Where this foot wants to stand, found on real geometry
-function Spider:rest_spot(def, level)
+-- Terrarium: how far ahead a foot reaches when moving, in step with the leg
+function Spider:lead() return self.speed * 0.09 * self.scale ^ 0.5 end
+
+-- Where this foot wants to stand, found on real geometry. Terrarium: `lead`
+-- is how far ahead it reaches (by default as far as it's moving), 0 for
+-- where it stands still.
+function Spider:rest_spot(def, level, lead)
     local tx, ty, nx, ny = self:frame()
-    local lead = self.speed * 0.09                       -- reach ahead when moving
+    local k = self.scale                                 -- Terrarium: footholds scale with reach
+    lead = lead or self:lead()                           -- reach ahead when moving
     local reach = def.reach + lead + (def.near and 0 or 1.5)
-    local ox, oy = self.a.x + tx * reach + nx * 14, self.a.y + ty * reach + ny * 14
+    local ox, oy = self.a.x + tx * reach + nx * 14 * k, self.a.y + ty * reach + ny * 14 * k
     -- Straight down onto the surface
-    local d = level:raycast(ox, oy, -nx, -ny, 34)
+    local d = level:raycast(ox, oy, -nx, -ny, 34 * k)
     if d then return ox - nx * d, oy - ny * d, true end
     -- Around a convex corner: back toward the body
     local s = reach >= 0 and -1 or 1
-    local cx, cy = self.a.x + tx * reach - nx * 6, self.a.y + ty * reach - ny * 6
-    d = level:raycast(cx, cy, tx * s, ty * s, abs(reach) + 6)
+    local cx, cy = self.a.x + tx * reach - nx * 6 * k, self.a.y + ty * reach - ny * 6 * k
+    d = level:raycast(cx, cy, tx * s, ty * s, abs(reach) + 6 * k)
     if d then return cx + tx * s * d, cy + ty * s * d, true end
     -- Into a concave corner: forward along the tangent
-    d = level:raycast(self.a.x + nx * 4, self.a.y + ny * 4, tx * -s, ty * -s, abs(reach) + 8)
-    if d and d < abs(reach) + 8 then
+    d = level:raycast(self.a.x + nx * 4, self.a.y + ny * 4, tx * -s, ty * -s, abs(reach) + 8 * k)
+    if d and d < abs(reach) + 8 * k then
         return self.a.x + nx * 4 - tx * s * d, self.a.y + ny * 4 - ty * s * d, true
+    end
+    -- Terrarium: across a gap, nothing is straight below: fan out from the
+    -- body on the foot's own side for anything a leg this long can reach
+    local len = (self.bones[1] + self.bones[2] + self.bones[3]) * 0.9
+    for _, a in ipairs(FAN) do
+        local c, sn = cos(a), sin(a) * -s
+        local dx, dy = -nx * c + tx * sn, -ny * c + ty * sn
+        d = level:raycast(self.a.x + nx * 4, self.a.y + ny * 4, dx, dy, len)
+        if d then return self.a.x + nx * 4 + dx * d, self.a.y + ny * 4 + dy * d, true end
     end
     return self.a.x + tx * reach, self.a.y + ty * reach, false
 end
 
+-- Terrarium: turning round, the back legs become the front ones. Each side's
+-- roles reverse so every foot stays where it stands, instead of the whole
+-- stance mirroring at once and every leg reaching back across the body.
+function Spider:turn_legs()
+    self.legs_facing = self.facing
+    local per = #self.legs / 2
+    for side = 0, 1 do
+        for k = 1, floor(per / 2) do
+            local a, b = self.legs[side * per + k], self.legs[side * per + per + 1 - k]
+            a.def, b.def = b.def, a.def
+        end
+    end
+end
+
 function Spider:plant_all()
+    self.legs_facing = self.facing -- Terrarium
     local level = self.world and self.world.level
     for _, leg in ipairs(self.legs) do
-        local fx, fy = self.a.x + leg.def.reach, self.a.y
-        if level then fx, fy = self:rest_spot(leg.def, level) end
+        local fx, fy, found = self.a.x + leg.def.reach, self.a.y, true
+        if level then fx, fy, found = self:rest_spot(leg.def, level) end
+        leg.grounded = found
         leg.foot.x, leg.foot.y = fx, fy
         leg.t, leg.stepping, leg.planted = 1, false, true
         local hx, hy = self:hip(leg.def)
         local _, _, nx, ny = self:frame()
         for _ = 1, 3 do
-            fabrik.solve(leg.chain, hx, hy, fx, fy, hx + nx * 18, hy + ny * 18)
+            fabrik.solve(leg.chain, hx, hy, fx, fy, hx + nx * 18 * self.scale, hy + ny * 18 * self.scale)
         end
     end
 end
@@ -195,8 +289,15 @@ function Spider:crawl_to(node, dt, speed_scale)
     if self.mode ~= 'attached' then return false end
     local dx, dy = node.x - self.a.x, node.y - self.a.y
     local d = sqrt(dx * dx + dy * dy)
-    local speed = self.profile.crawl_speed * (speed_scale or 1)
-    local step = min(d, speed * dt)
+    local speed = self.profile.crawl_speed * (speed_scale or 1) * self.gait -- Terrarium: held back by a straining leg
+    -- Terrarium: and careful round an edge, by how far it has yet to turn
+    local turn = 1 - (self.nx * node.nx + self.ny * node.ny)
+    speed = speed / (1 + 2.5 * max(0, turn))
+    -- Terrarium: and it gets going, rather than setting off at full speed
+    -- before its legs have
+    self.pace = self.pace + (speed - self.pace) * min(1, dt * 6)
+    self.crawled = true
+    local step = min(d, self.pace * dt)
     if d > 0.5 then
         self.a.x, self.a.y = self.a.x + dx / d * step, self.a.y + dy / d * step
         -- Face along the direction of travel relative to the current normal
@@ -280,7 +381,12 @@ function Spider:update(dt, level, ctx)
     if self.mode == 'attached' and not moving then
         self.next_tap = self.next_tap - dt
         if self.next_tap <= 0 and not self.tap then
-            self.tap = {leg = rng.look:random() < 0.5 and 1 or 5, t = 0}
+            -- Terrarium: the front leg of a side, whichever leg that is since it turned
+            local near, front, best = rng.look:random() < 0.5, nil, -math.huge
+            for i, leg in ipairs(self.legs) do
+                if leg.def.near == near and leg.def.reach > best then front, best = i, leg.def.reach end
+            end
+            self.tap = {leg = front, t = 0}
             self.next_tap = rng.range(rng.look, 4, 9)
         end
     end
@@ -290,9 +396,77 @@ function Spider:update(dt, level, ctx)
     end
 
     -- Legs
+    if self.facing ~= self.legs_facing then self:turn_legs() end
     local stepping = {false, false}
     for _, leg in ipairs(self.legs) do
         if leg.stepping then stepping[leg.def.group] = true end
+    end
+    -- Terrarium: a group steps as one. When any planted foot of a group has
+    -- fallen a stride behind where it would stand still, or its leg is near
+    -- full stretch, the whole group lifts together, but only while the other
+    -- group stands (the one further behind goes first). Each foot swings to
+    -- where it reaches ahead, so a stride is the lead plus the trigger, and a
+    -- step is quick enough for both groups to keep up at this speed. The
+    -- body is held back while a leg strains, and waits for one it can't
+    -- reach, so it never goes ahead of its legs.
+    local need, len = {0, 0}, self.bones[1] + self.bones[2] + self.bones[3]
+    local lead = self:lead()
+    local step_time = STEP_TIME * (moving and 1 or 1.6)
+    if moving then step_time = max(0.05, min(step_time, (lead + self.step_dist) / (2.4 * self.speed))) end
+    local ftx, fty = self:frame()
+    local strained, stuck = false, false
+    if self.mode ~= 'air' then
+        for _, leg in ipairs(self.legs) do
+            leg.rx, leg.ry, leg.found = self:rest_spot(leg.def, level, lead)
+            leg.lift, leg.urgent = false, false
+            if not leg.stepping then
+                local sx, sy = self:rest_spot(leg.def, level, 0)
+                local ddx, ddy = sx - leg.foot.x, sy - leg.foot.y
+                local behind = sqrt(ddx * ddx + ddy * ddy) / self.step_dist
+                local hx, hy = self:hip(leg.def)
+                local stretch = sqrt((leg.foot.x - hx) ^ 2 + (leg.foot.y - hy) ^ 2) / len
+                leg.urgent = stretch > 1
+                -- (and how far it will be one step from now, if it waits on
+                -- the other group: the hip goes on ahead)
+                local ahead = self.speed * step_time
+                hx, hy = hx + ftx * ahead, hy + fty * ahead
+                local soon = sqrt((leg.foot.x - hx) ^ 2 + (leg.foot.y - hy) ^ 2) / len
+                local g = leg.def.group
+                need[g] = max(need[g], behind, soon > 0.97 and 1.01 or 0)
+                if stretch > 0.97 then strained = true end
+            end
+        end
+        -- (when both groups are falling behind together, as they do from a
+        -- standing start or a turn, the further one goes early, half a
+        -- stride in, so the two settle half a cycle apart)
+        local go = need[1] >= need[2] and 1 or 2
+        local due = need[go] > 1 or min(need[1], need[2]) > 0.5
+        if not due or stepping[1] or stepping[2] then go = nil end
+        for _, leg in ipairs(self.legs) do
+            if leg.def.group == go and not leg.stepping then
+                local ddx, ddy = leg.rx - leg.foot.x, leg.ry - leg.foot.y
+                -- (a foot already where it wants to be stays put)
+                if ddx * ddx + ddy * ddy > (self.step_dist * 0.25) ^ 2 then leg.lift = true end
+            end
+        end
+        -- A foot the leg can no longer reach lifts out of turn, but never
+        -- leaves fewer than half the legs down: then the body waits for it.
+        local down = 0
+        for _, leg in ipairs(self.legs) do
+            if not leg.stepping and not leg.lift then down = down + 1 end
+        end
+        for _, leg in ipairs(self.legs) do
+            if leg.urgent and not leg.lift and not leg.stepping then
+                if down - 1 >= #self.legs / 2 then
+                    leg.lift, down = true, down - 1
+                else
+                    stuck = true
+                end
+            end
+        end
+        -- A planted leg at full stretch that has to wait its turn holds the
+        -- body back until the other group is down
+        strained = strained and not go
     end
     for i, leg in ipairs(self.legs) do
         local def = leg.def
@@ -310,11 +484,12 @@ function Spider:update(dt, level, ctx)
             leg.stepping, leg.planted = false, false
             fx, fy = leg.foot.x, leg.foot.y
         else
-            local rx, ry = self:rest_spot(def, level)
             if leg.stepping then
-                leg.t = min(1, leg.t + dt / (STEP_TIME * (moving and 1 or 1.6)))
+                -- (aiming at where it will land, not where it would have)
+                leg.to.x, leg.to.y, leg.grounded = leg.rx, leg.ry, leg.found
+                leg.t = min(1, leg.t + dt / step_time)
                 local e = leg.t * leg.t * (3 - 2 * leg.t)
-                local lift = sin(leg.t * pi) * 7
+                local lift = sin(leg.t * pi) * 7 * self.scale
                 fx = leg.from.x + (leg.to.x - leg.from.x) * e + fnx * lift
                 fy = leg.from.y + (leg.to.y - leg.from.y) * e + fny * lift
                 if leg.t >= 1 then
@@ -323,16 +498,11 @@ function Spider:update(dt, level, ctx)
                     ctx.events:emit('step', {x = leg.to.x, y = leg.to.y, who = self, near = def.near})
                 end
             else
-                local ddx, ddy = rx - leg.foot.x, ry - leg.foot.y
-                local dist2 = ddx * ddx + ddy * ddy
-                local other = def.group == 1 and 2 or 1
-                local need = dist2 > STEP_DIST * STEP_DIST
-                local urgent = dist2 > (STEP_DIST * 2.2) ^ 2
-                if (need and not stepping[other]) or urgent then
+                if leg.lift then
                     leg.stepping, leg.t = true, 0
                     leg.from.x, leg.from.y = leg.foot.x, leg.foot.y
-                    leg.to.x, leg.to.y = rx, ry
-                    stepping[def.group] = true
+                    leg.to.x, leg.to.y = leg.rx, leg.ry
+                    leg.grounded = leg.found -- Terrarium: whether the raycasts found ground there
                 end
                 fx, fy = leg.foot.x, leg.foot.y
             end
@@ -347,11 +517,23 @@ function Spider:update(dt, level, ctx)
         -- Knees up and out: pole above the hip, pushed along the reach
         local tx, ty = self:frame()
         local s = def.reach >= 0 and 1 or -1
-        local out = def.near and 18 or 13
-        local px, py = hx + fnx * 16 + tx * s * out, hy + fny * 16 + ty * s * out
+        local out = (def.near and 18 or 13) * self.scale
+        local px, py = hx + fnx * 16 * self.scale + tx * s * out, hy + fny * 16 * self.scale + ty * s * out
         fabrik.solve(leg.chain, hx, hy, fx, fy, px, py, 6, 0.4)
+        -- Terrarium: then close on the foot with the knee where the pole put
+        -- it (the pole's nudge on every pass leaves a stretched leg short)
+        fabrik.solve(leg.chain, hx, hy, fx, fy, nil, nil, 4)
     end
 
+    if stuck then
+        self.gait, self.pace = 0, 0
+    elseif strained then
+        self.gait = self.gait + (0.3 - self.gait) * min(1, dt * 30)
+    else
+        self.gait = min(1, self.gait + dt * 4)
+    end
+    if not self.crawled then self.pace = self.pace * max(0, 1 - dt * 10) end
+    self.crawled = false
     if self.mode == 'attached' and not moving then self:halt(dt) end
     self.speed = self.speed * 0.98
 

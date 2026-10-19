@@ -90,13 +90,14 @@ function World.new(level_data, opts)
         end
         self.creatures[i] = c
         -- Terrarium: a graph is built from the body's profile, so bodies that
-        -- share one (worms and spiders for now, blobs of a size) share a graph
+        -- share one (worms for now, blobs of a size, spiders of a reach) share a graph
         local graph = by_profile[c.profile]
         if not graph then
             graph = NavGraph.new(self.level, c.profile)
             by_profile[c.profile] = graph
-            log.info('nav', '%s graph%s: %d nodes, %d edges', r.key,
-                c.profile.size and string.format(' (size %.3f)', c.profile.size) or '', #graph.nodes, graph.edge_count)
+            local tag = (c.profile.size and string.format(' (size %.3f)', c.profile.size))
+                or (c.profile.reach and string.format(' (reach %.3f)', c.profile.reach)) or ''
+            log.info('nav', '%s graph%s: %d nodes, %d edges', r.key, tag, #graph.nodes, graph.edge_count)
         end
         self.graph_of[r.key] = self.graph_of[r.key] or graph
         self.graphs[i] = graph
