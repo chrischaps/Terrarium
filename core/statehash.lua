@@ -19,6 +19,8 @@ local SKIP = {
     snap = true, saved = true, -- World's render interpolation
     mesh = true,               -- a fern's draw buffer
     world = true,              -- a body's back-reference to the World walking it
+    skin = true, color_name = true, -- a body's colours (#15), read only by drawing
+    marks = true, local_marks = true, mark_frame = true, glow_mesh = true, -- what it drew, for its glow
 }
 
 local FNV_OFFSET = -2128831035 -- 2166136261 as a signed 32-bit int
