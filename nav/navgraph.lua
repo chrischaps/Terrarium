@@ -61,9 +61,10 @@ end
 -- milliseconds, which is a dropped frame when a clutch hatches at once. A
 -- builder does `slice` units of work per :step() and returns the graph when
 -- it's done: a pair of nodes weighed for a step or a join is 1, a jump solved
--- is JUMP_WORK, a node sorted by keep_home is NODE_WORK (a unit is about 60 ns
--- on the machine that measured them). The units are counted, never timed, so a build finishes on
--- the same sim step on every machine, and the graph is the one NavGraph.new makes.
+-- is JUMP_WORK, a node sorted by keep_home is NODE_WORK (a unit is about
+-- 60 ns on the machine that measured them). The units are counted, never
+-- timed, so a build finishes on the same sim step on every machine, and the
+-- graph is the one NavGraph.new makes.
 NavGraph.JUMP_WORK, NavGraph.NODE_WORK = 150, 80
 
 local Builder = {}
