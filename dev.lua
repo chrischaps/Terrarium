@@ -537,13 +537,17 @@ test('worm', function(j, results)
     local function humps(genome)
         local w, i, c = worm(genome)
         local soil, arch = w.level.by_id.soil, w.level.by_id.arch
-        c:reset(arch.x + 270, soil.y, -1) -- under the arch toward its foot
+        c:reset(arch.x + 150, soil.y, -1) -- under the arch toward its foot
         c.mover.solid = soil
         assert(w.controllers[i]:go_to(w.graphs[i]:snap_goal(arch.x + 55, soil.y - 4)), 'worm: no way along the soil')
-        local runs, samples = 0, 0
-        for s = 1, math.floor(4 / dt) do
+        -- (only its crawl counts, for up to 4s once it's under way: a worm
+        -- laid facing away from the foot would turn round first)
+        local runs, samples, under_way = 0, 0, 0
+        for _ = 1, math.floor(10 / dt) do
             w:step(dt)
-            if s > 60 and s % 12 == 0 and c.mover.state == 'ground' and math.abs(c.mover.vx) > 20 then
+            under_way = c.turning and 0 or under_way + 1
+            if under_way > math.floor(4 / dt) then break end
+            if under_way > 60 and under_way % 12 == 0 and c.mover.state == 'ground' and math.abs(c.mover.vx) > 20 then
                 local inside = false
                 for k = 2, #c.points - 1 do
                     local a, b = c.points[k], c.points[k + 1]
