@@ -102,8 +102,8 @@ function Lantern:drawGlass(light)
     if self.glow < 0.01 or not self.x then return end
     local s = strength(self, light)
     local sx, sy = Tank.level(self.x, self.y)
-    local x0, y0 = C.OX + C.GLASS_L, C.OY + C.GLASS_T
-    local x1, y1 = C.OX + C.GLASS_R, C.OY + C.GLASS_B - C.GLASS_THICK
+    local x0, y0 = Tank.wx(C.GLASS_L), Tank.wy(C.GLASS_T)
+    local x1, y1 = Tank.wx(C.GLASS_R), Tank.wy(C.GLASS_B - C.GLASS_THICK)
     local fx, fy = sx + 22, sy - 46     -- held a little above and to one side
     love.graphics.push("all")
     love.graphics.setScissor(x0, y0, x1 - x0, y1 - y0)

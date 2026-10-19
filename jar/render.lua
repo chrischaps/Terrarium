@@ -85,7 +85,7 @@ function Render.beginObjects(light)
     sh:send("ambient", light.ambient)
     sh:send("fog", light.fog)
     sh:send("lamp", light.lamp)
-    sh:send("pool", { C.OX + C.LAMP_X, C.LAMP_CONE.bottom })
+    sh:send("pool", { Tank.wx(C.LAMP_X), C.LAMP_CONE.bottom * C.S })
     objectHaze = -1
 end
 
@@ -99,10 +99,10 @@ function Render.useFloor(light)
     sh:send("hazeMax", light.haze * 0.8)
     sh:send("lamp", light.lamp)
     sh:send("view", { C.CX, C.CY, C.K_BACK })
-    sh:send("floorY", C.OY + C.SOIL_Y)
-    sh:send("floorRise", C.SOIL_RISE)
+    sh:send("floorY", Tank.wy(C.SOIL_Y))
+    sh:send("floorRise", C.SOIL_RISE * C.S)
     sh:send("planeD", C.PLANE_D)
-    sh:send("pool", { C.OX + C.LAMP_X, C.LAMP_CONE.bottom })
+    sh:send("pool", { Tank.wx(C.LAMP_X), C.LAMP_CONE.bottom * C.S })
 end
 
 --- Bind the object shader for something at depth d

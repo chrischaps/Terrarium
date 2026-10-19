@@ -14,11 +14,11 @@ local Glass = {}
 
 local film
 local L, R = C.GLASS_L - C.GLASS_THICK, C.GLASS_R + C.GLASS_THICK
-local T, B = C.GLASS_T - 12, C.GLASS_B   -- lid top, jar base (level y)
+local T, B = C.GLASS_T - C.LID_THICK, C.GLASS_B   -- lid top, jar base (level y)
 
 -- The front pane on screen (the front glass has k = 1, so screen = world)
 function Glass.frontRect()
-    return C.OX + L, C.OY + T, C.OX + R, C.OY + B
+    return Tank.wx(L), Tank.wy(T), Tank.wx(R), Tank.wy(B)
 end
 
 local function bakeFilm(gen)
@@ -28,7 +28,7 @@ local function bakeFilm(gen)
     love.graphics.setCanvas(film)
     love.graphics.clear(0, 0, 0, 0)
     -- Dust settles everywhere, a little more toward the bottom
-    for _ = 1, 900 do
+    for _ = 1, 1400 do
         local x = x0 + gen:random() * (x1 - x0)
         local y = y0 + gen:random() ^ 0.7 * (y1 - y0)
         love.graphics.setColor(0.85, 0.82, 0.75, 0.04 + gen:random() * 0.07)
@@ -36,7 +36,7 @@ local function bakeFilm(gen)
     end
     -- Rings left by old condensation, mostly high on the glass
     love.graphics.setLineWidth(0.8)
-    for _ = 1, 70 do
+    for _ = 1, 110 do
         local x = x0 + 12 + gen:random() * (x1 - x0 - 24)
         local y = y0 + 20 + gen:random() ^ 2.2 * (y1 - y0) * 0.6
         local r = 1.5 + gen:random() ^ 2 * 5
@@ -114,7 +114,7 @@ function Glass.drawBack(light)
     love.graphics.setBlendMode("add")
     local cx, cy = at((gl + gr) / 2, gt, 0.5)
     love.graphics.setColor(l[1] * 0.10, l[2] * 0.10, l[3] * 0.10, 1)
-    Render.drawBlob(cx, cy + 30, 360, 90)
+    Render.drawBlob(cx, cy + 30, 560, 90)
 
     -- Terrarium: and falls in a soft cone to the moss, brightest under the lid
     if light.lamp_i > 0.01 then
@@ -174,8 +174,8 @@ function Glass.drawFront(light, mouseX)
 
     -- The glass edges: thick glass seen edge-on goes green and bright
     local edge = { 0.62, 0.84, 0.78 }
-    local inL, inR = C.OX + C.GLASS_L, C.OX + C.GLASS_R
-    local lidB, baseT = C.OY + C.GLASS_T, C.OY + B - C.GLASS_THICK
+    local inL, inR = Tank.wx(C.GLASS_L), Tank.wx(C.GLASS_R)
+    local lidB, baseT = Tank.wy(C.GLASS_T), Tank.wy(B - C.GLASS_THICK)
     love.graphics.setBlendMode("alpha")
     tint(edge[1], edge[2], edge[3], 0.22)
     love.graphics.rectangle("fill", x0, lidB, inL - x0, baseT - lidB)

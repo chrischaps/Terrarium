@@ -142,6 +142,7 @@ local mossPhase = {}
 
 local function mossiness(x, d)
     -- Patches of sheet moss over bare soil, thickest where the lamp falls
+    x = x * C.S -- Terrarium: patches keep their size on screen
     local m = 0.5 + 0.28 * sin(x * 0.011 + mossPhase[1] + d * 4.0)
         + 0.22 * sin(x * 0.029 - d * 9.0 + mossPhase[2])
         + 0.18 * cos(x * 0.004 + mossPhase[3])
@@ -155,11 +156,11 @@ local function bakeBed()
     love.graphics.clear(0, 0, 0, 0)
 
     -- Base surface as a mesh over the soil top
-    local xs, ds = 48, 14
+    local xs, ds = 72, 14
     local x0, x1 = C.GLASS_L, C.GLASS_R
     local verts = {}
     local function vert(x, d)
-        local sx, sy = Tank.project(C.OX + x, Tank.floorY(x, d), d)
+        local sx, sy = Tank.project(Tank.wx(x), Tank.floorY(x, d), d)
         local m = mossiness(x, d)
         local n = 0.03 * sin(x * 0.013 + d * 7) + 0.02 * sin(x * 0.041 - d * 13)
         local r = Tank.lerp(0.26, 0.27, m) + n
@@ -181,13 +182,13 @@ local function bakeBed()
 
     -- Moss cushions and soil crumbs, back to front
     local bits = {}
-    for _ = 1, 4200 do
+    for _ = 1, 6500 do
         local d = random() ^ 0.8
         bits[#bits + 1] = { x = x0 + random() * (x1 - x0), d = d, r = 0.7 + random() ^ 3 * 2.6 }
     end
     table.sort(bits, function(a, b) return a.d < b.d end)
     for _, s in ipairs(bits) do
-        local sx, sy, k = Tank.project(C.OX + s.x, Tank.floorY(s.x, s.d), s.d)
+        local sx, sy, k = Tank.project(Tank.wx(s.x), Tank.floorY(s.x, s.d), s.d)
         local moss = random() < mossiness(s.x, s.d)
         local r, g, b = pick(moss and mossTones or soilTones)
         -- Seen at a grazing angle, cushions squash vertically
@@ -202,10 +203,12 @@ end
 -- Terrarium: in place of aquarium gravel, a terrarium's layers: drainage
 -- gravel at the bottom, a seam of charcoal, sphagnum, then loam up to the moss.
 local function bakeFront()
-    local base = C.OY + C.GLASS_B - C.GLASS_THICK
+    -- Terrarium: the face is drawn in world x, from L to R
+    local base = Tank.wy(C.GLASS_B - C.GLASS_THICK)
+    local L, R = math.floor(Tank.wx(C.GLASS_L)), math.ceil(Tank.wx(C.GLASS_R))
     local top, lowest = {}, 0
-    for x = 0, C.LEVEL_W do
-        top[x] = Tank.floorY(x, 1)
+    for x = L, R do
+        top[x] = Tank.floorY(Tank.lx(x), 1)
         lowest = math.max(lowest, top[x])
     end
 
@@ -224,16 +227,15 @@ local function bakeFront()
     love.graphics.push("all")
     love.graphics.setCanvas({ frontCanvas, stencil = true })
     love.graphics.clear(0, 0, 0, 0)
-    love.graphics.translate(C.OX, 0)
 
-    local poly = { C.GLASS_L, base }
-    for x = C.GLASS_L, C.GLASS_R, 8 do
+    local poly = { L, base }
+    for x = L, R, 8 do
         poly[#poly + 1] = x
         poly[#poly + 1] = top[x]
     end
-    poly[#poly + 1] = C.GLASS_R
-    poly[#poly + 1] = top[C.GLASS_R]
-    poly[#poly + 1] = C.GLASS_R
+    poly[#poly + 1] = R
+    poly[#poly + 1] = top[R]
+    poly[#poly + 1] = R
     poly[#poly + 1] = base
     local function shape()
         for _, t in ipairs(love.math.triangulate(poly)) do love.graphics.polygon("fill", t) end
@@ -246,8 +248,8 @@ local function bakeFront()
     shape()
     local function band(upper, lower, r, g, b)
         local pts = {}
-        for x = C.GLASS_L, C.GLASS_R, 6 do pts[#pts + 1] = x; pts[#pts + 1] = upper(x) end
-        for x = C.GLASS_R, C.GLASS_L, -6 do pts[#pts + 1] = x; pts[#pts + 1] = lower(x) end
+        for x = L, R, 6 do pts[#pts + 1] = x; pts[#pts + 1] = upper(x) end
+        for x = R, L, -6 do pts[#pts + 1] = x; pts[#pts + 1] = lower(x) end
         love.graphics.setColor(r, g, b, 1)
         for _, t in ipairs(love.math.triangulate(pts)) do love.graphics.polygon("fill", t) end
     end
@@ -257,38 +259,38 @@ local function bakeFront()
     band(gravelTop, floor, 0.24, 0.22, 0.20)
 
     -- Crumbs through the loam, perlite flecks, fibres in the sphagnum
-    for _ = 1, 2600 do
-        local x = C.GLASS_L + random() * (C.GLASS_R - C.GLASS_L)
+    for _ = 1, 4000 do
+        local x = L + random() * (R - L)
         local y = top[math.floor(x)] + random() * (sphagnumTop(x) - top[math.floor(x)])
         local r, g, b = pick(soilTones)
         love.graphics.setColor(r, g, b, 0.9)
         love.graphics.circle("fill", x, y, 0.6 + random() ^ 2 * 2.2)
     end
-    for _ = 1, 110 do
-        local x = C.GLASS_L + random() * (C.GLASS_R - C.GLASS_L)
+    for _ = 1, 170 do
+        local x = L + random() * (R - L)
         local y = top[math.floor(x)] + 6 + random() * (sphagnumTop(x) - top[math.floor(x)] - 8)
         love.graphics.setColor(0.86, 0.84, 0.78, 0.8)
         love.graphics.circle("fill", x, y, 0.8 + random() * 1.1)
     end
     love.graphics.setLineWidth(0.8)
-    for _ = 1, 260 do
-        local x = C.GLASS_L + random() * (C.GLASS_R - C.GLASS_L)
+    for _ = 1, 400 do
+        local x = L + random() * (R - L)
         local y = Tank.lerp(sphagnumTop(x), charcoalTop(x), random())
         local a = (random() - 0.5) * 0.9
         local l = 3 + random() * 7
         love.graphics.setColor(0.62, 0.52, 0.36, 0.5)
         love.graphics.line(x, y, x + cos(a) * l, y + sin(a) * l)
     end
-    for _ = 1, 500 do
-        local x = C.GLASS_L + random() * (C.GLASS_R - C.GLASS_L)
+    for _ = 1, 780 do
+        local x = L + random() * (R - L)
         local y = Tank.lerp(charcoalTop(x), gravelTop(x), random())
         local g = 0.05 + random() * 0.12
         love.graphics.setColor(g, g, g * 1.05, 1)
         love.graphics.rectangle("fill", x, y, 1 + random() * 3, 1 + random() * 2)
     end
     -- Drainage gravel, packed; deeper stones sit in shadow
-    for _ = 1, 1300 do
-        local x = C.GLASS_L + random() * (C.GLASS_R - C.GLASS_L)
+    for _ = 1, 2000 do
+        local x = L + random() * (R - L)
         local gt = gravelTop(x)
         local y = gt - 1 + random() ^ 0.9 * (base - gt + 6)
         local occl = 1 - (y - gt) / (base - gt + 1) * 0.5
@@ -299,8 +301,8 @@ local function bakeFront()
     end
 
     -- Roots: fine pale threads reaching down from the moss
-    for _ = 1, 26 do
-        local x = C.GLASS_L + 10 + random() * (C.GLASS_R - C.GLASS_L - 20)
+    for _ = 1, 40 do
+        local x = L + 10 + random() * (R - L - 20)
         local y = top[math.floor(x)] + 2
         local len = 12 + random() * 40
         local line = { x, y }
@@ -323,13 +325,13 @@ local function bakeFront()
         local t = i / steps
         local y = lowest + (deepest - lowest) * t
         love.graphics.setColor(0.03, 0.02, 0.02, t * t * 0.45)
-        love.graphics.rectangle("fill", C.GLASS_L, y, C.GLASS_R - C.GLASS_L, (deepest - lowest) / steps + 1)
+        love.graphics.rectangle("fill", L, y, R - L, (deepest - lowest) / steps + 1)
     end
     love.graphics.setStencilTest()
 
     -- The moss's edge where it meets the glass
-    for x = C.GLASS_L, C.GLASS_R, 2 do
-        local m = mossiness(x, 1)
+    for x = L, R, 2 do
+        local m = mossiness(Tank.lx(x), 1)
         if random() < 0.35 + m * 0.6 then
             local r, g, b = pick(mossTones)
             love.graphics.setColor(r, g, b, 1)
@@ -470,7 +472,7 @@ end
 -- fall out of focus; a few pebbles lie between the creatures and the glass.
 local function compose()
     stones = {}
-    local n = random(5, 7)
+    local n = random(8, 11)
     for i = 1, n do
         local x = Tank.lerp(C.GLASS_L + 40, C.GLASS_R - 40, (i - 0.5 + (random() - 0.5) * 0.7) / n)
         local d = 0.04 + random() ^ 1.4 * 0.5
@@ -479,10 +481,10 @@ local function compose()
     end
     for _ = 1, random(1, 2) do
         local left = random() < 0.5
-        local x = left and C.GLASS_L + 20 + random() * 70 or C.GLASS_R - 20 - random() * 70
+        local x = left and C.GLASS_L + 30 + random() * 120 or C.GLASS_R - 30 - random() * 120
         addStone(x, 0.78 + random() * 0.14, 22 + random() * 18, 10 + random() * 8)
     end
-    for _ = 1, random(16, 28) do
+    for _ = 1, random(26, 44) do
         local x = C.GLASS_L + 8 + random() * (C.GLASS_R - C.GLASS_L - 16)
         local r = 1.5 + random() ^ 2 * 4
         addStone(x, 0.76 + random() * 0.22, r * 2, r)
@@ -495,7 +497,7 @@ end
 --------------------------------------------------------------------------------
 function Scape.init(generator)
     gen = generator
-    DESK_Y = C.OY + C.GLASS_B
+    DESK_Y = Tank.wy(C.GLASS_B)
     mossPhase = { random() * 10, random() * 10, random() * 10 }
     bakeRoom()
     bakeBed()
@@ -535,25 +537,29 @@ function Scape.drawRoom(light)
     -- The jar's shadow on the desk: sharp under the lamp, faint by moonlight
     local sx, sy = Tank.project(C.CX, DESK_Y, 0.55)
     love.graphics.setColor(0, 0, 0, 0.18 + 0.37 * light.lamp_i)
-    Render.drawBlob(sx, sy + 6, (C.GLASS_R - C.GLASS_L) * 0.62, 46)
+    Render.drawBlob(sx, sy + 6, (C.GLASS_R - C.GLASS_L) * C.S * 0.62, 46)
 
     -- The lamp's pool of light, on the wall and on the desk around the jar
+    -- Terrarium: the lamp hangs on its cord to just above the lid
+    local hang = Tank.wy(C.GLASS_T - C.LID_THICK) - 150
     local l = light.lamp
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.10, l[2] * 0.10, l[3] * 0.10, 1)
-    Render.drawBlob(C.CX, 170, 620, 420)
+    Render.drawBlob(C.CX, hang + 170, 900, 420)
     love.graphics.setColor(l[1] * 0.22, l[2] * 0.20, l[3] * 0.18, 1)
-    Render.drawBlob(C.CX, sy + 20, 760, 150)
+    Render.drawBlob(C.CX, sy + 20, 1100, 150)
 
     -- The lamp itself, hung just above the jar: a dark shade, a lit rim
     love.graphics.setBlendMode("alpha")
     love.graphics.setColor(0.05 * rm[1], 0.045 * rm[2], 0.04 * rm[3], 1)
-    love.graphics.polygon("fill", C.CX - 38, -10, C.CX + 38, -10, C.CX + 92, 58, C.CX - 92, 58)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(C.CX, -10, C.CX, hang)
+    love.graphics.polygon("fill", C.CX - 38, hang - 10, C.CX + 38, hang - 10, C.CX + 92, hang + 58, C.CX - 92, hang + 58)
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.9, l[2] * 0.9, l[3] * 0.9, 1)
-    love.graphics.ellipse("fill", C.CX, 58, 88, 6)
+    love.graphics.ellipse("fill", C.CX, hang + 58, 88, 6)
     love.graphics.setColor(l[1] * 0.35, l[2] * 0.35, l[3] * 0.35, 1)
-    Render.drawBlob(C.CX, 64, 220, 46)
+    Render.drawBlob(C.CX, hang + 64, 220, 46)
     love.graphics.pop()
 end
 
@@ -575,7 +581,7 @@ end
 
 --- A stone or pebble, lit and hazed by its depth
 function Scape.drawStone(s)
-    local sx, sy, k = Tank.project(C.OX + s.x, s.y, s.d)
+    local sx, sy, k = Tank.project(Tank.wx(s.x), s.y, s.d)
     Render.useObject(s.d)
     if s.canvas then
         love.graphics.setColor(1, 1, 1, 1)
