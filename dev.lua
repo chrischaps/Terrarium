@@ -307,7 +307,7 @@ test('day', function(j, results)
         if s % 30 == 0 then
             for i, c in ipairs(w.creatures) do
                 local x, y = c:anchor()
-                if not lost[i] and (x ~= x or y ~= y or x < 0 or x > level.data.width or y < 0 or y > 440) then
+                if not lost[i] and (x ~= x or y ~= y or x < 0 or x > level.data.width or y < 0 or y > level.by_id.soil.y + 20) then
                     lost[i] = string.format('(%.0f,%.0f) at %.0fs', x, y, w.time)
                 end
                 -- Asleep means still: once resting, the anchor barely moves
@@ -525,7 +525,7 @@ test('worm', function(j, results)
         local stiff, stiff_held = droop(string.format('worm segments=%d stiffness=0.9', n))
         report[#report + 1] = string.format('%d segs: tail %.0f/%.0fpx below, held out %.0f/%.0fpx', n, stiff, loose,
             stiff_held, loose_held)
-        -- (a long worm's tail comes to rest on the cairn below, stiff or loose)
+        -- (a long worm's tail comes to rest on the tor below, stiff or loose)
         check(results, n > 12 or loose > stiff + 12, 'worm: %d segments, the loose tail hangs %.0fpx and the stiff one %.0fpx',
             n, loose, stiff)
         check(results, stiff_held > loose_held + 8, 'worm: %d segments, stiff held out %.0fpx, loose %.0fpx', n,
@@ -536,10 +536,10 @@ test('worm', function(j, results)
     -- counted every 1/10s while it crawls across the soil
     local function humps(genome)
         local w, i, c = worm(genome)
-        local soil = w.level.by_id.soil
-        c:reset(420, soil.y, -1) -- under the arch toward its foot
+        local soil, arch = w.level.by_id.soil, w.level.by_id.arch
+        c:reset(arch.x + 270, soil.y, -1) -- under the arch toward its foot
         c.mover.solid = soil
-        assert(w.controllers[i]:go_to(w.graphs[i]:snap_goal(205, soil.y - 4)), 'worm: no way along the soil')
+        assert(w.controllers[i]:go_to(w.graphs[i]:snap_goal(arch.x + 55, soil.y - 4)), 'worm: no way along the soil')
         local runs, samples = 0, 0
         for s = 1, math.floor(4 / dt) do
             w:step(dt)
@@ -582,14 +582,14 @@ test('blob', function(j, results)
 
     -- Every size gets to every mossy top from where it hatched, and back,
     -- and its graph is its own: a bigger blob has fewer places it fits
-    local report, jumps_at = {}, {}
+    local report, jumps_at, nodes_at = {}, {}, {}
     for k = 0, 8 do
         local size = 0.6 + k * 0.1
         local w, i = blob(string.format('blob size=%.1f', size))
         local g = w.graphs[i]
         local start = w.controllers[i]:start_node()
-        -- (Dew hatches on the soil between the arch and the stone, a pit for
-        -- a body that can't jump out of it)
+        -- (Dew hatches on the open soil between the cairn and the flat stone,
+        -- with a jump of 80 or more to every top)
         local x = w.creatures[i]:anchor()
         check(results, start and math.abs(start.x - x) < 30, 'blob: size %.1f hatched at x=%.0f, its nearest node is at %.0f',
             size, x, start and start.x or -1)
@@ -604,11 +604,14 @@ test('blob', function(j, results)
             if s.moss and not seen[s.id] then cut[#cut + 1] = s.id end
         end
         check(results, #cut == 0, 'blob: size %.1f cannot get to and from %s', size, table.concat(cut, ', '))
-        jumps_at[k] = jumps
+        jumps_at[k], nodes_at[k] = jumps, #g.nodes
     end
-    report[#report + 1] = string.format('jumps %d at size 0.6, %d at 1, %d at 1.4', jumps_at[0], jumps_at[4], jumps_at[8])
-    check(results, jumps_at[0] > jumps_at[4] and jumps_at[4] > jumps_at[8],
-        'blob: jumps by size %d, %d, %d (the graph should shrink as it grows)', jumps_at[0], jumps_at[4], jumps_at[8])
+    -- Terrarium: places it fits, not jumps. Across the wide jar's open soil a
+    -- longer reach links more of them, so jumps peak in the middle sizes.
+    report[#report + 1] = string.format('nodes %d/%d/%d and jumps %d/%d/%d at size 0.6/1/1.4', nodes_at[0], nodes_at[4],
+        nodes_at[8], jumps_at[0], jumps_at[4], jumps_at[8])
+    check(results, nodes_at[0] >= nodes_at[4] and nodes_at[4] > nodes_at[8],
+        'blob: nodes by size %d, %d, %d (the graph should shrink as it grows)', nodes_at[0], nodes_at[4], nodes_at[8])
 
     -- Height over width of the ring
     local function aspect(c)
