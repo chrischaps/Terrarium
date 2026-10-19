@@ -81,9 +81,8 @@ local function blend(a, b, t, out)
     return out
 end
 
---- Blend the light for an hour (0..24) into DayCycle.env
-function DayCycle.evaluate(hour)
-    hour = hour % 24
+-- The keyframes either side of an hour, and how far between them (eased)
+local function bracket(hour)
     local n = #keys
     local a, b, t = keys[n], keys[1], 0
     for i = 1, n do
@@ -98,6 +97,13 @@ function DayCycle.evaluate(hour)
         end
     end
     t = t * t * (3 - 2 * t)  -- smoothstep: palettes ease in and out of each key
+    return a, b, t
+end
+
+--- Blend the light for an hour (0..24) into DayCycle.env
+function DayCycle.evaluate(hour)
+    hour = hour % 24
+    local a, b, t = bracket(hour)
     local env = blend(a, b, t, DayCycle.env)
     env.name = (t < 0.5) and a.name or b.name
     env.hour = hour
@@ -105,6 +111,14 @@ function DayCycle.evaluate(hour)
     env.lamp = env.lamp or {}
     for i = 1, 3 do env.lamp[i] = env.bulb[i] * env.lamp_i end
     return env
+end
+
+--- Terrarium: how bright the lamp is at an hour (0 = off, 1 = full). Pure, so
+-- the simulation can read it (the moss grows by it) without touching the env
+-- the renderer blends into.
+function DayCycle.lampAt(hour)
+    local a, b, t = bracket(hour % 24)
+    return lerp(a.lamp_i, b.lamp_i, t)
 end
 
 --- The jar's hour after `seconds` of sim time, starting at `startHour`.

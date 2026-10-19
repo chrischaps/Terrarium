@@ -4,7 +4,7 @@
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
---                                         hatch, crowd, ranges, audio, or all;
+--                                         hatch, crowd, ranges, moss, audio, or all;
 --                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
@@ -344,6 +344,61 @@ test('day', function(j, results)
         log.info('selftest', 'day   %-6s %-6s wandered %2d, grazed %d, rested %3.0fs', c.name, c.key, m.wanders, m.grazes,
             still_for[i] or 0)
     end
+end)
+
+-- Terrarium: 3c. Moss (#20). Half an hour of a morning leaves the moss
+-- cropped bare where the residents grazed and worn short where they walked,
+-- with most of it still lush. Then, with nobody left to eat it, the lamp grows every patch back by the
+-- next afternoon, and the night between grows none. The regrowth takes
+-- one-second steps: growth is smooth enough not to need the fixed one.
+local MOSS_WATCH = 1800
+test('moss', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local DayCycle = require('jar.daycycle')
+    local Moss = require('jar.moss')
+    rng.seed(j.seed or 20261018)
+    local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.morning})
+    local m = w.moss
+    check(results, m.count > 300, 'moss: only %d cells over the mossy tops', m.count)
+    for _ = 1, math.floor(MOSS_WATCH / fixed_dt + 0.5) do w:step(fixed_dt) end
+
+    local bare, worn, cropped = 0, 0, {}
+    for i = 1, m.count do
+        local f = m.h[i] / m.cap[i]
+        -- Feet wear moss no lower than Moss.WORN; below that, something ate it
+        if m.h[i] < Moss.WORN then bare = bare + 1 elseif f < 0.8 then worn = worn + 1 end
+        if f < 0.8 then cropped[#cropped + 1] = i end
+    end
+    check(results, bare >= 20, 'moss: %.0f minutes of grazing left only %d cells bare', MOSS_WATCH / 60, bare)
+    check(results, worn >= 40, 'moss: %.0f minutes of walking wore only %d cells short', MOSS_WATCH / 60, worn)
+    local lush = m.count - bare - worn
+    check(results, lush >= m.count / 4, 'moss: %.0f minutes stripped the jar (%d of %d cells still lush)',
+        MOSS_WATCH / 60, lush, m.count)
+
+    local hour = w:hour()
+    local until_afternoon = ((24 + DayCycle.presets.afternoon - hour) % 24 + 24) * 3600
+    local dusk, dawn
+    for t = 1, until_afternoon do
+        local h = (hour + t / 3600) % 24
+        m:update(1, DayCycle.lampAt(h))
+        if not dusk and h >= 23 then dusk = {unpack(m.h)} end
+        if dusk and not dawn and h >= 5 and h < 5.5 then dawn = {unpack(m.h)} end
+    end
+    local grew_at_night = 0
+    for i = 1, m.count do
+        if dusk and dawn and dawn[i] ~= dusk[i] then grew_at_night = grew_at_night + 1 end
+    end
+    check(results, dusk and dawn and grew_at_night == 0, 'moss: %d cells grew in the dark', grew_at_night)
+    local back, worst = 0, 1
+    for _, i in ipairs(cropped) do
+        local f = m.h[i] / m.cap[i]
+        worst = math.min(worst, f)
+        if f >= 0.9 then back = back + 1 end
+    end
+    check(results, back == #cropped, 'moss: by the next afternoon only %d of %d cropped cells grew back (lowest %.2f)',
+        back, #cropped, worst)
+    log.info('selftest', 'moss         %d cells: %d bare and %d worn after %.0f min; %d of %d back by the next afternoon',
+        m.count, bare, worn, MOSS_WATCH / 60, back, #cropped)
 end)
 
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened

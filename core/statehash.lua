@@ -105,6 +105,7 @@ function statehash.of(world, flora)
     for i, c in ipairs(world.creatures) do
         part(c.name and (c.key .. ' ' .. c.name) or c.key or ('creature' .. i), c)
     end
+    part('moss', world.moss)
     part('graphs', world.graphs)
     part('controllers', world.controllers)
     part('minds', world.minds)

@@ -6,13 +6,15 @@
 -- jar's hour. In dev a selected one follows clicks instead. Each body gets
 -- the nav graph of its nav profile (its size bucket's); bodies with the same
 -- one share it. Eggs laid in the jar hatch once their graph is built, a slice
--- per step. Visual systems (flora, ambience, particles) step here too so that
--- what you see is always in sync with the physics.
+-- per step. The moss grid (jar/moss.lua) grows under the lamp and is grazed
+-- and trodden here. Visual systems (flora, ambience, particles) step here too
+-- so that what you see is always in sync with the physics.
 
 local Level = require('jar.level')
 local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
 local Mind = require('mind')
+local Moss = require('jar.moss')
 local DayCycle = require('jar.daycycle')
 local Genome = require('genome')
 local rng = require('core.rng')
@@ -47,6 +49,7 @@ function World.new(level_data, opts)
     opts = opts or {}
     local self = setmetatable({}, World)
     self.level = Level.new(level_data)
+    self.moss = Moss.new(self.level) -- Terrarium: over every mossy top (#20)
     self.events = Bus.new()
     self.time = 0
     -- Terrarium: the hour the jar opened at and how long its day is (inputs, like the seed)
@@ -279,7 +282,7 @@ function World:step(dt)
 
         -- Terrarium: everyone but a dev-selected creature lives by its mind
         if self.wander and i ~= self.selected then
-            mind:update(dt, hour, c, ctrl, self.graphs[i])
+            mind:update(dt, hour, c, ctrl, self.graphs[i], self.moss)
         end
 
         ctrl:update(dt)
@@ -289,6 +292,11 @@ function World:step(dt)
             look_at = look and {x = look.x, y = look.y - 10} or mind:look(c),
             light_dir = self.light_dir,
         })
+        -- Terrarium: feet on the way somewhere wear the moss they cross
+        if ctrl:has_path() then
+            local x, y = c:anchor()
+            self.moss:tread(x, y, dt)
+        end
         if ctrl.arrived then
             ctrl.arrived = false
             local ax, ay = c:anchor()
@@ -296,6 +304,7 @@ function World:step(dt)
         end
     end
 
+    self.moss:update(dt, DayCycle.lampAt(hour))
     if self.flora then self.flora:update(dt, self:influencers(), self.time) end
     if self.ambience then self.ambience:update(dt, self) end
     if self.fx then self.fx:update(dt) end

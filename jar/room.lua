@@ -7,7 +7,7 @@
 -- where Level:top_spans expects them.
 --
 -- Tags on a solid:
---   moss      its exposed top is a moss surface (the moss grid covers it in M3)
+--   moss      its exposed top is a moss surface, covered by the moss grid (jar/moss.lua)
 --   material  how jar/scenery.lua draws it: cork, twig, stone, slate
 --   part_of   drawn as one piece with that solid
 --
