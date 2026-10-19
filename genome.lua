@@ -32,10 +32,15 @@ local function plan(label, own)
     local genes = {}
     for _, g in ipairs(own) do genes[#genes + 1] = g end
     for _, g in ipairs(SHARED) do genes[#genes + 1] = g end
-    return {label = label, genes = genes}
+    return {label = label, genes = genes, own = own} -- (own: the genes that make its body)
 end
 
 --------------------------------------------------------------------------------
+-- The body genes' ranges are the ones the `ranges` self-test proves (#17): 200
+-- random genomes per plan all tour the moss and the shelf whole. Worms knot
+-- for good past about 27 segments, and spiders lose their footing below a
+-- reach of about 0.6, so those ends have some room; blob sizes are held by
+-- their nav buckets, which a wider range would make too coarse to jump with.
 Genome.worm = plan('worm', {
     {name = 'segments', int = {10, 24}},     -- length, and how many bunches crawl
     {name = 'stiffness', real = {0.2, 0.9}}, -- a stiff worm bridges, a loose one drapes

@@ -220,13 +220,20 @@ function Spider:rest_spot(def, level, lead)
     lead = lead or self:lead()                           -- reach ahead when moving
     local reach = def.reach + lead + (def.near and 0 or 1.5)
     local ox, oy = self.a.x + tx * reach + nx * 14 * k, self.a.y + ty * reach + ny * 14 * k
+    -- Terrarium: a ray cast from inside a stone passes through it, and the
+    -- buried soil under a log is no foothold, so a probe that starts inside
+    -- the scenery finds nothing (#17)
+    local function cast(x, y, dx, dy, len)
+        if level:solid_at(x, y) then return nil end
+        return level:raycast(x, y, dx, dy, len)
+    end
     -- Straight down onto the surface
-    local d = level:raycast(ox, oy, -nx, -ny, 34 * k)
+    local d = cast(ox, oy, -nx, -ny, 34 * k)
     if d then return ox - nx * d, oy - ny * d, true end
     -- Around a convex corner: back toward the body
     local s = reach >= 0 and -1 or 1
     local cx, cy = self.a.x + tx * reach - nx * 6 * k, self.a.y + ty * reach - ny * 6 * k
-    d = level:raycast(cx, cy, tx * s, ty * s, abs(reach) + 6 * k)
+    d = cast(cx, cy, tx * s, ty * s, abs(reach) + 6 * k)
     if d then return cx + tx * s * d, cy + ty * s * d, true end
     -- Into a concave corner: forward along the tangent
     d = level:raycast(self.a.x + nx * 4, self.a.y + ny * 4, tx * -s, ty * -s, abs(reach) + 8 * k)
@@ -356,6 +363,34 @@ end
 --------------------------------------------------------------------------------
 -- Simulation
 --------------------------------------------------------------------------------
+
+-- Terrarium: a point inside the scenery, moved to the nearest clear spot
+-- within 24px: rings of 16 directions, 1px apart. Faces alone won't do, since
+-- a stone's foot is buried in the soil and the seam between them is inside
+-- both (#17). Returns the point and whether it moved.
+local AROUND = {}
+for k = 0, 15 do AROUND[k + 1] = {cos(k * pi / 8), sin(k * pi / 8)} end
+local function outside(level, x, y)
+    if not level:solid_at(x, y) then return x, y, false end
+    for r = 1, 24 do
+        for _, d in ipairs(AROUND) do
+            local qx, qy = x + d[1] * r, y + d[2] * r
+            if not level:solid_at(qx, qy) then return qx, qy, true end
+        end
+    end
+    return x, y, false
+end
+
+-- A leg's knee and ankle out of the scenery. True if either was inside.
+local function clear_joints(j, level)
+    local moved = false
+    for i = 2, #j - 1 do
+        local m
+        j[i].x, j[i].y, m = outside(level, j[i].x, j[i].y)
+        moved = moved or m
+    end
+    return moved
+end
 
 function Spider:update(dt, level, ctx)
     self.clock = self.clock + dt
@@ -498,7 +533,7 @@ function Spider:update(dt, level, ctx)
             leg.foot.x = leg.foot.x + (fx - leg.foot.x) * min(1, dt * 14)
             leg.foot.y = leg.foot.y + (fy - leg.foot.y) * min(1, dt * 14)
             leg.stepping, leg.planted = false, false
-            fx, fy = leg.foot.x, leg.foot.y
+            fx, fy = outside(level, leg.foot.x, leg.foot.y) -- Terrarium: tucked, not through a lip (#17)
         else
             if leg.stepping then
                 -- (aiming at where it will land, not where it would have)
@@ -508,6 +543,9 @@ function Spider:update(dt, level, ctx)
                 local lift = sin(leg.t * pi) * 7 * self.scale
                 fx = leg.from.x + (leg.to.x - leg.from.x) * e + fnx * lift
                 fy = leg.from.y + (leg.to.y - leg.from.y) * e + fny * lift
+                -- Terrarium: a step round a corner cuts across it; the foot
+                -- goes round the stone instead (#17)
+                fx, fy = outside(level, fx, fy)
                 if leg.t >= 1 then
                     leg.stepping = false
                     leg.foot.x, leg.foot.y = leg.to.x, leg.to.y
@@ -539,6 +577,14 @@ function Spider:update(dt, level, ctx)
         -- Terrarium: then close on the foot with the knee where the pole put
         -- it (the pole's nudge on every pass leaves a stretched leg short)
         fabrik.solve(leg.chain, hx, hy, fx, fy, nil, nil, 4)
+        -- Terrarium: a knee or ankle the pole bent into the scenery (at the
+        -- foot of a wall, the knee goes up and on into it) comes back out to the
+        -- nearest clear spot, and the leg closes on the foot again from there
+        -- (#17). Pushed rather than flipped, so the knee never pops.
+        if clear_joints(leg.chain.joints, level) then
+            fabrik.solve(leg.chain, hx, hy, fx, fy, nil, nil, 4)
+            clear_joints(leg.chain.joints, level)
+        end
     end
 
     if stuck then
