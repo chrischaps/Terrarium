@@ -11,7 +11,7 @@
 --         the same state hash)
 --   int   lo..hi, whole numbers
 --   pick  one of an ordered list of values; the order is what "a neighbouring
---         value" means when a gene mutates (#11)
+--         value" means when a gene mutates (see Genome.child)
 --
 -- The plan is fixed for life and never crosses: worms breed with worms.
 
@@ -159,6 +159,79 @@ function Genome.parse(s)
         if name ~= 'plan' then out[name] = v end
     end
     return Genome.clamp(out)
+end
+
+--------------------------------------------------------------------------------
+-- Inheritance (#11). Each gene comes from one parent or the other, then takes
+-- one small step: the Soba Mutate idea, a nudge along the gene's travel that
+-- folds back at the ends instead of clamping, so values never pile up there.
+-- One gene in twenty takes a bigger step.
+--
+-- Steps are triangular (the difference of two uniform draws), so small nudges
+-- are common and the largest are rare. Reals step by a fraction of their range.
+-- Ints and picks step in cells, and fold at the cells' outer edges, so a value
+-- at the end of its range that steps outward lands back on itself. That keeps
+-- an even spread even. A pick only ever reaches a neighbouring value (legs 4↔6↔8).
+
+local STEP, BIG = 0.04, 0.25          -- reals: widest step, as a fraction of the range
+local CELL_STEP, CELL_BIG = 0.6, 1.4  -- ints and picks: widest step, in cells (under 1.5, so picks move one at most)
+local BIG_CHANCE = 1 / 20
+
+Genome.STEP, Genome.BIG, Genome.BIG_CHANCE = STEP, BIG, BIG_CHANCE
+
+-- x folded back into [a, b], like a ball between two walls
+local function fold(x, a, b)
+    local span = b - a
+    local t = (x - a) % (2 * span)
+    if t > span then t = 2 * span - t end
+    return a + t
+end
+
+local function index_of(list, v)
+    for i, p in ipairs(list) do if p == v then return i end end
+    return 1
+end
+
+-- One gene's value after one step. Always draws three numbers from `gen`, so
+-- the stream stays in step whatever kind of gene this is.
+local function step(g, v, gen)
+    local big = gen:random() < BIG_CHANCE
+    local tri = gen:random() - gen:random()
+    if g.real then
+        local lo, hi = g.real[1], g.real[2]
+        return hold(g, fold(v + tri * (big and BIG or STEP) * (hi - lo), lo, hi))
+    end
+    local d = tri * (big and CELL_BIG or CELL_STEP)
+    if g.int then
+        local lo, hi = g.int[1], g.int[2]
+        return math.min(hi, floor(fold(v + d, lo - 0.5, hi + 0.5) + 0.5))
+    end
+    local n = #g.pick
+    local i = math.min(n, floor(fold(index_of(g.pick, v) + d, 0.5, n + 0.5) + 0.5))
+    return g.pick[i]
+end
+
+-- A copy of `genome` with every gene stepped once
+function Genome.mutate(genome, gen)
+    local p = plan_of(genome.plan)
+    local out = {plan = genome.plan}
+    for _, g in ipairs(p.genes) do out[g.name] = step(g, hold(g, genome[g.name]), gen) end
+    return out
+end
+
+-- A child of `a` and `b`, drawn from `gen` (rng.sim in the jar). Both parents
+-- must share a plan.
+function Genome.child(a, b, gen)
+    local p = plan_of(a.plan)
+    if b.plan ~= a.plan then
+        error(string.format('genome: a %s cannot breed with a %s', tostring(a.plan), tostring(b.plan)), 2)
+    end
+    local out = {plan = a.plan}
+    for _, g in ipairs(p.genes) do
+        local from = gen:random() < 0.5 and a or b
+        out[g.name] = step(g, hold(g, from[g.name]), gen)
+    end
+    return out
 end
 
 -- True when every gene the plan has is present and in range. A pick gene is
