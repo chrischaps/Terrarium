@@ -6,7 +6,7 @@
 -- coordinates.
 --
 -- The body never lies: every silhouette fills its solids and stays inside
--- them, except a little moss on top and a fringe at the edges, so a foot
+-- them, except a few strands of moss and a fringe at the edges, so a foot
 -- lands on what you see.
 
 local Render = require("jar.render")
@@ -121,22 +121,9 @@ local function shade(x, y, w, h, topLight, underDark)
     love.graphics.rectangle("fill", x, y, w, min(3, h * 0.2))
 end
 
--- A cushion of moss along a top edge, a little proud of it, with a few strands
--- spilling over the front at the ends
+-- A few strands of moss spilling over the front of a top at its ends. The moss
+-- on the top itself is alive (jar/moss.lua), so it isn't baked in.
 local function mossTop(x, y, w, ends)
-    for _ = 1, floor(w * 1.6) do
-        local px = x + 2 + random() * (w - 4)
-        local c = mossTones[random(#mossTones)]
-        local k = (random() - 0.5) * 0.08
-        love.graphics.setColor(c[1] + k, c[2] + k, c[3] + k * 0.6, 0.95)
-        love.graphics.circle("fill", px, y + 0.6 + random() * 2.4, 0.9 + random() * 1.5)
-    end
-    for _ = 1, floor(w / 5) do
-        local px = x + 2 + random() * (w - 4)
-        local c = mossTones[4]
-        love.graphics.setColor(c[1] * 1.15, c[2] * 1.12, c[3], 0.7)
-        love.graphics.circle("fill", px, y + 0.2, 0.6 + random() * 0.8)
-    end
     -- Strands over the ends, short enough not to be mistaken for anything to hold
     for _, ex in ipairs(ends or {}) do
         for _ = 1, random(2, 4) do
@@ -354,12 +341,6 @@ function paint.twig(piece)
     love.graphics.setColor(t.base[1] * 0.9, t.base[2] * 0.9, t.base[3] * 0.9, 1)
     love.graphics.setLineWidth(1.6)
     love.graphics.line(bx, r.y + r.h - 1, bx + 5, r.y + r.h + 4)
-    -- Sparse moss: a twig is new to the jar
-    for _ = 1, floor(r.w / 6) do
-        local c = mossTones[random(#mossTones)]
-        love.graphics.setColor(c[1], c[2], c[3], 0.9)
-        love.graphics.circle("fill", r.x + 3 + random() * (r.w - 6), r.y + 0.8, 0.7 + random() * 1.0)
-    end
 end
 
 --------------------------------------------------------------------------------

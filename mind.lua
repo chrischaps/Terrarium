@@ -6,6 +6,8 @@
 -- it finds somewhere to rest and stays there until morning. Walkers rest on
 -- moss and spiders hang under the arch or the shelf. Each mind keeps its own
 -- hours, a little after the lamp's, so the jar doesn't all fall asleep at once.
+-- Grazing eats from the moss grid (jar/moss.lua): a creature walks to lush
+-- moss, eats until it's full or gives up, and goes away hungry from bare.
 -- #21 grows this into needs and temperament.
 --
 -- A mind only picks goals. The controller walks the path and the body moves,
@@ -17,8 +19,10 @@ local DayCycle = require('jar.daycycle')
 local Mind = {}
 Mind.__index = Mind
 
-local HUNGRY_AFTER = 80 -- seconds awake before moss starts to call
+local HUNGRY_AFTER = 150 -- seconds awake before moss starts to call
 local GRAZE = {6, 12}   -- seconds spent at the moss
+local FILL = 1.0        -- hunger a cell's worth of lush moss takes away
+local LUSH = 0.4        -- moss this high is worth walking to
 local PAUSE = {5, 14}   -- seconds idle between wanders
 local LATE = 0.75       -- up to this many hours after the lamp to sleep and wake
 
@@ -53,12 +57,18 @@ local function rest_spots(graph, climbs)
     return pool
 end
 
-local function moss_spots(graph)
-    local pool = {}
+-- Moss to graze, the lush first: a creature walks past what's been cropped
+-- (any moss will do if there's none)
+local function moss_spots(graph, moss)
+    local pool, lush = {}, {}
     for _, n in ipairs(graph.nodes) do
-        if n.kind == 'top' and n.solid.moss then pool[#pool + 1] = n end
+        if n.kind == 'top' and n.solid.moss then
+            pool[#pool + 1] = n
+            local h = moss and moss:height_at(n.x, n.y)
+            if h and h >= LUSH then lush[#lush + 1] = n end
+        end
     end
-    return pool
+    return #lush > 0 and lush or pool
 end
 
 local function pick(pool)
@@ -69,8 +79,9 @@ function Mind:set(doing, timer)
     self.doing, self.timer = doing, timer or 0
 end
 
--- One fixed step. `c` is the body, `ctrl` its controller and `graph` its nav graph
-function Mind:update(dt, hour, c, ctrl, graph)
+-- One fixed step. `c` is the body, `ctrl` its controller, `graph` its nav
+-- graph and `moss` the jar's moss grid (jar/moss.lua), which it eats from
+function Mind:update(dt, hour, c, ctrl, graph, moss)
     local doing = self.doing
     local arrived = not ctrl:has_path()
 
@@ -100,13 +111,17 @@ function Mind:update(dt, hour, c, ctrl, graph)
             self.grazes = self.grazes + 1
         end
     elseif doing == 'graze' then
-        self.hunger = math.max(0, self.hunger - 2 * dt / GRAZE[1])
+        -- It's fed by what it crops, so bare moss leaves it hungry
+        local x, y = c:anchor()
+        local eaten = moss and moss:graze(x, y, dt)
+        self.hunger = math.max(0, self.hunger - (eaten and eaten * FILL or 2 * dt / GRAZE[1]))
         self.timer = self.timer - dt
-        if self.timer <= 0 then self:set('idle', rng.range(rng.sim, 2, 5)) end
+        -- It stops when it's full, or when it gives up on what's left
+        if self.timer <= 0 or self.hunger == 0 then self:set('idle', rng.range(rng.sim, 2, 5)) end
     elseif doing == 'idle' then
         self.timer = self.timer - dt
         if self.timer <= 0 then
-            if self.hunger >= 1 and ctrl:go_to(pick(moss_spots(graph))) then
+            if self.hunger >= 1 and ctrl:go_to(pick(moss_spots(graph, moss))) then
                 self:set('to_graze')
             else
                 local kinds = c.profile.climbs and nil or {top = true}
