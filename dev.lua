@@ -386,6 +386,97 @@ test('genome', function(_, results)
         check(results, Genome.parse(junk) == nil, 'genome: read %q as a genome', tostring(junk))
     end
     log.info('selftest', 'genome       2000 per plan in range and round-trip exactly')
+
+    -- Inheritance (#11). The same seed gives the same family, line after line.
+    local function line(seed, key)
+        local g = love.math.newRandomGenerator(seed)
+        local a, b, out = Genome.random(key, g), Genome.random(key, g), {}
+        for n = 1, 200 do
+            a, b = b, Genome.child(a, b, g)
+            out[n] = Genome.serialise(b)
+        end
+        return table.concat(out, '\n')
+    end
+    for _, key in ipairs(Genome.order) do
+        check(results, line(1111, key) == line(1111, key), 'genome: seed 1111 bred two different %s lines', key)
+        check(results, line(1111, key) ~= line(1112, key), 'genome: seeds 1111 and 1112 bred the same %s line', key)
+    end
+    check(results, not pcall(Genome.child, Genome.random('worm', gen), Genome.random('blob', gen), gen),
+        'genome: a worm bred with a blob')
+
+    -- Each gene comes from one parent or the other, about half and half.
+    -- Parents sit at opposite ends of every range, and no step reaches halfway.
+    for _, key in ipairs(Genome.order) do
+        local a, b = {plan = key}, {plan = key}
+        for _, g in ipairs(Genome[key].genes) do
+            local r = g.real or g.int or {g.pick[1], g.pick[#g.pick]}
+            a[g.name], b[g.name] = r[1], r[2]
+        end
+        local from_a, total, bad = 0, 0, 0
+        for _ = 1, 2000 do
+            local c = Genome.child(a, b, gen)
+            if not Genome.valid(c) then bad = bad + 1 end
+            for _, g in ipairs(Genome[key].genes) do
+                if math.abs(c[g.name] - a[g.name]) < math.abs(c[g.name] - b[g.name]) then from_a = from_a + 1 end
+                total = total + 1
+            end
+        end
+        check(results, bad == 0, 'genome: %d %s children out of range', bad, key)
+        check(results, math.abs(from_a / total - 0.5) < 0.03, 'genome: %s children took %.0f%% from one parent', key,
+            100 * from_a / total)
+    end
+
+    -- 10k mutations of every gene, each from an even spread across its range.
+    -- Folding keeps the spread even: the end cells of a histogram hold their
+    -- share, and a real lands exactly on an end value no more often than on any
+    -- other thousandth (a clamp would put about ten times that there). Picks move
+    -- one value at most, and about 1 real step in 20 is a big one.
+    local N, big, reals = 10000, 0, 0
+    local function small_reach(g) return Genome.STEP * (g.real[2] - g.real[1]) + 0.001 end
+    for _, key in ipairs(Genome.order) do
+        for _, g in ipairs(Genome[key].genes) do
+            local cells, count, far, ends = 20, {}, 0, 0
+            if g.int then cells = g.int[2] - g.int[1] + 1 elseif g.pick then cells = #g.pick end
+            for c = 1, cells do count[c] = 0 end
+            for _ = 1, N do
+                local start = Genome.random(key, gen)
+                local v0 = start[g.name]
+                local v = Genome.mutate(start, gen)[g.name]
+                local c
+                if g.real then
+                    local lo, hi = g.real[1], g.real[2]
+                    c = math.min(cells, math.floor((v - lo) / (hi - lo) * cells) + 1)
+                    if v == lo or v == hi then ends = ends + 1 end
+                    if math.abs(v - v0) > small_reach(g) then big = big + 1 end
+                    reals = reals + 1
+                elseif g.int then
+                    c = v - g.int[1] + 1
+                else
+                    for i, p in ipairs(g.pick) do
+                        if p == v then c = i end
+                        if p == v0 and (g.pick[i - 1] ~= v and g.pick[i] ~= v and g.pick[i + 1] ~= v) then far = far + 1 end
+                    end
+                end
+                count[c] = count[c] + 1
+            end
+            local share = N / cells
+            for _, c in ipairs({1, cells}) do
+                check(results, math.abs(count[c] / share - 1) < 0.2, 'genome: %s %s end cell %d holds %d, its share is %.0f',
+                    key, g.name, c, count[c], share)
+            end
+            if g.real then
+                -- both end values together cover one thousandth of the range
+                local thousandth = N * 0.001 / (g.real[2] - g.real[1])
+                check(results, ends < 3 * thousandth, 'genome: %s %s piled %d onto its ends, a thousandth holds %.0f',
+                    key, g.name, ends, thousandth)
+            end
+            check(results, far == 0, 'genome: %s %s jumped past a neighbour %d times', key, g.name, far)
+        end
+    end
+    local want = Genome.BIG_CHANCE * ((Genome.BIG - Genome.STEP) / Genome.BIG) ^ 2
+    check(results, math.abs(big / reals / want - 1) < 0.25, 'genome: %.1f%% of real steps were big, wanted about %.1f%%',
+        100 * big / reals, 100 * want)
+    log.info('selftest', 'genome       children breed true from a seed; 10k mutations per gene, no pile-up at the ends')
 end)
 
 -- 4. Audio: every event path runs without error (not a listening test)
