@@ -6,6 +6,7 @@
 --   jump_vx/jump_vy - what ballistics.solve_jump may ask of it
 --   step            - largest ledge it can walk up or down without jumping
 --   climbs          - spiders get nodes on walls and ceilings too
+--   span            - (climbers) the widest gap between solids its legs step across (Terrarium)
 --
 -- Edge types:
 --   walk  - along a surface (or a small step between surfaces)
@@ -290,11 +291,21 @@ function NavGraph:build_surface_nodes()
 
     -- Concave joins between different solids (wall meets floor, etc.)
     local level_ref = self.level
+    -- Terrarium: across a gap between the solids no wider than its legs
+    -- step (40 at Character's reach). Solids that touch always join, however
+    -- far their nearest nodes sit from the corner.
+    local span = self.profile.span or 40
+    local near = math.max(40, span)
+    local function gap(s, t)
+        local gx = math.max(0, s.x - (t.x + t.w), t.x - (s.x + s.w))
+        local gy = math.max(0, s.y - (t.y + t.h), t.y - (s.y + s.h))
+        return sqrt(gx * gx + gy * gy)
+    end
     for _, a in ipairs(self.nodes) do
         for _, b in ipairs(self.nodes) do
-            if a.solid ~= b.solid and abs(a.x - b.x) < 40 and abs(a.y - b.y) < 40 then
+            if a.solid ~= b.solid and abs(a.x - b.x) < near and abs(a.y - b.y) < near and gap(a.solid, b.solid) < span then
                 local d = dist(a, b)
-                if d < 40 then
+                if d < near then
                     local ax, ay = a.x + a.nx * 6, a.y + a.ny * 6
                     local bx, by = b.x + b.nx * 6, b.y + b.ny * 6
                     local clear = true
