@@ -36,6 +36,7 @@ local Scenery = require('jar.scenery')
 local Condensation = require('jar.condensation')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
+local Genome = require('genome')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history
@@ -46,6 +47,7 @@ local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
 local lantern = Lantern.new() -- you watch with it; the World never knows it's there
+local bench -- --bench: frame, update and draw times, once the eggs have hatched
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -77,6 +79,12 @@ local function openJar(seed, hour, day)
     Motes.init(rng.look, 120)
     Scenery.init(rng.scape, w.level)
     Condensation.init(rng.scape) -- last, so the jar's composition doesn't shift
+    -- --crowd <n>: eggs of random genomes where the residents live, until the jar
+    -- holds n (they hatch once their graphs are built)
+    for k = #w.creatures + 1, args.crowd or 0 do
+        local r = room.residents[(k - 1) % #room.residents + 1]
+        w:lay(Genome.random(r.key, rng.sim), r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
+    end
     return w
 end
 
@@ -116,6 +124,10 @@ function love.load()
         for _ = 1, math.floor((args.snap.seconds or 1) / STEP) do step() end
         snapFrames = 0
     end
+    if args.bench then
+        love.window.setVSync(0)
+        bench = { warm = 3, times = {}, update = {}, draw = {} }
+    end
     if args.follow then
         for i, c in ipairs(world.creatures) do
             if c.key == args.follow then lantern.who = i end
@@ -124,8 +136,36 @@ function love.load()
     end
 end
 
+-- --bench: the median, 95th percentile and worst of each, in ms
+local function report(b)
+    local out = {}
+    for _, k in ipairs({ 'times', 'update', 'draw' }) do
+        local t = b[k]
+        table.sort(t)
+        out[#out + 1] = string.format('%s %.2f / %.2f / %.2f', k == 'times' and 'frame' or k,
+            t[math.ceil(#t * 0.5)] * 1000, t[math.ceil(#t * 0.95)] * 1000, t[#t] * 1000)
+    end
+    print(string.format('[bench] %d creatures, %d frames (median / p95 / worst ms): %s', #world.creatures,
+        #b.times, table.concat(out, ', ')))
+end
+
+local function benchFrame(dt, took)
+    if bench.warm > 0 then
+        if #world.eggs == 0 then bench.warm = bench.warm - dt end
+        return
+    end
+    bench.times[#bench.times + 1] = dt
+    bench.update[#bench.update + 1] = took
+    bench.elapsed = (bench.elapsed or 0) + dt
+    if bench.elapsed >= args.bench then
+        report(bench)
+        love.event.quit()
+    end
+end
+
 function love.update(dt)
     if not world or snapFrames then return end
+    local t0 = bench and love.timer.getTime()
     accumulator = accumulator + math.min(dt, 0.25)
     while accumulator >= STEP do
         step()
@@ -139,6 +179,7 @@ function love.update(dt)
         local over = Lantern.creatureAt(world, lx, ly)
         love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
+    if bench then benchFrame(dt, love.timer.getTime() - t0) end
 end
 
 -- Terrarium: --nav shows every creature's graph in its own colour; --nav <who>
@@ -263,9 +304,11 @@ end
 
 function love.draw()
     if not world then return end
+    local t0 = bench and love.timer.getTime()
     -- Render reads the jar's clock; it never moves it
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     composite()
+    if bench and bench.warm <= 0 then bench.draw[#bench.draw + 1] = love.timer.getTime() - t0 end
 
     if snapFrames then
         snapFrames = snapFrames + 1

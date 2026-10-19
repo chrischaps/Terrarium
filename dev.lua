@@ -4,7 +4,7 @@
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
---                                         hatch, ranges, audio, or all;
+--                                         hatch, crowd, ranges, audio, or all;
 --                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
@@ -17,6 +17,9 @@
 --   lovec . --script <file.lua>           run a capture script (save dir first); it
 --                                         returns {run = function(api)}, see main.lua
 --   lovec . --bench <sec>                 run the real game uncapped, report frame times
+--                                         (once the eggs are out and 3 s have passed)
+--   lovec . --crowd <n>                   Terrarium: lay eggs of random genomes until the
+--                                         jar holds n creatures
 --   lovec . --seed <n>                    seed the simulation RNG
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
@@ -60,6 +63,7 @@ function dev.parse(args)
             o.frames = {n = tonumber(args[i + 1]), every = tonumber(args[i + 2])}
             i = i + 2
         elseif a == '--bench' then o.bench = tonumber(args[i + 1]); i = i + 1
+        elseif a == '--crowd' then o.crowd = tonumber(args[i + 1]); i = i + 1
         elseif a == '--help' then o.help = true
         elseif a == '--script' then o.script = args[i + 1]; i = i + 1
         elseif a == '--nolight' then o.nolight = true
@@ -1033,6 +1037,48 @@ test('hatch', function(j, results)
         .. '(after: typically %.2f, at most %.2f)', s.builds, s.hatched_at * dt, s.worst * 1000, s.typical * 1000,
         s.settled * 1000)
     log.info('selftest', 'hatch        %s', table.concat(report, '; '))
+end)
+
+-- Terrarium: a full jar (#18). Sixteen of the heaviest bodies (the longest
+-- worms, the biggest blobs, eight-legged spiders) live on full soft bodies, so
+-- the sim must leave most of a 60 fps frame for drawing them. `--crowd 16
+-- --bench <sec>` measures the drawn frame. Eggs hatch between a frame's
+-- snapshot and its draw, so this draws between steps the way main.lua does.
+local CROWD, CROWD_BUDGET = 16, 1 / 240 -- s of sim per 60 fps frame (two steps)
+test('crowd', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Genome = require('genome')
+    local function crowd()
+        rng.seed(18)
+        local w = World.new(level_data, {wander = true, selected = 0})
+        for k = #w.creatures + 1, CROWD do
+            local r = level_data.residents[(k - 1) % #level_data.residents + 1]
+            local g = Genome.random(r.key, rng.sim)
+            g.segments, g.size, g.legs = g.segments and 24, g.size and 1.4, g.legs and 8
+            w:lay(g, r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
+        end
+        local frames, steps, ok, err = {}, 0, true, nil
+        while steps < 2400 do
+            local t0 = love.timer.getTime()
+            for _ = 1, 2 do w:snapshot(); w:step(dt) end
+            local took = love.timer.getTime() - t0
+            steps = steps + 2
+            ok, err = pcall(function() w:interpolate(0.5); w:restore() end)
+            if not ok then break end
+            if #w.eggs == 0 and steps > 600 then frames[#frames + 1] = took end
+        end
+        table.sort(frames)
+        return w, ok, err, frames[math.ceil(#frames * 0.95)] or math.huge, frames[math.ceil(#frames * 0.5)] or 0
+    end
+    local w, ok, err, p95, median = crowd()
+    check(results, ok, 'crowd: drawing between steps failed: %s', tostring(err))
+    check(results, #w.creatures == CROWD, 'crowd: %d of %d creatures hatched', #w.creatures, CROWD)
+    -- A slow run from the machine gets a second try; a real cost slows both
+    if p95 >= CROWD_BUDGET then p95 = math.min(p95, select(4, crowd())) end
+    check(results, p95 < CROWD_BUDGET, 'crowd: %d creatures take %.2f ms of sim a frame (budget %.2f)',
+        CROWD, p95 * 1000, CROWD_BUDGET * 1000)
+    log.info('selftest', 'crowd        %d heaviest bodies: sim %.2f ms a frame (p95 %.2f, budget %.2f)', #w.creatures,
+        median * 1000, p95 * 1000, CROWD_BUDGET * 1000)
 end)
 
 -- Terrarium: the ranges (#17). Two hundred random genomes per plan, each in a
