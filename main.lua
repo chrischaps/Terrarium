@@ -11,6 +11,7 @@
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
+--   love . --script scripts/lineup.lua   run a capture script: offscreen, frame-exact stills
 --   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
@@ -48,6 +49,8 @@ local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
 local lantern = Lantern.new() -- you watch with it; the World never knows it's there
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
+local capture -- --script: {co = coroutine, last = canvas}
+local scriptApi -- defined below love.load; forward-declared so load can see it
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -64,12 +67,13 @@ end
 -- from rng.scape in this order, the creatures from rng.sim, the motes from
 -- rng.look. The replay check in dev.lua opens jars the same way (at midday,
 -- with a full-length day). The hour and day length are inputs like the seed:
--- minds sleep and wake by them.
-local function openJar(seed, hour, day)
+-- minds sleep and wake by them. `level` is the jar's room unless a capture
+-- script brings its own.
+local function openJar(seed, hour, day, level)
     rng.seed(seed)
     Scape.init(rng.scape)
     Glass.init(rng.scape)
-    local w = World.new(room, { wander = not args.nowander, selected = 0, hour = hour, day = day, genomes = args.genomes })
+    local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day, genomes = args.genomes })
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
@@ -86,6 +90,14 @@ local function openJar(seed, hour, day)
         w:lay(Genome.random(r.key, rng.sim), r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
     end
     return w
+end
+
+-- The stones and plants the jar was composed with, back to front
+local function furnish()
+    objects = {}
+    for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
+    for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
+    table.sort(objects, function(a, b) return a.d < b.d end)
 end
 
 function love.load()
@@ -115,10 +127,7 @@ function love.load()
     daySeconds = args.day or C.DAY_SECONDS
 
     world = openJar(args.seed or SEED, startHour, daySeconds)
-
-    for _, s in ipairs(Scape.getStones()) do objects[#objects + 1] = s end
-    for _, p in ipairs(Plants.all()) do objects[#objects + 1] = p end
-    table.sort(objects, function(a, b) return a.d < b.d end)
+    furnish()
 
     if args.snap then
         for _ = 1, math.floor((args.snap.seconds or 1) / STEP) do step() end
@@ -133,6 +142,13 @@ function love.load()
             if c.key == args.follow then lantern.who = i end
         end
         lantern:update(10, world) -- already up to full brightness
+    end
+    if args.script then
+        local chunk, err = love.filesystem.load(args.script)
+        if not chunk then error(err) end
+        local script = chunk()
+        local api = scriptApi()
+        capture = { co = coroutine.create(function() script.run(api) end) }
     end
 end
 
@@ -164,6 +180,17 @@ local function benchFrame(dt, took)
 end
 
 function love.update(dt)
+    if capture then
+        local ok, err = coroutine.resume(capture.co)
+        if not ok then
+            print('[script] ' .. tostring(err))
+            print(debug.traceback(capture.co))
+            love.event.quit(1)
+        elseif coroutine.status(capture.co) == 'dead' then
+            love.event.quit(0)
+        end
+        return
+    end
     if not world or snapFrames then return end
     local t0 = bench and love.timer.getTime()
     accumulator = accumulator + math.min(dt, 0.25)
@@ -234,8 +261,9 @@ local function drawObject(o)
 end
 
 -- Everything in the jar, back to front. The scape behind FAR_D and the room
--- around the jar are drawn soft, as a shallow depth of field.
-local function drawScene(light)
+-- around the jar are drawn soft, as a shallow depth of field. A plate (see
+-- scriptApi) draws the creatures' plane itself, so `plane == false` leaves it out.
+local function drawScene(light, plane)
     love.graphics.setCanvas(Render.canvas("room"))
     love.graphics.clear(0, 0, 0, 1)
     Scape.drawRoom(light)
@@ -266,12 +294,14 @@ local function drawScene(light)
     Motes.drawBack(light)
 
     -- The creatures' plane, in level coordinates
-    Tank.pushPlane()
-    Scenery.draw(light, world.time)
-    drawCreatures(accumulator / STEP, light)
-    lantern:draw(light)
-    if args.nav then drawNav() end
-    love.graphics.pop()
+    if plane ~= false then
+        Tank.pushPlane()
+        Scenery.draw(light, world.time)
+        drawCreatures(accumulator / STEP, light)
+        lantern:draw(light)
+        if args.nav then drawNav() end
+        love.graphics.pop()
+    end
 
     for j = i, #objects do drawObject(objects[j]) end
     love.graphics.setShader()
@@ -285,24 +315,134 @@ local function drawScene(light)
     love.graphics.setCanvas()
 end
 
--- The front glass bends the view a little at its edges; the room vignettes
-local function composite()
+-- The front glass bends the view a little at its edges; the room vignettes.
+-- A capture script's plate brings its own canvas, size and clock, and has no
+-- glass in front of it.
+local function composite(scene, w, h, time)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
     if sh then
         love.graphics.setShader(sh)
-        sh:send("glassRect", { Glass.frontRect() })
+        sh:send("glassRect", scene and { 0, 0, 0, 0 } or { Glass.frontRect() })
         sh:send("aberration", 0.012)
         sh:send("vignette", 0.40)
         sh:send("grain", 0.010)
-        sh:send("time", love.timer.getTime() % 1000)
-        sh:send("size", { C.W, C.H })
+        sh:send("time", (time or love.timer.getTime()) % 1000)
+        sh:send("size", { w or C.W, h or C.H })
     end
-    love.graphics.draw(Render.canvas("scene"))
+    love.graphics.draw(scene or Render.canvas("scene"))
     love.graphics.setShader()
 end
 
+-- The API a --script capture file drives (from Character's main.lua). Time
+-- only moves when the script steps it and frames render offscreen, so a
+-- capture is exact: the same script gives the same jar on any machine.
+function scriptApi()
+    local api = { STEP = STEP, Genome = Genome, room = room, args = args }
+    local canvases = {}
+    local function canvas(name, w, h, hdr)
+        local key = name .. w .. 'x' .. h
+        canvases[key] = canvases[key] or love.graphics.newCanvas(w, h, hdr and { format = 'rgba16f' } or nil)
+        return canvases[key]
+    end
+
+    -- Open a jar from `seed` at `hour` (a number or a preset name such as
+    -- 'midday'), in the jar's room or in `level`. Its composition is the seed's.
+    function api.open(seed, hour, level)
+        startHour = DayCycle.parseHour(hour) or DayCycle.presets.midday
+        daySeconds = C.DAY_SECONDS
+        world = openJar(seed, startHour, daySeconds, level)
+        furnish()
+        accumulator = 0
+        return world
+    end
+
+    -- Advance the jar by `seconds` of fixed steps
+    function api.step(seconds)
+        for _ = 1, math.max(1, math.floor(seconds / STEP + 0.5)) do step() end
+    end
+
+    -- Render a frame into a w x h canvas (default the window's size) and return it.
+    --
+    -- With opts.view = {x0, y0, x1, y1}, a plate instead: that stretch of the
+    -- creatures' plane, in level units, drawn across the canvas's width at full
+    -- resolution. Behind it is the window's own frame, enlarged and blurred
+    -- (opts.blur), so the plane stands sharp in a shallow depth of field.
+    function api.render(w, h, opts)
+        opts = opts or {}
+        w, h = w or C.W, h or C.H
+        local light = DayCycle.evaluate(DayCycle.hourAt(startHour, world.time, daySeconds))
+        local target = canvas('target', w, h)
+        local v = opts.view
+        if not v then
+            drawScene(light)
+            love.graphics.setCanvas(target)
+            love.graphics.clear(0, 0, 0, 1)
+            love.graphics.push()
+            love.graphics.scale(w / C.W, h / C.H)
+            composite(nil, nil, nil, world.time)
+            love.graphics.pop()
+            love.graphics.setCanvas()
+            capture.last = target
+            return target
+        end
+
+        drawScene(light, false)
+        -- The view's corners in the window's frame, to line the jar up behind it
+        Tank.pushPlane()
+        local sx0, sy0 = love.graphics.transformPoint(v[1], v[2])
+        local sx1 = love.graphics.transformPoint(v[3], v[2])
+        love.graphics.pop()
+        local a = w / (sx1 - sx0)
+        love.graphics.setCanvas(Render.canvas("far"))
+        love.graphics.clear(0, 0, 0, 0)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(Render.canvas("scene"))
+        local soft, k = Render.blur("far", opts.blur or 3)
+
+        local plate = canvas('plate', w, h, true)
+        love.graphics.setCanvas(plate)
+        love.graphics.clear(0, 0, 0, 1)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(soft, -sx0 * a, -sy0 * a, 0, a * k, a * k)
+        love.graphics.push()
+        love.graphics.scale(w / (v[3] - v[1]))
+        love.graphics.translate(-v[1], -v[2])
+        Render.beginObjects(light, { w / 2, w * 0.45 })
+        Scenery.draw(light, world.time)
+        drawCreatures(1, light)
+        love.graphics.pop()
+        love.graphics.setShader()
+
+        love.graphics.setCanvas(target)
+        love.graphics.clear(0, 0, 0, 1)
+        composite(plate, w, h, world.time)
+        love.graphics.setCanvas()
+        capture.last = target
+        return target
+    end
+
+    -- Save a canvas as a PNG in the save directory
+    function api.save(c, file)
+        c:newImageData():encode('png', file)
+        print('[script] saved ' .. love.filesystem.getSaveDirectory() .. '/' .. file)
+    end
+
+    function api.yield() coroutine.yield() end
+    return api
+end
+
 function love.draw()
+    if capture then
+        -- The last captured frame, fitted to the window, while a script runs
+        if capture.last then
+            local cw, ch = capture.last:getDimensions()
+            local k = math.min(love.graphics.getWidth() / cw, love.graphics.getHeight() / ch)
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.draw(capture.last, 0, 0, 0, k, k)
+        end
+        return
+    end
     if not world then return end
     local t0 = bench and love.timer.getTime()
     -- Render reads the jar's clock; it never moves it

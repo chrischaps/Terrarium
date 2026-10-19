@@ -77,15 +77,17 @@ function Render.drawBlob(x, y, rx, ry, angle)
     love.graphics.draw(blob, x, y, angle or 0, rx / 32, (ry or rx) / 32, 32, 32)
 end
 
---- Configure the object shader for this frame from the light
-function Render.beginObjects(light)
+--- Configure the object shader for this frame from the light. `pool` (the
+--- lamp's x on the canvas and the cone's half-width there) is for a canvas
+--- that isn't the window's frame, like a capture script's plate.
+function Render.beginObjects(light, pool)
     currentLight = light
     local sh = shaders.object
     if not sh then return end
     sh:send("ambient", light.ambient)
     sh:send("fog", light.fog)
     sh:send("lamp", light.lamp)
-    sh:send("pool", { Tank.wx(C.LAMP_X), C.LAMP_CONE.bottom * C.S })
+    sh:send("pool", pool or { Tank.wx(C.LAMP_X), C.LAMP_CONE.bottom * C.S })
     objectHaze = -1
 end
 
