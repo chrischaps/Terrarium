@@ -3,7 +3,8 @@
 --
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
---                                         framerate, lantern, day, replay, genome, worm, audio, or all;
+--                                         framerate, lantern, day, replay, genome, worm, blob, spider,
+--                                         hatch, ranges, audio, or all;
 --                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
@@ -1032,6 +1033,192 @@ test('hatch', function(j, results)
         .. '(after: typically %.2f, at most %.2f)', s.builds, s.hatched_at * dt, s.worst * 1000, s.typical * 1000,
         s.settled * 1000)
     log.info('selftest', 'hatch        %s', table.concat(report, '; '))
+end)
+
+-- Terrarium: the ranges (#17). Two hundred random genomes per plan, each in a
+-- jar of its own, hatched where its plan's first resident lives. Each tours a
+-- mossy top, the shelf and home again, and is watched every tenth of a second
+-- for the ways a body goes wrong: it stalls, leaves the jar, sinks into the
+-- scenery or comes apart (a worm torn or knotted, a blob crushed or turned
+-- inside out, a spider standing on feet its legs don't reach). A genome that
+-- fails is reported with its body genes and which quarter of each range they
+-- fell in; the fix is to mend the body, or shrink that range in genome.lua.
+local RANGES = 200
+local LIMITS = {
+    sunk = 4,       -- px any point may be inside the scenery (a foot rests on its surface)
+    torn = 2,       -- a worm segment's length over its rest length
+    knot = 2,       -- s a worm may stay knotted (three sharp bends): a dropped tail shakes out
+    crushed = 0.5,  -- of a blob's rest area lost
+    slip = 0.02,    -- of a spider's planted feet its legs don't reach
+}
+test('ranges', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Genome = require('genome')
+    local level = require('jar.level').new(level_data)
+    local shelf = level.by_id.shelf
+    local tops = {} -- the mossy tops a tour visits, one per genome in turn
+    for _, s in ipairs(level.solids) do
+        if s.moss and s ~= shelf and s.id ~= 'soil' then tops[#tops + 1] = s end
+    end
+    local home = {}
+    for _, r in ipairs(level_data.residents) do home[r.key] = home[r.key] or r end
+    local every = math.floor(0.1 / dt + 0.5)
+    local W, H = level_data.width, level_data.height
+
+    -- How far a point is inside the scenery (0 outside it)
+    local function depth(x, y)
+        local s = level:solid_at(x, y)
+        if not s then return 0 end
+        return math.min(x - s.x, s.x + s.w - x, y - s.y, s.y + s.h - y)
+    end
+    local function crosses(a, b, c, d)
+        local function side(p, q, r) return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x) end
+        return side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
+    end
+    -- A ring that crosses itself is a blob turned inside out
+    local function inside_out(pts)
+        local n = #pts
+        for a = 1, n do
+            for b = a + 2, n do
+                if not (a == 1 and b == n) and crosses(pts[a], pts[a % n + 1], pts[b], pts[b % n + 1]) then return true end
+            end
+        end
+        return false
+    end
+    -- A worm's longest segment over its rest length, and how many joints bend
+    -- back on themselves (a hairpin turn has one or two, a knot three or more)
+    local function worm_shape(pts)
+        local most, sharp = 0, 0
+        for k = 2, #pts do
+            local a, b, q = pts[k - 1], pts[k], pts[k + 1]
+            local ux, uy = b.x - a.x, b.y - a.y
+            most = math.max(most, math.sqrt(ux * ux + uy * uy))
+            if q then
+                local vx, vy = q.x - b.x, q.y - b.y
+                local d = math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+                if d > 0 and (ux * vx + uy * vy) / d < -0.17 then sharp = sharp + 1 end
+            end
+        end
+        return most / 8.5, sharp
+    end
+    -- A spider's planted feet that its legs don't reach or that stand on nothing
+    local function slipped(c)
+        if c.mode ~= 'attached' then return 0, 0 end
+        local bad, planted = 0, 0
+        for _, leg in ipairs(c.legs) do
+            if not leg.stepping and not (c.tap and c.legs[c.tap.leg] == leg) then
+                planted = planted + 1
+                local tip = leg.chain.joints[#leg.chain.joints]
+                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 4 or not leg.grounded then bad = bad + 1 end
+            end
+        end
+        return bad, planted
+    end
+
+    -- One genome's tour: its worst measures, and what went wrong
+    local function tour(genome, top)
+        local r = home[genome.plan]
+        local solo = setmetatable({residents = {{key = r.key, name = r.name, solid = r.solid, x = r.x, genome = genome}}},
+            {__index = level_data})
+        rng.seed(17)
+        local w = World.new(solo, {wander = false, selected = 1})
+        local c, ctrl, g = w.creatures[1], w.controllers[1], w.graphs[1]
+        local stops = {{top.x + top.w / 2, top}, {shelf.x + shelf.w / 2, shelf}, {r.x, w.level.by_id[r.solid]}}
+        local m = {sunk = 0, torn = 0, knot = 0, crushed = 0, slips = 0, planted = 0, faults = {}}
+        local knotted = 0
+        for _, stop in ipairs(stops) do
+            local goal = g:node_near(stop[1], stop[2].y, stop[2], 0, -1)
+            local going = goal and ctrl:go_to(goal)
+            local steps = 0
+            while going and ctrl:has_path() and steps < 60 / dt do
+                w:step(dt)
+                steps = steps + 1
+                if steps % every == 0 then
+                    for _, p in ipairs(c:interp_points()) do
+                        if not (p.x >= 0 and p.x <= W and p.y >= 0 and p.y <= H) then -- (NaN too)
+                            m.out = m.out or string.format('left the jar at (%.0f,%.0f)', p.x, p.y)
+                        else
+                            m.sunk = math.max(m.sunk, depth(p.x, p.y))
+                        end
+                    end
+                    if c.key == 'worm' then
+                        local stretch, sharp = worm_shape(c.points)
+                        knotted = sharp >= 3 and knotted + every * dt or 0
+                        m.torn, m.knot = math.max(m.torn, stretch), math.max(m.knot, knotted)
+                    elseif c.key == 'blob' then
+                        m.crushed = math.max(m.crushed, 1 - c:area() / c.area0)
+                        m.inverted = m.inverted or inside_out(c.points)
+                    else
+                        local bad, planted = slipped(c)
+                        m.slips, m.planted = m.slips + bad, m.planted + planted
+                    end
+                end
+            end
+            local x, y = c:anchor()
+            if not (going and not ctrl:has_path() and math.abs(x - goal.x) < 8 and math.abs(y - goal.y) < 8) then
+                m.faults[#m.faults + 1] = string.format('never reached the %s (stopped at %.0f,%.0f)', stop[2].id, x, y)
+                -- (carry on from there, so one stall doesn't hide the rest)
+                ctrl:clear()
+                c:reset(goal and goal.x or stop[1], goal and goal.y or stop[2].y)
+                c.mover.solid = stop[2]
+                if c.profile.climbs then c.solid = stop[2]; c:plant_all() end
+            end
+        end
+        m.slip = m.slips / math.max(1, m.planted)
+        local f = m.faults
+        if m.out then f[#f + 1] = m.out end
+        if m.sunk > LIMITS.sunk then f[#f + 1] = string.format('sank %.1fpx into the scenery', m.sunk) end
+        if m.torn > LIMITS.torn then f[#f + 1] = string.format('tore a segment to %.1fx its length', m.torn) end
+        if m.knot >= LIMITS.knot then f[#f + 1] = string.format('stayed knotted %.1fs', m.knot) end
+        if m.crushed > LIMITS.crushed then
+            f[#f + 1] = string.format('was crushed to %.0f%% of its area', 100 * (1 - m.crushed))
+        end
+        if m.inverted then f[#f + 1] = 'turned inside out' end
+        if m.slip > LIMITS.slip then
+            f[#f + 1] = string.format("stood on feet it can't reach %.1f%% of the time", 100 * m.slip)
+        end
+        return m
+    end
+
+    local t0 = love.timer.getTime()
+    for p, key in ipairs(Genome.order) do
+        local gen = love.math.newRandomGenerator(1700 + p)
+        local own = Genome[key].own
+        local failed, worst, by_quarter = {}, {}, {}
+        for _, gene in ipairs(own) do by_quarter[gene.name] = {0, 0, 0, 0} end
+        for n = 1, RANGES do
+            local genome = Genome.random(key, gen)
+            local m = tour(genome, tops[(n - 1) % #tops + 1])
+            for _, k in ipairs({'sunk', 'torn', 'knot', 'crushed', 'slip'}) do worst[k] = math.max(worst[k] or 0, m[k]) end
+            if #m.faults > 0 then
+                local body = {key}
+                for _, gene in ipairs(own) do
+                    local v = genome[gene.name]
+                    local r = gene.real or gene.int or {gene.pick[1], gene.pick[#gene.pick]}
+                    local q = math.min(4, math.floor((v - r[1]) / (r[2] - r[1]) * 4) + 1)
+                    by_quarter[gene.name][q] = by_quarter[gene.name][q] + 1
+                    body[#body + 1] = gene.name .. '=' .. v
+                end
+                failed[#failed + 1] = table.concat(body, ' ') .. ': ' .. table.concat(m.faults, '; ')
+            end
+        end
+        check(results, #failed == 0, 'ranges: %d of %d %s genomes failed', #failed, RANGES, key)
+        for k = 1, math.min(#failed, 12) do results.fail[#results.fail + 1] = 'ranges:   ' .. failed[k] end
+        for _, gene in ipairs(#failed > 0 and own or {}) do
+            local q = by_quarter[gene.name]
+            log.info('selftest', 'ranges       %s %s failures by quarter of its range, low to high: %d %d %d %d', key,
+                gene.name, q[1], q[2], q[3], q[4])
+        end
+        local measures = {
+            worm = string.format('segments at most %.2fx, knots at most %.1fs', worst.torn, worst.knot),
+            blob = string.format('at most %.0f%% of its area squeezed out', 100 * worst.crushed),
+            spider = string.format('feet slipped at most %.1f%% of the time', 100 * worst.slip),
+        }
+        log.info('selftest', 'ranges       %-6s %d/%d toured the moss and the shelf; sank at most %.1fpx, %s', key,
+            RANGES - #failed, RANGES, worst.sunk, measures[key])
+        results.trips = (results.trips or 0) + 3 * RANGES
+    end
+    log.info('selftest', 'ranges       %d genomes per plan in %.0fs', RANGES, love.timer.getTime() - t0)
 end)
 
 -- 4. Audio: every event path runs without error (not a listening test)
