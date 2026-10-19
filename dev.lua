@@ -113,7 +113,6 @@ local rng = require('core.rng')
 local TESTS = {}
 local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
 
-test('probe', function(j) dofile('C:/Users/chris/AppData/Local/Temp/claude/C--Users-chris-dev-Terrarium/6c9fa2c3-f90f-4f24-b595-4437199e3a10/scratchpad/navcost.lua')(j) end)
 -- 1. Graph integrity
 test('graphs', function(j, results)
     local World, level_data = j.World, j.level_data
