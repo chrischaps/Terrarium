@@ -9,7 +9,8 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
---   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, audio)
+--   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, audio)
+--   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
 --   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
@@ -66,7 +67,7 @@ local function openJar(seed, hour, day)
     rng.seed(seed)
     Scape.init(rng.scape)
     Glass.init(rng.scape)
-    local w = World.new(room, { wander = not args.nowander, selected = 0, hour = hour, day = day })
+    local w = World.new(room, { wander = not args.nowander, selected = 0, hour = hour, day = day, genomes = args.genomes })
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end

@@ -12,6 +12,8 @@ local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
 local Mind = require('mind')
 local DayCycle = require('jar.daycycle')
+local Genome = require('genome')
+local rng = require('core.rng')
 local log = require('core.log')
 
 local World = {}
@@ -66,9 +68,24 @@ function World.new(level_data, opts)
         self.graph_of[def.key] = graph
         log.info('nav', '%s graph: %d nodes, %d edges', def.key, #graph.nodes, graph.edge_count)
     end
+    -- Terrarium: each resident is built from a genome. A jar draws its own from
+    -- rng.sim; opts.genomes (strings or tables) stand in for the first residents
+    -- of their plans, in order, so a dev run can look at a chosen body.
+    local given = {}
+    for _, g in ipairs(opts.genomes or {}) do
+        g = type(g) == 'string' and assert(Genome.parse(g)) or Genome.copy(g)
+        given[g.plan] = given[g.plan] or {}
+        table.insert(given[g.plan], g)
+    end
+    self.genomes = {}
+    for i, r in ipairs(level_data.residents) do
+        local mine = given[r.key] and table.remove(given[r.key], 1)
+        self.genomes[i] = Genome.clamp(mine or (r.genome and Genome.copy(r.genome)) or Genome.random(r.key, rng.sim))
+    end
+
     for i, r in ipairs(level_data.residents) do
         local solid = self.level.by_id[r.solid]
-        local c = CLASS[r.key].new(r.x, solid.y, self)
+        local c = CLASS[r.key].new(r.x, solid.y, self, Genome.copy(self.genomes[i]))
         c.key, c.name = r.key, r.name
         c.mover.solid = solid
         if c.profile.climbs then
