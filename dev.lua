@@ -3,7 +3,7 @@
 --
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
---                                         framerate, lantern, day, replay, audio, or all;
+--                                         framerate, lantern, day, replay, genome, audio, or all;
 --                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
@@ -335,6 +335,57 @@ end)
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
+end)
+
+-- Terrarium: 3e. Genomes (#10). Random ones come back in range and survive a
+-- trip through their string form exactly; out-of-range and missing genes are
+-- held to the range, and text that isn't a genome is turned away.
+test('genome', function(_, results)
+    local Genome = require('genome')
+    local gen = love.math.newRandomGenerator(1010)
+    for _, key in ipairs(Genome.order) do
+        local bad, drift, seen = 0, 0, {}
+        for n = 1, 2000 do
+            local g = Genome.random(key, gen)
+            if n == 1 then log.info('selftest', 'genome       %s', Genome.serialise(g)) end
+            if not Genome.valid(g) then bad = bad + 1 end
+            local s = Genome.serialise(g)
+            local back = Genome.parse(s)
+            for _, gene in ipairs(Genome[key].genes) do
+                if not back or back[gene.name] ~= g[gene.name] then drift = drift + 1 end
+                seen[gene.name] = seen[gene.name] or {}
+                seen[gene.name][g[gene.name]] = true
+            end
+            if not back or Genome.serialise(back) ~= s then drift = drift + 1 end
+        end
+        check(results, bad == 0, 'genome: %d random %s genomes out of range', bad, key)
+        check(results, drift == 0, 'genome: %d %s genes changed on a round trip', drift, key)
+        -- every pick value and both ends of every int turn up
+        for _, gene in ipairs(Genome[key].genes) do
+            local want = gene.pick or (gene.int and {gene.int[1], gene.int[2]}) or {}
+            for _, v in ipairs(want) do
+                check(results, seen[gene.name][v], 'genome: %s %s never drew %s', key, gene.name, tostring(v))
+            end
+        end
+
+        -- Way out of range, wrong types, NaN, a gene from another plan
+        local wild = {plan = key, hue = 7, glow = -3, boldness = 0 / 0, sociability = 'lots', legs = 5,
+            segments = 99.6, stiffness = -1, size = 1e9, pressure = -1e9, reach = 1 / 0, wings = 2}
+        Genome.clamp(wild)
+        check(results, Genome.valid(wild) and wild.wings == nil, 'genome: clamp left a %s out of range: %s', key,
+            Genome.serialise(wild))
+        local partial = Genome.parse(key .. ' hue=0.25 chronotype=2')
+        check(results, partial and Genome.valid(partial) and partial.hue == 0.25 and partial.chronotype == 1,
+            'genome: a partial %s string did not read', key)
+    end
+    local spider = Genome.parse('spider legs=5 reach=1.0004')
+    check(results, spider and spider.legs == 4 and spider.reach == 1, 'genome: picks and reals did not snap')
+    local renamed = Genome.parse('worm plan=3 segments=12')
+    check(results, renamed and renamed.plan == 'worm' and renamed.segments == 12, 'genome: a gene called plan renamed it')
+    for _, junk in ipairs({'', 'fish hue=0.5', 'worm hue=blue', 'worm =3', 42}) do
+        check(results, Genome.parse(junk) == nil, 'genome: read %q as a genome', tostring(junk))
+    end
+    log.info('selftest', 'genome       2000 per plan in range and round-trip exactly')
 end)
 
 -- 4. Audio: every event path runs without error (not a listening test)
