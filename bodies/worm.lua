@@ -6,9 +6,15 @@
 -- bunch up and arch, and the head surges forward in time with it, so the body
 -- looks like it is doing the work. Drawn as a tapered mesh along a smoothed
 -- spine, shaded dorsal-to-belly with a rim of light from the cave mouth.
+--
+-- Terrarium: built from a genome (#12). `segments` is its length and how many
+-- bunches run down it while it crawls: a short worm inches along under one
+-- hump, a long one ripples with three. `stiffness` is muscle tone: a stiff worm
+-- carries its own weight and holds a line out over a ledge, a loose one bears
+-- less of it and drapes, and bunches deeper as it crawls.
 
 local Base = require('bodies.base')
-local rng = require('core.rng')
+local Genome = require('genome')
 
 local Worm = {}
 Worm.__index = Worm
@@ -24,8 +30,14 @@ Worm.profile = {
     anticipation = 0.16,
 }
 
-local SEGMENTS = 13
+local SEGMENTS = 13 -- Terrarium: a worm built without a genome (Character's)
 local SEG_LEN = 8.5
+-- Terrarium: the stiffness every tone below was tuned at (Character's worm).
+-- It's the middle of the gene's range.
+local STIFF = 0.55
+
+-- Terrarium: bunches along a worm of n segments while it crawls (10 -> 1, 24 -> 3)
+local function bunches(n) return 1 + (n - 10) / 7 end
 
 local COLORS = {
     back     = {0.78, 0.38, 0.40},
@@ -38,22 +50,35 @@ local COLORS = {
     pupil    = {0.10, 0.05, 0.08},
 }
 
-function Worm.new(x, y, world)
+function Worm.new(x, y, world, genome)
     local self = setmetatable({}, Worm)
     self.world = world
     self.profile = Worm.profile
     self.mover = Base.Mover.new(x, y, Worm.profile)
     self.face = Base.Face.new()
     self.color_name = {0.98, 0.62, 0.55}
+    -- Terrarium: the body from its genes
+    if genome then Genome.clamp(genome) end
+    local n = genome and genome.segments or SEGMENTS
+    local stiff = (genome and genome.stiffness or STIFF) / STIFF
+    self.genome = genome
+    self.n = n
+    self.wave = 2 * math.pi * bunches(n) / (n - 1) -- radians of crawl wave per segment
+    self.tone = stiff ^ 2                         -- leaning on the line of the segments ahead
+    self.reach = 1 / stiff                        -- how fast that fades toward the tail
+    self.bend = stiff ^ 0.5                       -- smoothing each joint
+    self.bear = min(1, 0.4 / stiff)               -- the share of its weight it doesn't carry
+    self.squeeze = 0.24 * stiff ^ -0.5            -- how short a bunched segment gets
+    self.band = math.floor(0.35 * (n - 1) + 0.5) + 1 -- the clitellum, a third of the way down
     self.points = {}
     self.radii = {}
-    local dir = Worm.layout_dir(world and world.level, x, y, 1)
-    for i = 1, SEGMENTS do
+    local dir = Worm.layout_dir(world and world.level, x, y, 1, n)
+    for i = 1, n do
         local px = x - (i - 1) * SEG_LEN * dir
         self.points[i] = {x = px, y = y - 7, px = px, py = y - 7}
-        local t = (i - 1) / (SEGMENTS - 1)
+        local t = (i - 1) / (n - 1)
         local r = 8.6 * (1 - t) ^ 0.75 + 2.4 * t
-        if i == 5 or i == 6 then r = r + 1.1 end   -- the band (clitellum)
+        if i == self.band or i == self.band + 1 then r = r + 1.1 end   -- the band (clitellum)
         self.radii[i] = r
     end
     self.phase = 0
@@ -73,10 +98,10 @@ function Worm:interp_points() return self.points end
 
 -- Which way to lay the body from a head at (x, y): behind the facing
 -- direction if the whole line is clear, otherwise the other way
-function Worm.layout_dir(level, x, y, facing)
+function Worm.layout_dir(level, x, y, facing, n)
     local function clear(dir)
         if not level then return true end
-        for i = 1, SEGMENTS - 1 do
+        for i = 1, (n or SEGMENTS) - 1 do
             if level:solid_at(x - i * SEG_LEN * dir, y - 7) then return false end
         end
         return true
@@ -89,7 +114,7 @@ end
 function Worm:reset(x, y, facing)
     facing = facing or 1
     self.mover = Base.Mover.new(x, y, Worm.profile)
-    local dir = Worm.layout_dir(self.world and self.world.level, x, y, facing)
+    local dir = Worm.layout_dir(self.world and self.world.level, x, y, facing, self.n)
     self.mover.facing = dir
     for i, p in ipairs(self.points) do
         p.x, p.y = x - (i - 1) * SEG_LEN * dir, y - 7
@@ -155,7 +180,7 @@ function Worm:update(dt, level, ctx)
     -- A worm holds its own body (a muscular hydrostat): on the ground only part
     -- of gravity reaches the body, so a tail over a ledge droops instead of
     -- hanging straight down. In flight it trails with full weight.
-    local g = G * dt * dt * (air and 1 or 0.4)
+    local g = G * dt * dt * (air and 1 or self.bear)
     for i = 2, #self.points do
         local p = self.points[i]
         local vx, vy = (p.x - p.px) * damp, (p.y - p.py) * damp
@@ -163,7 +188,7 @@ function Worm:update(dt, level, ctx)
         p.x, p.y = p.x + vx, p.y + vy + g
         -- Peristaltic arch: compressed segments lift
         if moving then
-            local w = sin(self.phase - i * 0.75)
+            local w = sin(self.phase - i * self.wave)
             if w > 0.3 and p.contact then
                 p.y = p.y - w * 0.35
             end
@@ -176,7 +201,7 @@ function Worm:update(dt, level, ctx)
             local a, b = self.points[i], self.points[i + 1]
             local rest = SEG_LEN
             if moving then
-                rest = rest * (1 - 0.24 * max(0, sin(self.phase - i * 0.75)))
+                rest = rest * (1 - self.squeeze * max(0, sin(self.phase - i * self.wave)))
             end
             rest = rest * (1 - 0.3 * self.coil)
             local dx, dy = b.x - a.x, b.y - a.y
@@ -196,17 +221,21 @@ function Worm:update(dt, level, ctx)
         for i = 2, #self.points - 1 do
             local a, p, b = self.points[i - 1], self.points[i], self.points[i + 1]
             local mx, my = (a.x + b.x) * 0.5, (a.y + b.y) * 0.5
-            local k = ((i == 2) and 0.22 or 0.12) * (air and 1 or 1.6)
+            local k = ((i == 2) and 0.22 or 0.12) * (air and 1 or 1.6) * self.bend
             p.x, p.y = p.x + (mx - p.x) * k, p.y + (my - p.y) * k
         end
         -- Muscle tone (ground only): each segment leans toward carrying on
         -- the line of the two before it, strongest near the head, so a body
-        -- over a ledge holds a drooping curve instead of hanging plumb
+        -- over a ledge holds a drooping curve instead of hanging plumb.
+        -- Terrarium: it holds the body up, never a tail up in the air: a line
+        -- that rises is only half carried on, so a tail left raised by a jump
+        -- settles back down instead of standing propped against the glass.
         if not air then
             for i = 3, #self.points do
                 local a, b, p = self.points[i - 2], self.points[i - 1], self.points[i]
-                local ex, ey = b.x + (b.x - a.x), b.y + (b.y - a.y)
-                local k = 0.09 * (1 - (i - 3) / #self.points)
+                local rise = b.y - a.y
+                local ex, ey = b.x + (b.x - a.x), b.y + (rise < 0 and rise * 0.5 or rise)
+                local k = 0.09 * self.tone * (1 - (i - 3) / #self.points) ^ self.reach
                 p.x, p.y = p.x + (ex - p.x) * k, p.y + (ey - p.y) * k
             end
         end
@@ -316,7 +345,7 @@ function Worm:draw(ctx)
 
     -- Body mesh: three vertices per sample (edge, spine, edge)
     local verts = {}
-    local band_lo, band_hi = 4 * 4, 6 * 4
+    local band_lo, band_hi = (self.band - 1) * 4, (self.band + 1) * 4
     for i = 1, n do
         local band = i >= band_lo and i <= band_hi
         local x, y, r = xs[i], ys[i], rs[i]

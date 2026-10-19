@@ -3,7 +3,7 @@
 --
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
---                                         framerate, lantern, day, replay, genome, audio, or all;
+--                                         framerate, lantern, day, replay, genome, worm, audio, or all;
 --                                         --seed <n> reseeds the day)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
@@ -20,6 +20,8 @@
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to worm|blob|spider
+--   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
+--                                         this genome (repeat for the second)
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
 --                                         print the state hash, exit 1 if they differ
 --
@@ -66,6 +68,11 @@ function dev.parse(args)
         elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
+        -- Terrarium: a body to look at, e.g. --genome "worm segments=24 stiffness=0.9"
+        elseif a == '--genome' then
+            o.genomes = o.genomes or {}
+            o.genomes[#o.genomes + 1] = args[i + 1]
+            i = i + 1
         elseif a == '--replay' then o.replay = tonumber(args[i + 1]); i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
         end
@@ -386,6 +393,176 @@ test('genome', function(_, results)
         check(results, Genome.parse(junk) == nil, 'genome: read %q as a genome', tostring(junk))
     end
     log.info('selftest', 'genome       2000 per plan in range and round-trip exactly')
+
+    -- Inheritance (#11). The same seed gives the same family, line after line.
+    local function line(seed, key)
+        local g = love.math.newRandomGenerator(seed)
+        local a, b, out = Genome.random(key, g), Genome.random(key, g), {}
+        for n = 1, 200 do
+            a, b = b, Genome.child(a, b, g)
+            out[n] = Genome.serialise(b)
+        end
+        return table.concat(out, '\n')
+    end
+    for _, key in ipairs(Genome.order) do
+        check(results, line(1111, key) == line(1111, key), 'genome: seed 1111 bred two different %s lines', key)
+        check(results, line(1111, key) ~= line(1112, key), 'genome: seeds 1111 and 1112 bred the same %s line', key)
+    end
+    check(results, not pcall(Genome.child, Genome.random('worm', gen), Genome.random('blob', gen), gen),
+        'genome: a worm bred with a blob')
+
+    -- Each gene comes from one parent or the other, about half and half.
+    -- Parents sit at opposite ends of every range, and no step reaches halfway.
+    for _, key in ipairs(Genome.order) do
+        local a, b = {plan = key}, {plan = key}
+        for _, g in ipairs(Genome[key].genes) do
+            local r = g.real or g.int or {g.pick[1], g.pick[#g.pick]}
+            a[g.name], b[g.name] = r[1], r[2]
+        end
+        local from_a, total, bad = 0, 0, 0
+        for _ = 1, 2000 do
+            local c = Genome.child(a, b, gen)
+            if not Genome.valid(c) then bad = bad + 1 end
+            for _, g in ipairs(Genome[key].genes) do
+                if math.abs(c[g.name] - a[g.name]) < math.abs(c[g.name] - b[g.name]) then from_a = from_a + 1 end
+                total = total + 1
+            end
+        end
+        check(results, bad == 0, 'genome: %d %s children out of range', bad, key)
+        check(results, math.abs(from_a / total - 0.5) < 0.03, 'genome: %s children took %.0f%% from one parent', key,
+            100 * from_a / total)
+    end
+
+    -- 10k mutations of every gene, each from an even spread across its range.
+    -- Folding keeps the spread even: the end cells of a histogram hold their
+    -- share, and a real lands exactly on an end value no more often than on any
+    -- other thousandth (a clamp would put about ten times that there). Picks move
+    -- one value at most, and about 1 real step in 20 is a big one.
+    local N, big, reals = 10000, 0, 0
+    local function small_reach(g) return Genome.STEP * (g.real[2] - g.real[1]) + 0.001 end
+    for _, key in ipairs(Genome.order) do
+        for _, g in ipairs(Genome[key].genes) do
+            local cells, count, far, ends = 20, {}, 0, 0
+            if g.int then cells = g.int[2] - g.int[1] + 1 elseif g.pick then cells = #g.pick end
+            for c = 1, cells do count[c] = 0 end
+            for _ = 1, N do
+                local start = Genome.random(key, gen)
+                local v0 = start[g.name]
+                local v = Genome.mutate(start, gen)[g.name]
+                local c
+                if g.real then
+                    local lo, hi = g.real[1], g.real[2]
+                    c = math.min(cells, math.floor((v - lo) / (hi - lo) * cells) + 1)
+                    if v == lo or v == hi then ends = ends + 1 end
+                    if math.abs(v - v0) > small_reach(g) then big = big + 1 end
+                    reals = reals + 1
+                elseif g.int then
+                    c = v - g.int[1] + 1
+                else
+                    for i, p in ipairs(g.pick) do
+                        if p == v then c = i end
+                        if p == v0 and (g.pick[i - 1] ~= v and g.pick[i] ~= v and g.pick[i + 1] ~= v) then far = far + 1 end
+                    end
+                end
+                count[c] = count[c] + 1
+            end
+            local share = N / cells
+            for _, c in ipairs({1, cells}) do
+                check(results, math.abs(count[c] / share - 1) < 0.2, 'genome: %s %s end cell %d holds %d, its share is %.0f',
+                    key, g.name, c, count[c], share)
+            end
+            if g.real then
+                -- both end values together cover one thousandth of the range
+                local thousandth = N * 0.001 / (g.real[2] - g.real[1])
+                check(results, ends < 3 * thousandth, 'genome: %s %s piled %d onto its ends, a thousandth holds %.0f',
+                    key, g.name, ends, thousandth)
+            end
+            check(results, far == 0, 'genome: %s %s jumped past a neighbour %d times', key, g.name, far)
+        end
+    end
+    local want = Genome.BIG_CHANCE * ((Genome.BIG - Genome.STEP) / Genome.BIG) ^ 2
+    check(results, math.abs(big / reals / want - 1) < 0.25, 'genome: %.1f%% of real steps were big, wanted about %.1f%%',
+        100 * big / reals, 100 * want)
+    log.info('selftest', 'genome       children breed true from a seed; 10k mutations per gene, no pile-up at the ends')
+end)
+
+-- Terrarium: 3f. The worm's genes (#12). The extremes have to look different
+-- where it matters, at the shelf's edge: each worm lies along the slate with
+-- its head near the glass and its tail out over the drop. A stiff one holds a
+-- line out over the air, a loose one drapes. Then each crawls along the soil,
+-- and the long one's body carries more bunches than the short one's.
+test('worm', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local SEG_LEN = 8.5
+    local function worm(genome)
+        rng.seed(12)
+        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local i = w:first('worm')
+        return w, i, w.creatures[i]
+    end
+
+    -- How far the tail hangs below the slate after 4s lying still, and how far
+    -- out past the edge the body stays within a body's width of the top. The
+    -- head lies 30px in from the edge, so even a short worm is half over it.
+    local shelf = assert(require('jar.level').new(level_data).by_id.shelf)
+    local function droop(genome)
+        local w, _, c = worm(genome)
+        c:reset(shelf.x + 30, shelf.y, 1)
+        c.mover.solid = shelf
+        for _ = 1, math.floor(4 / dt) do w:step(dt) end
+        local tail, held = c.points[#c.points], 0
+        for _, p in ipairs(c.points) do
+            if p.x < shelf.x and p.y < shelf.y + 18 then held = math.max(held, shelf.x - p.x) end
+        end
+        return tail.y - shelf.y, held, c
+    end
+    local report = {}
+    for _, n in ipairs({10, 24}) do
+        local loose, loose_held = droop(string.format('worm segments=%d stiffness=0.2', n))
+        local stiff, stiff_held = droop(string.format('worm segments=%d stiffness=0.9', n))
+        report[#report + 1] = string.format('%d segs: tail %.0f/%.0fpx below, held out %.0f/%.0fpx', n, stiff, loose,
+            stiff_held, loose_held)
+        -- (a long worm's tail comes to rest on the cairn below, stiff or loose)
+        check(results, n > 12 or loose > stiff + 12, 'worm: %d segments, the loose tail hangs %.0fpx and the stiff one %.0fpx',
+            n, loose, stiff)
+        check(results, stiff_held > loose_held + 8, 'worm: %d segments, stiff held out %.0fpx, loose %.0fpx', n,
+            stiff_held, loose_held)
+    end
+
+    -- Bunches while crawling: runs of shortened segments along the body,
+    -- counted every 1/10s while it crawls across the soil
+    local function humps(genome)
+        local w, i, c = worm(genome)
+        local soil = w.level.by_id.soil
+        c:reset(420, soil.y, -1) -- under the arch toward its foot
+        c.mover.solid = soil
+        assert(w.controllers[i]:go_to(w.graphs[i]:snap_goal(205, soil.y - 4)), 'worm: no way along the soil')
+        local runs, samples = 0, 0
+        for s = 1, math.floor(4 / dt) do
+            w:step(dt)
+            if s > 60 and s % 12 == 0 and c.mover.state == 'ground' and math.abs(c.mover.vx) > 20 then
+                local inside = false
+                for k = 2, #c.points - 1 do
+                    local a, b = c.points[k], c.points[k + 1]
+                    local short = math.sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2) < SEG_LEN * 0.9
+                    if short and not inside then runs = runs + 1 end
+                    inside = short
+                end
+                samples = samples + 1
+            end
+        end
+        return runs / math.max(1, samples)
+    end
+    local short, long = humps('worm segments=10 stiffness=0.55'), humps('worm segments=24 stiffness=0.55')
+    report[#report + 1] = string.format('bunches %.1f on 10 segs, %.1f on 24', short, long)
+    check(results, short > 0.5 and long > short * 2, 'worm: crawling, %.1f bunches on 10 segments and %.1f on 24',
+        short, long)
+
+    -- With no genome it's Character's worm, and a genome reaches the body
+    local _, _, c = worm(nil)
+    check(results, c.genome and #c.points == c.genome.segments, 'worm: a resident has %d points for %s', #c.points,
+        c.genome and require('genome').serialise(c.genome) or 'no genome')
+    log.info('selftest', 'worm         %s', table.concat(report, '; '))
 end)
 
 -- 4. Audio: every event path runs without error (not a listening test)
