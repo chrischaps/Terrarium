@@ -4,7 +4,9 @@
 -- Terrarium: six creatures share the jar, two of each kind (the room's
 -- residents). Each has a mind (mind.lua) that wanders, grazes and rests by the
 -- jar's hour. In dev a selected one follows clicks instead. Each body gets
--- the nav graph of its own profile; bodies with the same one share it. Visual systems (flora, ambience, particles) step here too so that
+-- the nav graph of its nav profile (its size bucket's); bodies with the same
+-- one share it. Eggs laid in the jar hatch once their graph is built, a slice
+-- per step. Visual systems (flora, ambience, particles) step here too so that
 -- what you see is always in sync with the physics.
 
 local Level = require('jar.level')
@@ -78,33 +80,97 @@ function World.new(level_data, opts)
         self.genomes[i] = Genome.clamp(mine or (r.genome and Genome.copy(r.genome)) or Genome.random(r.key, rng.sim))
     end
 
-    local by_profile = {}
+    -- Terrarium: a graph is built from the body's nav profile (#16), so bodies
+    -- that share one (every worm, blobs of a size bucket, spiders of a reach
+    -- bucket) share a graph. The residents' are built whole as the jar opens;
+    -- a hatchling's is built a slice per step while its egg waits.
+    self.navs = {}     -- nav profile -> its graph, once built
+    self.building = {} -- builds under way, oldest first
+    self.eggs = {}     -- hatchlings waiting for their graph, in the order laid
     for i, r in ipairs(level_data.residents) do
-        local solid = self.level.by_id[r.solid]
-        local c = CLASS[r.key].new(r.x, solid.y, self, Genome.copy(self.genomes[i]))
-        c.key, c.name = r.key, r.name
-        c.mover.solid = solid
-        if c.profile.climbs then
-            c.solid = solid
-            c:plant_all()
-        end
-        self.creatures[i] = c
-        -- Terrarium: a graph is built from the body's profile, so bodies that
-        -- share one (worms for now, blobs of a size, spiders of a reach) share a graph
-        local graph = by_profile[c.profile]
-        if not graph then
-            graph = NavGraph.new(self.level, c.profile)
-            by_profile[c.profile] = graph
-            local tag = (c.profile.size and string.format(' (size %.3f)', c.profile.size))
-                or (c.profile.reach and string.format(' (reach %.3f)', c.profile.reach)) or ''
-            log.info('nav', '%s graph%s: %d nodes, %d edges', r.key, tag, #graph.nodes, graph.edge_count)
-        end
-        self.graph_of[r.key] = self.graph_of[r.key] or graph
-        self.graphs[i] = graph
-        self.controllers[i] = Controller.new(c, self.graphs[i])
-        self.minds[i] = Mind.new()
+        local nav = CLASS[r.key].nav_profile(self.genomes[i])
+        if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
+        self:place(r.key, self.genomes[i], r.x, r.solid, r.name)
     end
     return self
+end
+
+-- Work spent on hatchlings' graphs per step: about half a millisecond, so a clutch
+-- of sixteen never costs a frame. A full graph is roughly 200,000 units.
+World.BUILD_SLICE = 15000
+
+function World:built(key, nav, graph)
+    self.navs[nav] = graph
+    local tag = (nav.sizes and string.format(' (sizes %.3f-%.3f)', nav.sizes[1], nav.sizes[2]))
+        or (nav.reaches and string.format(' (reaches %.3f-%.3f)', nav.reaches[1], nav.reaches[2])) or ''
+    log.info('nav', '%s graph%s: %d nodes, %d edges', key, tag, #graph.nodes, graph.edge_count)
+end
+
+-- A creature from `genome`, standing at `x` on solid `solid_id`, with the
+-- graph of its nav profile (which must be built already)
+function World:place(key, genome, x, solid_id, name)
+    local i = #self.creatures + 1
+    local solid = self.level.by_id[solid_id]
+    local c = CLASS[key].new(x, solid.y, self, Genome.copy(genome))
+    c.key, c.name = key, name
+    c.home = {x = x, solid = solid_id}
+    c.mover.solid = solid
+    if c.profile.climbs then
+        c.solid = solid
+        c:plant_all()
+    end
+    local graph = assert(self.navs[c.nav], 'world: no graph built for this body')
+    self.creatures[i] = c
+    self.genomes[i] = Genome.copy(genome)
+    self.graph_of[key] = self.graph_of[key] or graph
+    self.graphs[i] = graph
+    self.controllers[i] = Controller.new(c, graph)
+    self.minds[i] = Mind.new()
+    return i
+end
+
+-- Terrarium: lay an egg at `x` on solid `solid_id`. It hatches on a later step,
+-- once the graph for its body is ready, and a whole clutch laid together
+-- shares the builds it needs. Returns the egg.
+function World:lay(genome, x, solid_id, name)
+    genome = Genome.clamp(Genome.copy(genome))
+    local key = genome.plan
+    local nav = CLASS[key].nav_profile(genome)
+    local egg = {key = key, genome = genome, x = x, solid = solid_id, name = name, nav = nav}
+    self.eggs[#self.eggs + 1] = egg
+    if not self.navs[nav] then
+        local queued = false
+        for _, b in ipairs(self.building) do queued = queued or b.nav == nav end
+        if not queued then
+            local b = NavGraph.builder(self.level, nav, World.BUILD_SLICE)
+            b.nav, b.key = nav, key
+            self.building[#self.building + 1] = b
+        end
+    end
+    return egg
+end
+
+-- One slice of the oldest build, then hatch every egg whose graph is ready
+function World:hatch()
+    local b = self.building[1]
+    if b then
+        local graph = b:step()
+        if graph then
+            table.remove(self.building, 1)
+            self:built(b.key, b.nav, graph)
+        end
+    end
+    if #self.eggs == 0 then return end
+    local waiting = {}
+    for _, egg in ipairs(self.eggs) do
+        if self.navs[egg.nav] then
+            egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name)
+            self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = self.level.by_id[egg.solid].y})
+        else
+            waiting[#waiting + 1] = egg
+        end
+    end
+    self.eggs = waiting
 end
 
 -- Terrarium: the jar's hour now
@@ -141,7 +207,7 @@ end
 
 function World:reset()
     for i, c in ipairs(self.creatures) do
-        local r = self.level.data.residents[i]
+        local r = c.home
         local solid = self.level.by_id[r.solid]
         c:reset(r.x, solid.y)
         c.mover.solid = solid
@@ -205,6 +271,7 @@ end
 function World:step(dt)
     self.time = self.time + dt
     local hour = self:hour()
+    self:hatch()
 
     for i, c in ipairs(self.creatures) do
         local ctrl, mind = self.controllers[i], self.minds[i]

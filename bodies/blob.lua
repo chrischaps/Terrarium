@@ -57,6 +57,29 @@ function Blob.profile_for(size)
     return p
 end
 
+-- Terrarium: the profile a blob's nav graph is built from (#16). Sizes come in
+-- Blob.BUCKETS stretches, and every blob in a stretch shares one graph, built
+-- for the most limited body in it: the clearance of the biggest (the widest
+-- radius, the tallest height) with the spring and step of the smallest. Every
+-- blob of the stretch can travel whatever that graph offers. A small body
+-- flies lower than a big one (its centre is a radius above its feet), so it
+-- can clip a lip the big one clears: `min_radius` has the graph check every
+-- radius in the stretch at once.
+Blob.BUCKETS = 8
+local navs = {}
+function Blob.nav_profile(genome)
+    local k, lo, hi = Genome.bucket('blob', 'size', genome and genome.size or 1, Blob.BUCKETS)
+    if navs[k] then return navs[k] end
+    local small, big = Blob.profile_for(lo), Blob.profile_for(hi)
+    local p = {}
+    for key, v in pairs(small) do p[key] = v end
+    p.size, p.sizes, p.bucket = nil, {lo, hi}, k
+    p.radius, p.height = big.radius, big.height
+    p.min_radius = small.radius
+    navs[k] = p
+    return p
+end
+
 local COLORS = {
     core    = {0.56, 0.92, 0.84, 0.86},
     rim     = {0.13, 0.46, 0.54, 0.95},
@@ -77,6 +100,7 @@ function Blob.new(x, y, world, genome)
     self.genome = genome
     self.size, self.R = size, R * size
     self.profile = Blob.profile_for(size)
+    self.nav = Blob.nav_profile(genome)
     self.edge_k = min(0.95, 0.8 * firm ^ 0.4)    -- how hard the skin holds its length
     self.area_k = min(1, 0.9 * firm ^ 0.5)       -- how hard it holds its volume
     self.sag = 260 / firm ^ 2                    -- a soft blob slumps into a dome

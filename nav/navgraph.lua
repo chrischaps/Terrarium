@@ -7,6 +7,8 @@
 --   step            - largest ledge it can walk up or down without jumping
 --   climbs          - spiders get nodes on walls and ceilings too
 --   span            - (climbers) the widest gap between solids its legs step across (Terrarium)
+--   min_radius      - (Terrarium) a size bucket's graph is shared by bodies of every
+--                     radius from this to `radius`, and every check covers them all
 --
 -- Edge types:
 --   walk  - along a surface (or a small step between surfaces)
@@ -31,13 +33,17 @@ local function dist(a, b)
     return sqrt(dx * dx + dy * dy)
 end
 
-function NavGraph.new(level, profile)
+local function blank(level, profile)
     local self = setmetatable({}, NavGraph)
     self.level = level
     self.profile = profile
     self.nodes = {}
     self.edge_count = 0
-    if profile.climbs then
+    return self
+end
+
+function NavGraph:build()
+    if self.profile.climbs then
         self:build_surface_nodes()
     else
         self:build_top_nodes()
@@ -45,6 +51,54 @@ function NavGraph.new(level, profile)
     self:build_ballistic_edges()
     self:keep_home() -- Terrarium
     return self
+end
+
+function NavGraph.new(level, profile)
+    return blank(level, profile):build()
+end
+
+-- Terrarium: a build a slice at a time (#16). A full graph takes several
+-- milliseconds, which is a dropped frame when a clutch hatches at once. A
+-- builder does `slice` units of work per :step() and returns the graph when
+-- it's done: a pair of nodes weighed for a step or a join is 1, a jump solved
+-- is JUMP_WORK, a node sorted by keep_home is NODE_WORK (a unit is about 60 ns
+-- on the machine that measured them). The units are counted, never timed, so a build finishes on
+-- the same sim step on every machine, and the graph is the one NavGraph.new makes.
+NavGraph.JUMP_WORK, NavGraph.NODE_WORK = 150, 80
+
+local Builder = {}
+Builder.__index = Builder
+
+function NavGraph.builder(level, profile, slice)
+    local graph = blank(level, profile)
+    graph.left = slice
+    local co = coroutine.create(function() graph:build() end)
+    return setmetatable({graph = graph, co = co, slice = slice, slices = 0}, Builder)
+end
+
+function Builder:step()
+    if self.done then return self.graph end
+    self.graph.left = self.slice
+    self.slices = self.slices + 1
+    local ok, err = coroutine.resume(self.co)
+    if not ok then error(err, 0) end
+    if coroutine.status(self.co) == 'dead' then
+        self.graph.left = nil
+        self.done, self.co = true, nil
+        return self.graph
+    end
+end
+
+-- Count `n` units of work; a builder's graph pauses here when its slice is spent
+function NavGraph:work(n)
+    local left = self.left
+    if not left then return end
+    left = left - n
+    if left <= 0 then
+        coroutine.yield()
+    else
+        self.left = left
+    end
 end
 
 -- Terrarium: keep only the largest set of nodes that can all reach each other.
@@ -60,6 +114,7 @@ function NavGraph:keep_home()
     local back = {}
     for i = 1, n do back[i] = {} end
     for _, a in ipairs(nodes) do
+        self:work(NavGraph.NODE_WORK)
         for _, e in ipairs(a.edges) do
             local list = back[e.to]
             list[#list + 1] = a.id
@@ -156,12 +211,22 @@ function NavGraph:connect(a, b, kind, cost, extra)
     return e
 end
 
+-- Terrarium: is a body's circle clear, for every body the graph is shared by?
+-- A body of radius r holds a circle of radius k*r centred a*r + b above
+-- (x, y). Over r from min_radius to radius, those all lie inside one circle
+-- about the middle radius's, a*(radius - min_radius)/2 wider than the biggest.
+function NavGraph:clear(x, y, a, b, k)
+    local p = self.profile
+    local r1, r0 = p.radius, p.min_radius or p.radius
+    local mid = (r0 + r1) / 2
+    return self.level:circle_clear(x, y - a * mid - b, k * r1 + a * (r1 - r0) / 2)
+end
+
 -- Can the body stand at (x, y) on a top surface?
 function NavGraph:fits(x, y)
-    local r = self.profile.radius
-    local level = self.level
-    return level:circle_clear(x, y - r - 1, r * 0.9)
-       and level:circle_clear(x, y - self.profile.height + r, r * 0.9)
+    local p = self.profile
+    return self:clear(x, y, 1, 1, 0.9)
+       and self:clear(x, y, p.height / p.radius - 1, 0, 0.9) -- (height scales with radius)
 end
 
 --------------------------------------------------------------------------------
@@ -208,11 +273,12 @@ function NavGraph:build_top_nodes()
 
     -- Small steps between neighbouring spans are walkable
     for _, a in ipairs(self.nodes) do
+        self:work(#self.nodes)
         for _, b in ipairs(self.nodes) do
             if a.span ~= b.span and abs(b.x - a.x) <= margin * 2 + 6
                and abs(b.y - a.y) <= p.step then
                 local mx, my = (a.x + b.x) / 2, math.min(a.y, b.y)
-                if self.level:circle_clear(mx, my - p.radius - 1, p.radius * 0.8) then
+                if self:clear(mx, my, 1, 1, 0.8) then
                     self:connect(a, b, 'walk', dist(a, b) + 4)
                 end
             end
@@ -302,6 +368,7 @@ function NavGraph:build_surface_nodes()
         return sqrt(gx * gx + gy * gy)
     end
     for _, a in ipairs(self.nodes) do
+        self:work(#self.nodes)
         for _, b in ipairs(self.nodes) do
             if a.solid ~= b.solid and abs(a.x - b.x) < near and abs(a.y - b.y) < near and gap(a.solid, b.solid) < span then
                 local d = dist(a, b)
@@ -344,9 +411,11 @@ function NavGraph:build_ballistic_edges()
     end
 
     for _, a in ipairs(tops) do
+        self:work(#tops)
         for _, b in ipairs(tops) do
             local dx, dy = b.x - a.x, b.y - a.y
             if a.solid ~= b.solid and abs(dx) <= MAX_JUMP_DX and not self:has_step(a, b) then
+                self:work(NavGraph.JUMP_WORK)
                 -- Jump: any standing node to any other surface
                 local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p, level) -- Terrarium: the lowest clear arc
                 if vx then
@@ -361,7 +430,7 @@ function NavGraph:build_ballistic_edges()
                         local ex = (dir > 0) and a.span.x1 or a.span.x0
                         local fx, fvy, ft = ballistics.solve_fall(ex, a.y, b.x, b.y, p)
                         if fx and fx * dir > 20
-                           and ballistics.arc_clear(level, ex, a.y, fx, 0, ft, p.radius) then
+                           and ballistics.arc_clear(level, ex, a.y, fx, 0, ft, p.radius, p.min_radius) then
                             self:connect(a, b, 'fall', dist(a, b) + 30,
                                 {vx = fx, vy = 0, t = ft, ex = ex, dir = dir})
                         end
