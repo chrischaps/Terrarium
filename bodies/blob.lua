@@ -13,9 +13,14 @@
 -- small one goes, and each size gets its own nav graph. `pressure` is how
 -- firmly it holds itself: a firm blob stays round and barely dents when it
 -- lands, a soft one sags into a dome, squashes flat and wobbles back.
+--
+-- Terrarium: coloured from its genes (#15, bodies/skin.lua): mint to sky, and
+-- glassy. Its markings ride the ring as it rolls, except a cap, which hangs
+-- on top like a jelly's bell.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
+local Skin = require('bodies.skin')
 local rng = require('core.rng')
 
 local Blob = {}
@@ -57,15 +62,10 @@ function Blob.profile_for(size)
     return p
 end
 
+-- Terrarium: the body's own colours come from its skin (Skin.of)
 local COLORS = {
-    core    = {0.56, 0.92, 0.84, 0.86},
-    rim     = {0.13, 0.46, 0.54, 0.95},
-    outline = {0.05, 0.20, 0.24, 1},
-    shine   = {1, 1, 1},
     eye     = {0.96, 1.00, 0.98},
     eye_far = {0.96, 1.00, 0.98},
-    pupil   = {0.04, 0.14, 0.16},
-    trail   = {0.55, 1.00, 0.88},
 }
 
 function Blob.new(x, y, world, genome)
@@ -86,7 +86,9 @@ function Blob.new(x, y, world, genome)
     self.recover = 7 * firm                      -- how fast it fills back out
     self.mover = Base.Mover.new(x, y, self.profile)
     self.face = Base.Face.new()
-    self.color_name = {0.55, 1, 0.88}
+    self.skin = Skin.of('blob', genome)
+    self.skin.eye, self.skin.eye_far = COLORS.eye, COLORS.eye_far
+    self.color_name = self.skin.name
     self.points = {}
     self.ax, self.ay = x, y
     self:layout(x, y)
@@ -308,9 +310,10 @@ function Blob:outline_points(steps)
 end
 
 function Blob:draw_trail()
+    local c = self.skin.trail
     for _, t in ipairs(self.trail) do
         local a = t.life * t.life
-        love.graphics.setColor(COLORS.trail[1], COLORS.trail[2], COLORS.trail[3], 0.22 * a)
+        love.graphics.setColor(c[1], c[2], c[3], 0.22 * a)
         love.graphics.ellipse('fill', t.x, t.y - 0.5, t.w, 1.6)
         love.graphics.setColor(1, 1, 1, 0.35 * a)
         love.graphics.ellipse('fill', t.x - 1, t.y - 1, t.w * 0.3, 0.6)
@@ -335,7 +338,9 @@ function Blob:draw(ctx)
     local sx, sy = (maxx - minx) / (2 * R), (maxy - miny) / (2 * R)
 
     -- Body fan: bright core offset toward the light, deep rim
-    local verts = {{cx + lx * 4 * k, cy + ly * 4 * k, 0, 0, COLORS.core[1], COLORS.core[2], COLORS.core[3], COLORS.core[4]}}
+    local sk, marks = self.skin, {} -- Terrarium: its colours, and what glows
+    local core, rimc, mark = sk.core, sk.rim, sk.mark
+    local verts = {{cx + lx * 4 * k, cy + ly * 4 * k, 0, 0, core[1], core[2], core[3], core[4]}}
     for i = 0, count do
         local k = (i % count) + 1
         local x, y = out[k * 2 - 1], out[k * 2]
@@ -343,7 +348,7 @@ function Blob:draw(ctx)
         local d = sqrt(nx * nx + ny * ny)
         if d > 0 then nx, ny = nx / d, ny / d end
         local rim = max(0, nx * lx + ny * ly)
-        local r, g, b, a = COLORS.rim[1], COLORS.rim[2], COLORS.rim[3], COLORS.rim[4]
+        local r, g, b, a = rimc[1], rimc[2], rimc[3], rimc[4]
         r, g, b = r + rim * 0.45, g + rim * 0.35, b + rim * 0.15
         verts[#verts + 1] = {x, y, 0, 0, r, g, b, a}
     end
@@ -352,7 +357,7 @@ function Blob:draw(ctx)
     end
     self.mesh:setVertices(verts)
 
-    love.graphics.setColor(COLORS.outline)
+    love.graphics.setColor(sk.outline)
     love.graphics.setLineWidth(2.2)
     love.graphics.setLineJoin('bevel')
     local loop = {}
@@ -364,11 +369,67 @@ function Blob:draw(ctx)
     love.graphics.setColor(1, 1, 1)
     love.graphics.draw(self.mesh)
 
+    -- Terrarium: markings. A cap hangs on top like a jelly's bell, down to a
+    -- scalloped hem; comb rows, spots and the inner ring ride the ring.
+    local pattern = sk.pattern
+    if pattern == 'capped' then
+        local top = cy - R * sy
+        local cap = {{cx, cy - R * 0.55 * sy, 0, 0, 1, 1, 1, 1}}
+        for i = 0, count do
+            local q = (i % count) + 1
+            local x = cx + (out[q * 2 - 1] - cx) * 0.9
+            local y = cy + (out[q * 2] - cy) * 0.9
+            local hem = cy + R * sy * (-0.08 + 0.07 * cos((x - cx) / (R * sx) * 3 * pi))
+            y = min(y, hem)
+            cap[#cap + 1] = {x, y, 0, 0, 1, 1, 1, 0.7 + 0.3 * max(0, min(1, (hem - y) / (hem - top)))}
+        end
+        if not self.glow_mesh or self.glow_mesh:getVertexCount() ~= #cap then
+            self.glow_mesh = love.graphics.newMesh(#cap, 'fan', 'stream')
+        end
+        self.glow_mesh:setVertices(cap)
+        love.graphics.setColor(mark)
+        love.graphics.draw(self.glow_mesh)
+        marks[#marks + 1] = {'mesh', self.glow_mesh}
+        marks[#marks + 1] = {'halo', cx, cy - R * 0.5 * sy, R * 1.6}
+    elseif pattern == 'banded' then
+        love.graphics.setColor(mark)
+        love.graphics.setLineWidth(1.8 * k)
+        for j = 0, 7 do
+            local a = self.rot + j * pi / 4
+            local ca, sa = cos(a) * R * sx, sin(a) * R * sy
+            local pts = {cx + ca * 0.32, cy + sa * 0.32, cx + ca * 0.82, cy + sa * 0.82}
+            love.graphics.line(pts)
+            marks[#marks + 1] = {'line', pts, 1.8 * k}
+        end
+        love.graphics.setLineWidth(1)
+    elseif pattern == 'spotted' then
+        love.graphics.setColor(mark)
+        for j = 1, 6 do
+            local a = self.rot + (j + Skin.hash(sk.seed, j) * 0.6) * pi / 3
+            local f = 0.3 + 0.42 * Skin.hash(j, sk.seed)
+            local x, y, r = cx + cos(a) * R * f * sx, cy + sin(a) * R * f * sy, (1.8 + 1.2 * Skin.hash(sk.seed, j + 9)) * k
+            love.graphics.circle('fill', x, y, r)
+            marks[#marks + 1] = {'disc', x, y, r}
+        end
+    elseif pattern == 'striped' then
+        local ring = {}
+        for i = 1, #loop, 2 do
+            ring[i], ring[i + 1] = cx + (loop[i] - cx) * 0.7, cy + (loop[i + 1] - cy) * 0.7
+        end
+        love.graphics.setColor(mark)
+        love.graphics.setLineWidth(2 * k)
+        love.graphics.line(ring)
+        love.graphics.setLineWidth(1)
+        marks[#marks + 1] = {'line', ring, 2 * k}
+    end
+    self.marks = marks
+
     -- Inner bubbles ride the rolling ring
+    local bub = sk.bubble
     for _, b in ipairs(self.bubbles) do
         local a = b.a + self.rot
         local bx, by = cx + cos(a) * R * b.f * sx, cy + sin(a) * R * b.f * sy
-        love.graphics.setColor(0.85, 1, 0.95, 0.35)
+        love.graphics.setColor(bub[1], bub[2], bub[3], 0.35)
         love.graphics.circle('line', bx, by, b.r)
         love.graphics.setColor(1, 1, 1, 0.4)
         love.graphics.circle('fill', bx - b.r * 0.3, by - b.r * 0.3, b.r * 0.3)
@@ -387,11 +448,11 @@ function Blob:draw(ctx)
     local ex = cx + (f * 3 + gx * 2) * k * sx
     local ey = cy - R * 0.28 * sy
     local sep = 6.5 * e * sx
-    Base.draw_eye(self.face, ex - sep, ey, 3.6 * e, sx, sy, COLORS, false)
-    Base.draw_eye(self.face, ex + sep, ey, 3.6 * e, sx, sy, COLORS, false)
+    Base.draw_eye(self.face, ex - sep, ey, 3.6 * e, sx, sy, sk, false)
+    Base.draw_eye(self.face, ex + sep, ey, 3.6 * e, sx, sy, sk, false)
     -- A small mouth that opens in the air
     local m = self.mover
-    love.graphics.setColor(COLORS.outline)
+    love.graphics.setColor(sk.outline)
     if m.state == 'air' then
         love.graphics.ellipse('fill', ex, ey + 7 * e * sy, 2.2 * e * sx, 2.6 * e * sy)
     else
@@ -399,6 +460,11 @@ function Blob:draw(ctx)
         love.graphics.arc('line', 'open', ex, ey + 4 * e * sy, 3 * e * sx, 0.5, pi - 0.5)
         love.graphics.setLineWidth(1)
     end
+end
+
+-- Terrarium: the markings, shining as the lamp dims (#15)
+function Blob:draw_emissive(ctx)
+    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light))
 end
 
 -- X-ray: the ring, its edge constraints and the pressure pushing outward

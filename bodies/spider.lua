@@ -14,8 +14,12 @@
 -- and with it the stride, the body's height, how far a foot looks for ground,
 -- and the gap between two solids it can step across (the profile's `span`,
 -- which its nav graph is built with).
+--
+-- Terrarium: coloured from its genes (#15, bodies/skin.lua): indigo to plum,
+-- and dark, with pale markings that glow at night.
 
 local Base = require('bodies.base')
+local Skin = require('bodies.skin')
 local fabrik = require('bodies.fabrik')
 local rng = require('core.rng')
 local Genome = require('genome')
@@ -95,14 +99,8 @@ local function layout(count, scale)
     return out
 end
 
+-- Terrarium: the body's own colours come from its skin (Skin.of)
 local COLORS = {
-    body     = {0.26, 0.17, 0.27},
-    body_hi  = {0.56, 0.38, 0.48},
-    mark     = {0.96, 0.62, 0.30},
-    leg      = {0.40, 0.27, 0.38},
-    leg_far  = {0.20, 0.14, 0.22},
-    joint    = {0.62, 0.42, 0.48},
-    outline  = {0.07, 0.04, 0.08, 1},
     eye      = {1.00, 0.80, 0.45},
 }
 
@@ -119,7 +117,9 @@ function Spider.new(x, y, world, genome)
     self.ride = RIDE * (0.6 + 0.4 * scale) -- long legs stand it taller
     self.step_dist = STEP_DIST * scale
     self.world = world
-    self.color_name = {1, 0.78, 0.5}
+    self.skin = Skin.of('spider', genome)
+    self.skin.eye = COLORS.eye
+    self.color_name = self.skin.name
     self.a = {x = x, y = y}                 -- anchor on the surface
     self.nx, self.ny = 0, -1                -- smoothed surface normal
     self.tnx, self.tny = 0, -1              -- target normal
@@ -552,12 +552,13 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 
-local function draw_leg(leg, far)
+-- Terrarium: a banded spider's near legs have the mark colour at each knee
+local function draw_leg(leg, far, sk, marks)
     local j = leg.chain.joints
     local widths = far and {1.8, 1.4, 0.9} or {2.6, 2.0, 1.2}
-    local col = far and COLORS.leg_far or COLORS.leg
+    local col = far and sk.leg_far or sk.leg
     for i = 1, #j - 1 do
-        love.graphics.setColor(COLORS.outline)
+        love.graphics.setColor(sk.outline)
         love.graphics.setLineWidth(widths[i] + 1.4)
         love.graphics.line(j[i].x, j[i].y, j[i + 1].x, j[i + 1].y)
     end
@@ -566,8 +567,18 @@ local function draw_leg(leg, far)
         love.graphics.setLineWidth(widths[i])
         love.graphics.line(j[i].x, j[i].y, j[i + 1].x, j[i + 1].y)
     end
-    if not far then
-        love.graphics.setColor(COLORS.joint[1], COLORS.joint[2], COLORS.joint[3], 0.8)
+    if not far and sk.pattern == 'banded' then
+        love.graphics.setColor(sk.mark)
+        for i = 2, #j - 1 do
+            local a, b, k = j[i - 1], j[i + 1], j[i]
+            local pts = {k.x + (a.x - k.x) * 0.25, k.y + (a.y - k.y) * 0.25, k.x, k.y,
+                         k.x + (b.x - k.x) * 0.25, k.y + (b.y - k.y) * 0.25}
+            love.graphics.setLineWidth(widths[i])
+            love.graphics.line(pts)
+            marks[#marks + 1] = {'line', pts, widths[i]}
+        end
+    elseif not far then
+        love.graphics.setColor(sk.joint[1], sk.joint[2], sk.joint[3], 0.8)
         love.graphics.circle('fill', j[2].x, j[2].y, 1.3)
         love.graphics.circle('fill', j[3].x, j[3].y, 0.9)
     end
@@ -580,9 +591,12 @@ function Spider:draw(ctx)
     local angle = atan2(ty, tx)
     local lx, ly = ctx.light_dir(bx, by)
     local breathe = 1 + 0.035 * sin(self.clock * 2.2)
+    local sk = self.skin
+    local pattern = sk.pattern
+    local marks, local_marks = {}, {} -- Terrarium: what glows, in the jar and in the body's frame
 
     for _, leg in ipairs(self.legs) do
-        if not leg.def.near then draw_leg(leg, true) end
+        if not leg.def.near then draw_leg(leg, true, sk, marks) end
     end
 
     love.graphics.push()
@@ -592,32 +606,67 @@ function Spider:draw(ctx)
     -- In the body's local frame: +x is forward, -y is "up" (the normal)
     -- Abdomen
     local ax, ay = -10, -3
-    love.graphics.setColor(COLORS.outline)
+    love.graphics.setColor(sk.outline)
     love.graphics.ellipse('fill', ax, ay, 11.5 * breathe, 9.2 * breathe)
-    love.graphics.setColor(COLORS.body)
+    love.graphics.setColor(sk.body)
     love.graphics.ellipse('fill', ax, ay, 10.3 * breathe, 8 * breathe)
     -- Lit side of the abdomen: offset toward the light in local space
     local llx = lx * cos(-angle) - ly * sin(-angle)
     local lly = (lx * sin(-angle) + ly * cos(-angle)) * self.facing
-    love.graphics.setColor(COLORS.body_hi[1], COLORS.body_hi[2], COLORS.body_hi[3], 0.85)
+    love.graphics.setColor(sk.body_hi[1], sk.body_hi[2], sk.body_hi[3], 0.85)
     love.graphics.ellipse('fill', ax + llx * 3, ay + lly * 3, 6.5 * breathe, 4.6 * breathe)
-    -- Markings: amber chevrons
-    love.graphics.setColor(COLORS.mark[1], COLORS.mark[2], COLORS.mark[3], 0.75)
-    love.graphics.setLineWidth(1.3)
-    for k = 0, 2 do
-        local cx = ax - 5 + k * 3.6
-        love.graphics.line(cx - 1.6, ay - 5.2 + k * 0.3, cx + 0.9, ay - 3.4, cx - 1.6, ay - 1.6 - k * 0.3)
+    -- Markings. Terrarium: Character's chevrons are the banded kind (#15).
+    love.graphics.setColor(sk.mark[1], sk.mark[2], sk.mark[3], 0.85)
+    if pattern == 'banded' then
+        love.graphics.setLineWidth(1.4)
+        for k = 0, 2 do
+            local cx = ax - 5 + k * 3.6
+            local pts = {cx - 1.6, ay - 5.2 + k * 0.3, cx + 0.9, ay - 3.4, cx - 1.6, ay - 1.6 - k * 0.3}
+            love.graphics.line(pts)
+            local_marks[#local_marks + 1] = {'line', pts, 1.4}
+        end
+    elseif pattern == 'spotted' then
+        -- pairs down the back, smaller toward the spinnerets
+        for k = 0, 2 do
+            local x = ax + 4 - k * 4.4
+            local r = (2.1 - k * 0.35) * breathe * (0.85 + 0.3 * Skin.hash(sk.seed, k))
+            for _, y in ipairs({ay - 5.6 + k * 0.7, ay - 1.6 + k * 0.2}) do
+                love.graphics.circle('fill', x, y, r)
+                local_marks[#local_marks + 1] = {'disc', x, y, r}
+            end
+        end
+    elseif pattern == 'striped' then
+        -- along the top of the abdomen, following its curve
+        local pts = {}
+        for k = 0, 8 do
+            local a = pi * (1.12 + 0.76 * k / 8)
+            pts[#pts + 1] = ax + cos(a) * 7.4 * breathe
+            pts[#pts + 1] = ay + sin(a) * 5.4 * breathe
+        end
+        love.graphics.setLineWidth(1.8)
+        love.graphics.line(pts)
+        local_marks[#local_marks + 1] = {'line', pts, 1.8}
     end
     love.graphics.setLineWidth(1)
-    -- Thorax / head
-    love.graphics.setColor(COLORS.outline)
+    -- Thorax / head. Terrarium: a capped spider's is the mark colour.
+    local capped = pattern == 'capped'
+    love.graphics.setColor(sk.outline)
     love.graphics.ellipse('fill', 4.5, -1, 7.4, 6)
-    love.graphics.setColor(COLORS.body)
+    love.graphics.setColor(capped and sk.mark or sk.body)
     love.graphics.ellipse('fill', 4.5, -1, 6.2, 4.9)
-    love.graphics.setColor(COLORS.body_hi[1], COLORS.body_hi[2], COLORS.body_hi[3], 0.7)
+    love.graphics.setColor(sk.body_hi[1], sk.body_hi[2], sk.body_hi[3], capped and 0.3 or 0.7)
     love.graphics.ellipse('fill', 4.5 + llx * 2, -1 + lly * 2, 3.4, 2.2)
+    if capped then local_marks[#local_marks + 1] = {'ellipse', 4.5, -1, 5.2, 4.0} end
+    if pattern == 'striped' then
+        local pts = {0, -4.4, 4.5, -5.2, 8.5, -4.2}
+        love.graphics.setColor(sk.mark[1], sk.mark[2], sk.mark[3], 0.85)
+        love.graphics.setLineWidth(1.6)
+        love.graphics.line(pts)
+        love.graphics.setLineWidth(1)
+        local_marks[#local_marks + 1] = {'line', pts, 1.6}
+    end
     -- Pedipalps
-    love.graphics.setColor(COLORS.leg)
+    love.graphics.setColor(sk.leg)
     love.graphics.setLineWidth(1.6)
     love.graphics.line(9.5, 1, 13, 3.5, 13.5, 5.5)
     love.graphics.line(9, 2.5, 11.5, 5, 11.5, 6.8)
@@ -635,12 +684,26 @@ function Spider:draw(ctx)
     love.graphics.pop()
 
     for _, leg in ipairs(self.legs) do
-        if leg.def.near then draw_leg(leg, false) end
+        if leg.def.near then draw_leg(leg, false, sk, marks) end
     end
+    self.marks, self.local_marks = marks, local_marks
+    self.mark_frame = {bx, by, angle, self.facing}
 end
 
--- Emissive bits drawn after lighting so they stay bright
-function Spider:draw_emissive()
+-- Emissive bits drawn after lighting so they stay bright.
+-- Terrarium: and the markings, shining as the lamp dims (#15)
+function Spider:draw_emissive(ctx)
+    local k = Skin.shine(self.skin, ctx and ctx.light)
+    local f = self.mark_frame
+    if k > 0.01 and f then
+        Skin.paint_glow(self.marks, self.skin, k)
+        love.graphics.push()
+        love.graphics.translate(f[1], f[2])
+        love.graphics.rotate(f[3])
+        love.graphics.scale(1, f[4])
+        Skin.paint_glow(self.local_marks, self.skin, k)
+        love.graphics.pop()
+    end
     local bx, by = self:body_center()
     local tx, ty, nx, ny = self:frame()
     local ex, ey = bx + tx * 8 + nx * 3.4, by + ty * 8 + ny * 3.4

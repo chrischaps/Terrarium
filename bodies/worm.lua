@@ -17,9 +17,13 @@
 -- own body it turns: the head rears a little and crawls back over its back,
 -- and the body follows it like a rope (its segments only pull, never push),
 -- so a fold runs down the body until the tail comes round behind.
+--
+-- Terrarium: coloured from its genes (#15, bodies/skin.lua): rose to apricot,
+-- with its markings in the skin's mark colour, glowing at night.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
+local Skin = require('bodies.skin')
 
 local Worm = {}
 Worm.__index = Worm
@@ -44,12 +48,10 @@ local STIFF = 0.55
 -- Terrarium: bunches along a worm of n segments while it crawls (10 -> 1, 24 -> 3)
 local function bunches(n) return 1 + (n - 10) / 7 end
 
+-- Terrarium: the body's own colours come from its skin (Skin.of); these are
+-- the lamp's light on it and its eyes
 local COLORS = {
-    back     = {0.78, 0.38, 0.40},
-    belly    = {1.00, 0.80, 0.66},
-    band     = {0.92, 0.42, 0.48},
     rim      = {1.00, 0.78, 0.48},
-    outline  = {0.16, 0.07, 0.11, 1},
     eye      = {1.00, 0.96, 0.88},
     eye_far  = {0.80, 0.72, 0.70},
     pupil    = {0.10, 0.05, 0.08},
@@ -61,9 +63,11 @@ function Worm.new(x, y, world, genome)
     self.profile = Worm.profile
     self.mover = Base.Mover.new(x, y, Worm.profile)
     self.face = Base.Face.new()
-    self.color_name = {0.98, 0.62, 0.55}
     -- Terrarium: the body from its genes
     if genome then Genome.clamp(genome) end
+    self.skin = Skin.of('worm', genome)
+    self.skin.rim, self.skin.eye, self.skin.eye_far, self.skin.pupil = COLORS.rim, COLORS.eye, COLORS.eye_far, COLORS.pupil
+    self.color_name = self.skin.name
     local n = genome and genome.segments or SEGMENTS
     local stiff = (genome and genome.stiffness or STIFF) / STIFF
     self.genome = genome
@@ -340,20 +344,41 @@ local function spine(points, radii, steps)
     return xs, ys, rs
 end
 
--- Shade a vertex on the body surface by which way its normal faces
-local function shade(nx, ny, lx, ly, band)
+-- Shade a vertex on the body surface by which way its normal faces.
+-- Terrarium: in the worm's own skin, with `w` of its mark colour laid over.
+local function shade(sk, nx, ny, lx, ly, band, w)
     local up = (-ny + 1) * 0.5                     -- 1 = faces sky, 0 = faces floor
-    local r, g, b = Base.mix(COLORS.belly, band and COLORS.band or COLORS.back, up ^ 0.8)
+    local r, g, b = Base.mix(sk.belly, band and sk.band or sk.back, up ^ 0.8)
+    if w and w > 0 then
+        local m = sk.mark
+        r, g, b = r + (m[1] - r) * w, g + (m[2] - g) * w, b + (m[3] - b) * w
+    end
     local rim = max(0, nx * lx + ny * ly)
     rim = rim * rim * 0.55
     return min(1, r + (COLORS.rim[1] - r) * rim), min(1, g + (COLORS.rim[2] - g) * rim),
            min(1, b + (COLORS.rim[3] - b) * rim)
 end
 
+local function clamp01(x) return x < 0 and 0 or (x > 1 and 1 or x) end
+
+-- Terrarium: how much of the mark colour the skin wears `t` segments back
+-- from the head, for the patterns laid into the body itself (#15). Bands are
+-- about a segment wide, two and a bit apart, and leave the clitellum bare.
+local function mark_at(pattern, t, band)
+    if pattern == 'capped' then return clamp01((2.2 - t) / 0.8) end
+    if pattern == 'banded' and not band and t > 1.6 then
+        local f = (t / 2.2) % 1
+        return clamp01((0.2 - abs(f - 0.5)) / 0.06 + 0.5)
+    end
+    return 0
+end
+
 function Worm:draw(ctx)
+    local sk = self.skin
     local xs, ys, rs = spine(self.points, self.radii, 4)
     local n = #xs
     local lx, ly = ctx.light_dir(xs[1], ys[1])
+    local marks = {} -- Terrarium: what glows, for draw_emissive
 
     -- Squash on landing: fatten the head end briefly
     local sq = self.squash
@@ -374,29 +399,34 @@ function Worm:draw(ctx)
     end
 
     -- Outline silhouette: a union of discs can't fold over itself
-    love.graphics.setColor(COLORS.outline)
+    love.graphics.setColor(sk.outline)
     for i = 1, n do
         love.graphics.circle('fill', xs[i], ys[i], rs[i] + 1.4)
     end
     -- Body underlay in the mid tone (covers any fold in the mesh's inner edge)
     for i = 1, n, 2 do
-        love.graphics.setColor(shade(0, 0.2, lx, ly, false))
+        love.graphics.setColor(shade(sk, 0, 0.2, lx, ly, false, mark_at(sk.pattern, (i - 1) / 4, false)))
         love.graphics.circle('fill', xs[i], ys[i], rs[i] * 0.98)
     end
 
     -- Body mesh: three vertices per sample (edge, spine, edge)
-    local verts = {}
+    local verts, glow = {}, {}
     local band_lo, band_hi = (self.band - 1) * 4, (self.band + 1) * 4
     for i = 1, n do
         local band = i >= band_lo and i <= band_hi
+        local w = mark_at(sk.pattern, (i - 1) / 4, band)
         local x, y, r = xs[i], ys[i], rs[i]
         local nx, ny = nxs[i], nys[i]
-        local ar, ag, ab = shade(nx, ny, lx, ly, band)
-        local cr, cg, cb = shade(0, -0.35, lx, ly, band)
-        local br, bg, bb = shade(-nx, -ny, lx, ly, band)
+        local ar, ag, ab = shade(sk, nx, ny, lx, ly, band, w)
+        local cr, cg, cb = shade(sk, 0, -0.35, lx, ly, band, w)
+        local br, bg, bb = shade(sk, -nx, -ny, lx, ly, band, w)
         verts[#verts + 1] = {x + nx * r, y + ny * r, 0, 0, ar, ag, ab, 1}
         verts[#verts + 1] = {x, y, 0, 0, cr * 1.04, cg * 1.04, cb * 1.04, 1}
         verts[#verts + 1] = {x - nx * r, y - ny * r, 0, 0, br, bg, bb, 1}
+        -- Terrarium: the same strip, lit only where it's marked, for the glow
+        glow[#glow + 1] = {x + nx * r * 0.8, y + ny * r * 0.8, 0, 0, 1, 1, 1, w * 0.4}
+        glow[#glow + 1] = {x, y, 0, 0, 1, 1, 1, w}
+        glow[#glow + 1] = {x - nx * r * 0.8, y - ny * r * 0.8, 0, 0, 1, 1, 1, w * 0.4}
     end
     local map = {}
     for i = 0, n - 2 do
@@ -412,24 +442,74 @@ function Worm:draw(ctx)
     end
     self.mesh:setVertices(verts)
     self.mesh:setVertexMap(map)
+    if sk.pattern == 'capped' or sk.pattern == 'banded' then
+        if not self.glow_mesh or self.glow_mesh:getVertexCount() ~= #glow then
+            self.glow_mesh = love.graphics.newMesh(#glow, 'triangles', 'stream')
+        end
+        self.glow_mesh:setVertices(glow)
+        self.glow_mesh:setVertexMap(map)
+        marks[#marks + 1] = {'mesh', self.glow_mesh}
+        -- and a soft light round each band, or round the head
+        local prev = 0
+        for i = 1, n do
+            local w = glow[i * 3 - 1][8]
+            if w >= 1 and prev < 1 then marks[#marks + 1] = {'halo', xs[i], ys[i], rs[i] * 3.5} end
+            prev = w
+        end
+    end
 
     -- Rounded caps (head and tail) in the edge colours, then the mesh over them
-    love.graphics.setColor(shade(-lx, -ly, lx, ly, false))
+    love.graphics.setColor(shade(sk, -lx, -ly, lx, ly, false))
     love.graphics.circle('fill', xs[n], ys[n], rs[n])
     love.graphics.setColor(1, 1, 1)
     love.graphics.draw(self.mesh)
 
     -- Head dome: radial shading
     local hr = rs[1]
+    local capped = sk.pattern == 'capped' and 1 or 0
     for k = 3, 1, -1 do
         local t = k / 3
-        local r, g, b = shade(-0.2 * t, -0.9 * t, lx, ly, false)
+        local r, g, b = shade(sk, -0.2 * t, -0.9 * t, lx, ly, false, capped)
         love.graphics.setColor(r, g, b)
         love.graphics.circle('fill', xs[1] + lx * (1 - t) * 1.5, ys[1] + ly * (1 - t) * 1.5 - (1 - t), hr * (0.55 + 0.45 * t))
     end
 
+    -- Terrarium: spots and the stripe run along the back, on whichever side
+    -- of the spine faces up
+    local function back(i, f)
+        local side = nys[i] < 0 and 1 or -1
+        return xs[i] + nxs[i] * side * rs[i] * f, ys[i] + nys[i] * side * rs[i] * f
+    end
+    if sk.pattern == 'spotted' then
+        love.graphics.setColor(sk.mark)
+        local j = 1
+        for seg = 1.3, self.n - 1.5, 1.4 do
+            local i = math.floor(seg * 4) + 1
+            local x, y = back(i, 0.3 + 0.3 * Skin.hash(sk.seed, j))
+            local r = rs[i] * (0.28 + 0.12 * Skin.hash(j, sk.seed))
+            love.graphics.circle('fill', x, y, r)
+            marks[#marks + 1] = {'disc', x, y, r}
+            j = j + 1
+        end
+    elseif sk.pattern == 'striped' then
+        local pts = {}
+        for i = 3, math.floor(n * 0.92) do
+            local x, y = back(i, 0.42)
+            pts[#pts + 1] = x
+            pts[#pts + 1] = y
+        end
+        if #pts >= 4 then
+            love.graphics.setColor(sk.mark)
+            love.graphics.setLineWidth(2.4)
+            love.graphics.setLineJoin('bevel')
+            love.graphics.line(pts)
+            love.graphics.setLineWidth(1)
+            marks[#marks + 1] = {'line', pts, 2.4}
+        end
+    end
+
     -- Segment rings
-    love.graphics.setColor(COLORS.outline[1], COLORS.outline[2], COLORS.outline[3], 0.22)
+    love.graphics.setColor(sk.outline[1], sk.outline[2], sk.outline[3], 0.22)
     love.graphics.setLineWidth(1)
     for i = 6, n - 2, 3 do
         local r = rs[i] * 0.9
@@ -456,8 +536,15 @@ function Worm:draw(ctx)
     local ux, uy = dy, -dx             -- perpendicular, pick the upward one
     if uy > 0 then ux, uy = -ux, -uy end
     local ex, ey = xs[1] + dx * hr * 0.35 + ux * hr * 0.42, ys[1] + dy * hr * 0.35 + uy * hr * 0.42
-    Base.draw_eye(self.face, ex - dx * 3.2 + ux * 0.8, ey - dy * 3.2 + uy * 0.8, 2.5, 1, 1, COLORS, true)
-    Base.draw_eye(self.face, ex, ey, 3.1, 1, 1 - sq * 0.3, COLORS, false)
+    Base.draw_eye(self.face, ex - dx * 3.2 + ux * 0.8, ey - dy * 3.2 + uy * 0.8, 2.5, 1, 1, sk, true)
+    Base.draw_eye(self.face, ex, ey, 3.1, 1, 1 - sq * 0.3, sk, false)
+
+    self.marks = marks
+end
+
+-- Terrarium: the markings, shining as the lamp dims (#15)
+function Worm:draw_emissive(ctx)
+    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light))
 end
 
 -- X-ray: the body as the simulation sees it (drawn additively, after lighting)

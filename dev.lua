@@ -494,6 +494,81 @@ end)
 -- its head near the glass and its tail out over the drop. A stiff one holds a
 -- line out over the air, a loose one drapes. Then each crawls along the soil,
 -- and the long one's body carries more bunches than the short one's.
+-- Colour (#15): the families never share a colour, the markings show against
+-- the skin, the glow is only there when the lamp dims, and every pattern on
+-- every plan draws (into the null renderer) without touching the sim.
+test('colour', function(j, results)
+    local Genome, Skin, colour = require('genome'), require('bodies.skin'), require('core.colour')
+    local DayCycle = require('jar.daycycle')
+    local statehash = require('core.statehash')
+
+    -- Each family's main colour across its whole hue gene
+    local STEPS = 40
+    local samples = {}
+    for _, key in ipairs(Genome.order) do
+        samples[key] = {}
+        local faint = math.huge
+        for i = 0, STEPS do
+            local sk = Skin.of(key, {plan = key, hue = i / STEPS, pattern = 1, glow = 0.5})
+            local c = sk[sk.main]
+            samples[key][#samples[key] + 1] = c
+            faint = math.min(faint, colour.distance(c[1], c[2], c[3], sk.mark[1], sk.mark[2], sk.mark[3]))
+        end
+        check(results, faint > 0.15, 'colour: a %s marking can be as close as %.3f to its skin', key, faint)
+    end
+    -- The nearest any two creatures of different families come, in OKLab. 0.02
+    -- is about the least you'd notice side by side; families should be far
+    -- clearer apart than that.
+    local nearest, pair = math.huge, ''
+    for a = 1, #Genome.order do
+        for b = a + 1, #Genome.order do
+            local ka, kb = Genome.order[a], Genome.order[b]
+            for _, ca in ipairs(samples[ka]) do
+                for _, cb in ipairs(samples[kb]) do
+                    local d = colour.distance(ca[1], ca[2], ca[3], cb[1], cb[2], cb[3])
+                    if d < nearest then nearest, pair = d, ka .. '/' .. kb end
+                end
+            end
+        end
+    end
+    log.info('selftest', 'colour       families at least %.3f apart (closest %s)', nearest, pair)
+    check(results, nearest > 0.2, 'colour: a %s pair are only %.3f apart', pair, nearest)
+
+    -- Glow: nothing under the lamp, all of it in the dark
+    local sk = Skin.of('worm', {plan = 'worm', hue = 0.5, pattern = 1, glow = 0.8})
+    for _, name in ipairs({'midday', 'morning', 'afternoon'}) do
+        local env = DayCycle.evaluate(DayCycle.presets[name])
+        check(results, Skin.shine(sk, env) == 0, 'colour: a worm glows %.2f at %s', Skin.shine(sk, env), name)
+    end
+    local night = Skin.shine(sk, DayCycle.evaluate(DayCycle.presets.night))
+    check(results, night > 0.7, 'colour: glow 0.8 shines only %.2f at night', night)
+
+    -- Every pattern on every plan draws, glows, and leaves the sim alone
+    local undrawn = {}
+    for p, pattern in ipairs(Skin.PATTERNS) do
+        local genomes = {}
+        for _, key in ipairs(Genome.order) do
+            local g = Genome.random(key, love.math.newRandomGenerator(p))
+            g.pattern = p
+            genomes[#genomes + 1] = g
+        end
+        rng.seed(15)
+        local w = j.World.new(j.level_data, {wander = false, selected = 0, genomes = genomes})
+        for _ = 1, 60 do w:step(j.fixed_dt) end
+        local before = statehash.of(w).total
+        local ctx = {light_dir = w.light_dir, light = {glow = 1}}
+        for _, key in ipairs(Genome.order) do
+            local c = w.creatures[w:first(key)]
+            c:draw(ctx)
+            c:draw_emissive(ctx)
+            local n = #(c.marks or {}) + #(c.local_marks or {})
+            if n == 0 then undrawn[#undrawn + 1] = key .. ' ' .. pattern end
+        end
+        check(results, statehash.of(w).total == before, 'colour: drawing %s creatures changed the state hash', pattern)
+    end
+    check(results, #undrawn == 0, 'colour: no markings drawn for %s', table.concat(undrawn, ', '))
+end)
+
 test('worm', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local SEG_LEN = 8.5
