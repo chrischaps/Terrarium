@@ -172,10 +172,10 @@ local function drawNav()
     end
 end
 
-local function drawCreatures(alpha)
+local function drawCreatures(alpha, light)
     -- Draw between the last two steps; the sim never sees the blended points
     world:interpolate(alpha)
-    local ctx = { light_dir = world.light_dir }
+    local ctx = { light_dir = world.light_dir, light = light }
     Render.useObject(C.PLANE_D)
     for _, c in ipairs(world.creatures) do
         if c.draw_trail then c:draw_trail() end
@@ -183,7 +183,7 @@ local function drawCreatures(alpha)
     for _, c in ipairs(world.creatures) do c:draw(ctx) end
     love.graphics.setShader()
     for _, c in ipairs(world.creatures) do
-        if c.draw_emissive then c:draw_emissive() end
+        if c.draw_emissive then c:draw_emissive(ctx) end
     end
     world:restore()
 end
@@ -227,7 +227,7 @@ local function drawScene(light)
     -- The creatures' plane, in level coordinates
     Tank.pushPlane()
     Scenery.draw(light, world.time)
-    drawCreatures(accumulator / STEP)
+    drawCreatures(accumulator / STEP, light)
     lantern:draw(light)
     if args.nav then drawNav() end
     love.graphics.pop()
