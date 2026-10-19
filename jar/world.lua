@@ -243,7 +243,8 @@ function World:interpolate(alpha)
     if not self.snap then return end
     self.saved = self.saved or {}
     for i, c in ipairs(self.creatures) do
-        local s, saved = self.snap[i], self.saved[i] or {}
+        -- Terrarium: one hatched in the last step has no snapshot yet; it's drawn where it is
+        local s, saved = self.snap[i] or {}, self.saved[i] or {}
         for k, p in ipairs(c:interp_points()) do
             local q = s[k]
             local v = saved[k] or {}
