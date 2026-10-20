@@ -1,5 +1,5 @@
 # The jar's self-checks on every push and PR: the randomness lint, the whole
-# self-test with no window, the replay hash compared across processes, and (on
+# self-test with no window, a month in ten jars (#27), the replay hash compared across processes, and (on
 # Linux, under xvfb) a windowed jar against a headless one. See tests/ci.sh.
 name: selftest
 
@@ -43,3 +43,14 @@ jobs:
 
       - name: Self-test
         run: sh tests/ci.sh
+
+      # The month's genes, day by day (#27): the first evidence of selection
+      - name: Keep the month's genes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: month-${{ matrix.os }}
+          path: |
+            ~/.local/share/love/terrarium/month_*.csv
+            ${{ env.APPDATA }}/LOVE/terrarium/month_*.csv
+          if-no-files-found: warn

@@ -113,7 +113,7 @@ end
 function love.load()
     rng.seed(args.seed or SEED)
     if args.selftest then
-        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed)
+        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day)
         if err then print('[selftest] ' .. err) end
         love.event.quit(ok and 0 or (err and 2 or 1))
         return
