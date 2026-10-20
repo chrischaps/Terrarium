@@ -13,7 +13,8 @@
 -- body that grows into its genome in three moults, one a sleep. Each lives
 -- three to five jar days (#24): an elder slows and its colours deepen, and at
 -- the end it dies in its sleep, fades into the moss where it lay, and leaves
--- that patch to grow back greener. A pinch of food dropped in (#25) falls
+-- that patch to grow back greener. A kind down to two is quietly spared
+-- (#26): it stops ageing and courts sooner until it has eggs in the moss. A pinch of food dropped in (#25) falls
 -- and settles here, and whoever is near comes over to it. The moss grid (jar/moss.lua) grows under
 -- the lamp and is grazed and trodden here. Visual systems (flora, ambience,
 -- particles) step here too so that what you see is always in sync with the
@@ -116,6 +117,7 @@ function World.new(level_data, opts)
         if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
         self:place(r.key, self.genomes[i], r.x, r.solid, r.name)
     end
+    self:census()
     return self
 end
 
@@ -160,7 +162,8 @@ function World:place(key, genome, x, solid_id, name, young)
     -- grown (a resident) has already lived some of its life.
     local day = self:day_length()
     local lived = young and 0 or day * rng.range(rng.sim, 0, World.LIVED)
-    self.lives[i] = {born = self.time - lived, span = day * rng.range(rng.sim, World.LIFE[1], World.LIFE[2])}
+    self.lives[i] = {born = self.time - lived, span = day * rng.range(rng.sim, World.LIFE[1], World.LIFE[2]), spared = 0}
+    self.minds[i].scarce = self.scarce and self.scarce[key]
     return i
 end
 
@@ -216,6 +219,26 @@ World.GRACE = 0.5     -- jar days past its time it waits to fall asleep before d
 World.FADE = 90       -- seconds it takes to settle into the moss and fade
 World.SPORES = 30     -- seconds the spores it gives up keep drifting after
 
+-- Terrarium: the floor (#26). A kind down to FLOOR, counting its eggs but not
+-- its dying, is scarce: its clock stops, so none of them dies, and its minds
+-- court sooner (Mind:ready). The other kinds' clutches leave RESERVE places
+-- in the jar for each scarce one's. It's never shown, and never told.
+World.FLOOR = 2
+World.RESERVE = 2
+
+-- Which kinds are scarce, into `self.scarce` and each mind's `scarce`
+function World:census()
+    local n = {}
+    for key in pairs(CLASS) do n[key] = 0 end
+    for i, c in ipairs(self.creatures) do
+        if not self.lives[i].dying then n[c.key] = n[c.key] + 1 end
+    end
+    for _, egg in ipairs(self.eggs) do n[egg.key] = n[egg.key] + 1 end
+    self.scarce = {}
+    for key, k in pairs(n) do self.scarce[key] = k <= World.FLOOR or nil end
+    for i, c in ipairs(self.creatures) do self.minds[i].scarce = self.scarce[c.key] end
+end
+
 function World:day_length()
     return self.day_seconds or C.DAY_SECONDS
 end
@@ -239,7 +262,11 @@ end
 -- A clutch from creatures `a` and `b`, laid near `a`. Returns the eggs.
 function World:clutch(a, b)
     local i, j = index_of(self.creatures, a), index_of(self.creatures, b)
+    self:census()
     local room = World.CAPACITY - #self.creatures - #self.eggs
+    for key in pairs(self.scarce) do
+        if key ~= a.key then room = room - World.RESERVE end
+    end
     if not (i and j) or room <= 0 then return {} end
     local x, y = a:anchor()
     local spot = nest(self.graphs[i], x, y)
@@ -320,35 +347,46 @@ function World:moult(i)
     self.events:emit('moulted', {who = c, stage = y.stage, grown = grown, x = x, y = ay})
 end
 
+-- Terrarium: when creature `i`'s time comes (later by the time it was spared, #26)
+function World:end_of(i)
+    local life = self.lives[i]
+    return life.born + life.spared + life.span
+end
+
 -- Terrarium: how far through its life creature `i` is (0 born, 1 its time),
 -- and how old (0 until it's an elder, 1 at the end)
 function World:age_of(i)
     local life = self.lives[i]
-    local t = (self.time - life.born) / life.span
+    local t = (self.time - life.born - life.spared) / life.span
     return t, math.max(0, math.min(1, (t - World.ELDER) / (1 - World.ELDER)))
 end
 
 -- Terrarium: a creature grows old (#24). An elder walks slower and its colours
 -- deepen. When its time has come its last bed is in the moss, and it dies in
 -- its sleep there (or, if it hasn't slept GRACE days on, wherever it settles),
--- and fades over FADE seconds before it's gone.
-function World:age(i)
+-- and fades over FADE seconds before it's gone. While its kind is scarce
+-- (#26) none of that time counts, and its time can't come.
+function World:age(i, dt)
     local life, c, m, ctrl = self.lives[i], self.creatures[i], self.minds[i], self.controllers[i]
     if life.dying then
         if self.time - life.dying >= World.FADE then self:return_to_moss(i) end
         return
     end
+    if self.scarce[c.key] then life.spared = life.spared + dt end
     local t, old = self:age_of(i)
     ctrl.pace = 1 - World.SLOW * old
     -- (its skin is redone in steps as it deepens, not every step)
     local shade = math.floor(old * 24) / 24
     if (c.skin.old or 0) ~= shade then c.skin = Skin.age(c.key, c.genome, c.skin, shade) end
-    if t < 1 then return end
+    if t < 1 or self.scarce[c.key] then
+        m.last = nil
+        return
+    end
     m.last = true
     local settled
     if c.profile.climbs then settled = c.mode == 'attached' else settled = c.mover.state == 'ground' end
     local asleep = m.doing == 'rest' and not ctrl:has_path()
-    if not (settled and (asleep or self.time > life.born + life.span + World.GRACE * self:day_length())) then return end
+    if not (settled and (asleep or self.time > self:end_of(i) + World.GRACE * self:day_length())) then return end
     life.dying = self.time
     local o = m.with and self.minds[m.with]
     if o and o.with == i then
@@ -360,6 +398,7 @@ function World:age(i)
     m:set('rest')
     ctrl:clear()
     if c.face then c.face.closing = true end
+    self:census() -- (so the last two of a kind outlive it)
     local x, y = c:anchor()
     self.events:emit('dying', {who = c, x = x, y = y})
 end
@@ -479,8 +518,9 @@ function World:reset()
         self.minds[i] = Mind.new(self.genomes[i])
         self.minds[i].young = self.young[i] and true or nil
         local life = self.lives[i] -- (an old one is no younger for it)
-        self.minds[i].last = self.time >= life.born + life.span or nil
+        self.minds[i].last = self.time >= self:end_of(i) and not self.scarce[c.key] or nil
         self.minds[i].dying = life.dying and true or nil
+        self.minds[i].scarce = self.scarce[c.key]
     end
 end
 
@@ -540,6 +580,7 @@ function World:step(dt)
     self.time = self.time + dt
     local hour = self:hour()
     self:hatch()
+    self:census() -- Terrarium: which kinds are down to two (#26)
     self.food:update(dt, self.time, self:day_length()) -- Terrarium: crumbs fall and settle (#25)
 
     for i, c in ipairs(self.creatures) do
@@ -576,7 +617,7 @@ function World:step(dt)
         if self.young[i] then self:moult(i) end
     end
     -- Terrarium: everyone ages, and the old die in their sleep (#24)
-    for i = #self.creatures, 1, -1 do self:age(i) end
+    for i = #self.creatures, 1, -1 do self:age(i, dt) end
     while self.remains[1] and self.time - self.remains[1].at > World.SPORES do table.remove(self.remains, 1) end
     Mind.meet(self) -- Terrarium: who has met whom, for courting (#22)
     self.moss:update(dt, DayCycle.lampAt(hour))

@@ -74,6 +74,10 @@ local COURT = {12, 18}        -- seconds a courtship lasts
 local REACH = 30              -- seconds it gives the walk over
 local BESIDE = 90             -- this near on arrival, they court
 local FREE = {idle = true, wander = true, follow = true} -- what a partner leaves off to court
+-- A kind the World has found down to two (`scarce`, #26) courts sooner: after
+-- one meeting, and it follows its own kind more often (as much more as it's
+-- unsociable, so a loner is still a loner)
+local SCARCE_MET = 1
 
 -- Treats
 local NOTICE = {240, 560}     -- how far off it notices crumbs, timid to bold
@@ -97,7 +101,8 @@ function Mind.new(genome)
         near = {},               -- creature index -> true while they're together
         wooed = false,           -- it has courted since it last slept
         passed = {},             -- crumb id -> true, for crumbs it can't get to
-        -- (the World sets `last` when its time has come, and `dying` as it fades, #24)
+        -- (the World sets `last` when its time has come, and `dying` as it fades, #24,
+        -- and `scarce` while its kind is down to two, #26)
         wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, treats = 0, -- what it's done, for the self-tests
     }, Mind)
     self.boldness = genome.boldness or 0.5
@@ -245,7 +250,7 @@ end
 
 -- Something to do by day: follow someone, or wander off
 function Mind:choose_errand(c, ctrl, graph, world, me)
-    if rng.sim:random() < FOLLOW * self.sociability * self.sociability then
+    if rng.sim:random() < FOLLOW * self.sociability * (self.scarce and 1 or self.sociability) then
         local j = companion(world, me)
         if j then
             self.with = j
@@ -303,7 +308,7 @@ end
 -- Whom it would court now: one of its kind it's met often, ready and free
 -- (the one it's met most, and of those the first)
 local function suitor(world, me)
-    local best, most = nil, MET - 1
+    local best, most = nil, (world.minds[me].scarce and SCARCE_MET or MET) - 1
     for j = 1, #world.minds do
         local n, o = world.minds[me].met[j] or 0, world.minds[j]
         if n > most and j ~= world.selected and o:ready() and FREE[o.doing] then best, most = j, n end

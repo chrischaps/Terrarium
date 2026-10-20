@@ -783,8 +783,14 @@ test('death', function(j, results)
                     'death: a resident born at %.0f s with %.2f days to live (seed %d)', life.born, life.span / DAY, seed)
             end
         end
-        -- One of each plan with a fifth of a short life left
+        -- One of each plan with a fifth of a short life left, and a third of
+        -- its kind beside it so the floor (#26) doesn't spare it
         local old, count = {}, 0
+        for _, key in ipairs({'worm', 'blob', 'spider'}) do
+            local i = w:first(key)
+            local r = w.creatures[i].home
+            w:lay(w.genomes[i], r.x + 40, r.solid)
+        end
         for _, key in ipairs({'worm', 'blob', 'spider'}) do
             local i = w:first(key)
             w.lives[i].span, w.lives[i].born = DAY, -0.8 * DAY
@@ -800,7 +806,7 @@ test('death', function(j, results)
                 local i = w:index_of(c)
                 local life = w.lives[i]
                 o.dying = w.time
-                o.asleep = w.time < life.born + life.span + World.GRACE * DAY
+                o.asleep = w.time < w:end_of(i) + World.GRACE * DAY
                 local on = c.profile.climbs and c.solid or c.mover.solid
                 o.moss = on and on.moss
             elseif ev.kind == 'returned' then
@@ -888,6 +894,111 @@ test('death', function(j, results)
             local again = run(seed, first.step)
             check(results, again == first.hash, 'death: two runs of seed %d differ after a death', seed)
         end
+    end
+end)
+
+-- Terrarium: 3c. The floor (#26). Every resident is brought to the end of its
+-- life, and with two of each kind, every kind is scarce: nobody dies, and each
+-- pair courts after a single meeting. A kind is never down to fewer than two,
+-- counting its eggs, and never empty of creatures while it has no eggs. Once a
+-- kind has eggs in the moss it isn't scarce, and its elders die as they would
+-- have; the last two of a kind outlive their time. Then a few ordinary jar
+-- days, where nothing is rigged, keep every kind and stay under CAPACITY.
+local FLOOR_DAYS = 6
+test('floor', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local DayCycle = require('jar.daycycle')
+    local SEEDS = j.seed and {j.seed} or {20261018, 3, 7}
+    local KEYS = {'worm', 'blob', 'spider'}
+
+    -- How many of each kind there are, counting eggs and not the dying, and
+    -- how many are creatures
+    local function counts(w)
+        local n, alive = {}, {}
+        for _, key in ipairs(KEYS) do n[key], alive[key] = 0, 0 end
+        for i, c in ipairs(w.creatures) do
+            alive[c.key] = alive[c.key] + 1
+            if not w.lives[i].dying then n[c.key] = n[c.key] + 1 end
+        end
+        for _, egg in ipairs(w.eggs) do n[egg.key] = n[egg.key] + 1 end
+        return n, alive
+    end
+    local function holds(w, n, alive, what, seed)
+        for _, key in ipairs(KEYS) do
+            if n[key] < World.FLOOR or (alive[key] == 0 and n[key] == 0) then
+                check(results, false, 'floor: %s, the %ss were down to %d (%d alive, seed %d, %.2f days)',
+                    what, key, n[key], alive[key], seed, w.time / DAY)
+                return false
+            end
+        end
+        return true
+    end
+
+    for _, seed in ipairs(SEEDS) do
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        for _, life in ipairs(w.lives) do life.span, life.born = DAY, -0.99 * DAY end
+        local residents = {}
+        for i, c in ipairs(w.creatures) do residents[c] = i end
+        local laid, died, outlived = {}, {}, {}
+        w.events:on(function(ev)
+            if ev.kind == 'laid' then
+                laid[ev.who.key] = laid[ev.who.key] or w.time
+            elseif ev.kind == 'dying' and residents[ev.who] then
+                local key = ev.who.key
+                check(results, laid[key] ~= nil, 'floor: a %s died before its kind had eggs (seed %d)', key, seed)
+                died[key] = (died[key] or 0) + 1
+            end
+        end)
+        local ok = true
+        for _ = 1, math.floor(2.5 * DAY / dt) do
+            w:step(dt)
+            local n, alive = counts(w)
+            ok = ok and holds(w, n, alive, 'scarce', seed)
+            for c in pairs(residents) do
+                local i = w:index_of(c)
+                if i and w.time > w.lives[i].born + w.lives[i].span then outlived[c.key] = true end
+            end
+        end
+        for _, key in ipairs(KEYS) do
+            check(results, outlived[key], 'floor: no %s outlived its time (seed %d)', key, seed)
+            check(results, laid[key] ~= nil, 'floor: the scarce %ss laid nothing in 2.5 days (seed %d)', key, seed)
+            if laid[key] then
+                check(results, (died[key] or 0) >= 1, 'floor: no %s elder died after its kind laid (seed %d)', key, seed)
+            end
+        end
+        log.info('selftest', 'floor seed %-9d laid at %.2f/%.2f/%.2f days (worm/blob/spider), %d/%d/%d elders gone',
+            seed, (laid.worm or -DAY) / DAY, (laid.blob or -DAY) / DAY, (laid.spider or -DAY) / DAY,
+            died.worm or 0, died.blob or 0, died.spider or 0)
+    end
+
+    -- An ordinary jar for a few days
+    local seed = SEEDS[1]
+    rng.seed(seed)
+    local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+    local most, fewest, deaths, births = 0, math.huge, 0, 0
+    w.events:on(function(ev)
+        if ev.kind == 'returned' then deaths = deaths + 1 elseif ev.kind == 'hatched' then births = births + 1 end
+    end)
+    local ok, every, by_key = true, math.floor(DAY / 4 / dt), {worm = {}, blob = {}, spider = {}}
+    for s = 1, math.floor(FLOOR_DAYS * DAY / dt) do
+        w:step(dt)
+        local n, alive = counts(w)
+        ok = ok and holds(w, n, alive, 'in an ordinary jar', seed)
+        most = math.max(most, #w.creatures + #w.eggs)
+        fewest = math.min(fewest, #w.creatures)
+        if s % every == 0 then
+            for _, key in ipairs(KEYS) do table.insert(by_key[key], n[key]) end
+        end
+    end
+    check(results, most <= World.CAPACITY, 'floor: the jar held %d', most)
+    check(results, deaths >= 1, 'floor: nobody died in %d days', FLOOR_DAYS)
+    local n = counts(w)
+    log.info('selftest', 'floor        %d days of seed %d: %d hatched, %d died, %d to %d in the jar, now %d/%d/%d',
+        FLOOR_DAYS, seed, births, deaths, fewest, most, n.worm, n.blob, n.spider)
+    -- (each kind, eggs and all, every quarter of a day)
+    for _, key in ipairs(KEYS) do
+        log.info('selftest', 'floor        %-7s %s', key .. 's', table.concat(by_key[key], ' '))
     end
 end)
 
