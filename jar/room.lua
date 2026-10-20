@@ -71,14 +71,28 @@ return {
     -- Decoration only: the water dish sunk into the soil under the twig
     water = {x0 = 686, x1 = 774, y = 560},
 
-    -- Terrarium: who lives here and where each starts (solid id, surface x).
-    -- The names are placeholders until naming (#29); a jar's own come from its book.
-    residents = {
-        {key = 'worm',   name = 'Loam',  solid = 'soil',  x = 160},
-        {key = 'worm',   name = 'Rill',  solid = 'arch',  x = 370},
-        {key = 'blob',   name = 'Dew',   solid = 'soil',  x = 960},
-        {key = 'blob',   name = 'Bead',  solid = 'cairn', x = 800},
-        {key = 'spider', name = 'Wick',  solid = 'soil',  x = 1860},
-        {key = 'spider', name = 'Tansy', solid = 'shelf', x = 1880},
+    -- Terrarium: a home for a pair of every kind, and where each starts (solid
+    -- id, and x along its top). A jar's cast (#74, World.cast_of) says which
+    -- pairs move in. The names are placeholders until naming (#29); a jar's own
+    -- come from its book.
+    --
+    -- The kinds still to come start where their bodies will want to: the
+    -- snail on the glass (`y` up its inner face) and in the soil under the
+    -- arch, the springtail in the soil and on the flat stone, and the moth
+    -- (`under`) beneath the shelf and the lid. Their issues (#76, #77, #78)
+    -- teach World:place those footings.
+    homes = {
+        {key = 'worm',       name = 'Loam',   solid = 'soil',    x = 160},
+        {key = 'worm',       name = 'Rill',   solid = 'arch',    x = 370},
+        {key = 'blob',       name = 'Dew',    solid = 'soil',    x = 960},
+        {key = 'blob',       name = 'Bead',   solid = 'cairn',   x = 800},
+        {key = 'spider',     name = 'Wick',   solid = 'soil',    x = 1860},
+        {key = 'spider',     name = 'Tansy',  solid = 'shelf',   x = 1880},
+        {key = 'springtail', name = 'Fleck',  solid = 'soil',    x = 1340},
+        {key = 'springtail', name = 'Pip',    solid = 'flat',    x = 1110},
+        {key = 'snail',      name = 'Whorl',  solid = 'glass_l', y = 470},
+        {key = 'snail',      name = 'Sorrel', solid = 'soil',    x = 400},
+        {key = 'moth',       name = 'Dusk',   solid = 'shelf',   x = 1820, under = true},
+        {key = 'moth',       name = 'Lumen',  solid = 'lid',     x = 1240, under = true},
     },
 }

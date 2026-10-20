@@ -55,7 +55,7 @@ local function lineup(seed)
             { id = 'lid', kind = 'ceiling', x = -60, y = -60, w = 2120, h = 92 },
             { id = 'soil', kind = 'floor', x = -60, y = 560, w = 2120, h = 280 },
         },
-        residents = {},
+        homes = {},
     }
     local genomes = {}
     for _, row in ipairs(ROWS) do
@@ -76,7 +76,7 @@ local function lineup(seed)
         for k, g in ipairs(row_genomes) do
             genomes[#genomes + 1] = g
             x = x + length(g)
-            table.insert(level.residents, {
+            table.insert(level.homes, {
                 key = row.plan, name = row.plan .. ' ' .. k, solid = id, genome = g, x = x,
             })
             x = x + gap
@@ -91,7 +91,7 @@ return {
         local level, genomes = lineup(seed)
         for _, g in ipairs(genomes) do print('[lineup] ' .. api.Genome.serialise(g)) end
         for _, shot in ipairs({ { 'midday', 'lineup_day.png' }, { 23, 'lineup_night.png' } }) do
-            api.open(seed, shot[1], level).wander = false
+            api.open(seed, shot[1], level, nil, api.Genome.order).wander = false -- (every plan, #74)
             api.step(3) -- long enough to settle onto the shelves
             api.save(api.render(W, H, { view = VIEW }), shot[2])
             api.yield()

@@ -24,7 +24,7 @@ local function clock(s) return string.format('%d:%02d', math.floor(s / 60), math
 
 return {run = function(api)
     local seed = api.args.seed or 20261018
-    local w = api.open(seed, OPEN, nil, DAY)
+    local w = api.open(seed, OPEN, nil, DAY, api.World.CLASSIC) -- (every scene's kind is in it, #74)
     local tape = Tape.new()
     local synth = Synth.new(tape)
     local first, courts, elder = {}, {}, nil
