@@ -109,8 +109,10 @@ end
 
 -- How bright the markings shine under `light` (DayCycle.env), 0..1. Eased,
 -- so a middling glow still shows across the jar.
-function Skin.shine(skin, light)
-    return skin.glow ^ 0.7 * (light and light.glow or 0)
+-- (and `flush`, 0..1, is how much a courting body's markings light up on
+-- the beat, by day or night, #22)
+function Skin.shine(skin, light, flush)
+    return skin.glow ^ 0.7 * math.max(light and light.glow or 0, 0.8 * (flush or 0))
 end
 
 --------------------------------------------------------------------------------
