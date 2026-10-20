@@ -76,11 +76,11 @@ return {
     -- pairs move in. The names are placeholders until naming (#29); a jar's own
     -- come from its book.
     --
-    -- The kinds still to come start where their bodies will want to: the
-    -- snail on the glass (`y` up its inner face) and in the soil under the
-    -- arch, the springtail in the soil and on the flat stone, and the moth
-    -- (`under`) beneath the shelf and the lid. Their issues (#76, #77, #78)
-    -- teach World:place those footings.
+    -- Each starts where its body wants to: the springtails in the soil and
+    -- on the flat stone, the snails in the soil under the arch and halfway up
+    -- the left-hand glass (`y` up its inner face, #77; the one on a top first,
+    -- so the self-test lays a snail's eggs by it), and the moth still to come
+    -- (`under`) beneath the shelf and the lid, which #78 teaches World:place.
     homes = {
         {key = 'worm',       name = 'Loam',   solid = 'soil',    x = 160},
         {key = 'worm',       name = 'Rill',   solid = 'arch',    x = 370},
@@ -90,8 +90,8 @@ return {
         {key = 'spider',     name = 'Tansy',  solid = 'shelf',   x = 1880},
         {key = 'springtail', name = 'Fleck',  solid = 'soil',    x = 1340},
         {key = 'springtail', name = 'Pip',    solid = 'flat',    x = 1110},
-        {key = 'snail',      name = 'Whorl',  solid = 'glass_l', y = 470},
         {key = 'snail',      name = 'Sorrel', solid = 'soil',    x = 400},
+        {key = 'snail',      name = 'Whorl',  solid = 'glass_l', y = 470},
         {key = 'moth',       name = 'Dusk',   solid = 'shelf',   x = 1820, under = true},
         {key = 'moth',       name = 'Lumen',  solid = 'lid',     x = 1240, under = true},
     },

@@ -34,8 +34,9 @@
 --
 -- A mind only picks goals. The controller walks the path and the body moves,
 -- so it can only ask for places its graph holds (the body never lies). It
--- reads nothing of a body but its anchor, whether it climbs, and (to stand
--- beside a partner) the surface it's on and its `court_gap`, and keeps
+-- reads nothing of a body but its anchor, whether it climbs, where its plan
+-- sleeps, and (to stand beside a partner) the surface it's on and its
+-- `court_gap`, and keeps
 -- only numbers (another creature is an index), so it runs the same over the
 -- anchors-only coarse step of catch-up (#31) as over the live one.
 
@@ -75,7 +76,8 @@ local PART = 140              -- and must be this far apart before they can meet
 local MET = 3                 -- meetings before a pair will court
 local FED = 0.5               -- hunger below this is fed enough to court
 local COURT = {12, 18}        -- seconds a courtship lasts
-local REACH = 30              -- seconds it gives the walk over
+local REACH = 30              -- seconds it gives the walk over (or, for a slow body, half as long
+                              -- again as the way should take, #77)
 local BESIDE = 90             -- this near on arrival, they court
 local FREE = {idle = true, wander = true, follow = true} -- what a partner leaves off to court
 -- A kind the World has found down to two (`scarce`, #26) courts sooner: after
@@ -134,13 +136,22 @@ function Mind:daring(kin)
     return (self.hunger >= DESPERATE or (kin and self.scarce and self.held)) and 1 or self.dare
 end
 
--- Somewhere this body can rest the night. Its `last` bed (#24) is in the moss,
--- for any body: a spider comes down off its ledge to lie on a mossy top.
-local function rest_spots(graph, climbs, last)
+-- Somewhere this body can rest the night: where its plan says its kind sleeps
+-- (its body module's `rest(node)`, #77: a snail seals itself in on the glass),
+-- or else under a ledge for a climber and in the moss for anyone else. Its
+-- `last` bed (#24) is in the moss, for any body: a spider comes down off its
+-- ledge to lie on a mossy top.
+local function rest_spots(graph, c, last, world)
+    local plan = world.class_of and world.class_of(c.key)
+    local beds = plan and plan.rest
     local pool = {}
     for _, n in ipairs(graph.nodes) do
         local ok
-        if climbs and not last then
+        if last then
+            ok = n.kind == 'top' and n.solid.moss
+        elseif beds then
+            ok = beds(n)
+        elseif c.profile.climbs then
             ok = n.kind == 'face' and n.ny > 0.5 and n.solid.kind == 'ledge'
         else
             ok = n.kind == 'top' and n.solid.moss
@@ -354,8 +365,9 @@ function Mind:court(ctrl, graph, world, me)
     local o = world.minds[j]
     world.controllers[j]:clear()
     self.with, o.with, self.lead = j, me, true
-    self:set('to_court', REACH)
-    o:set('await', REACH)
+    local reach = math.max(REACH, 1.5 * ctrl:eta())
+    self:set('to_court', reach)
+    o:set('await', reach)
     return true
 end
 
@@ -505,14 +517,16 @@ function Mind:update(dt, hour, world, me)
             end
         elseif arrived or doing == 'follow' or doing == 'to_court' or doing == 'to_treat' then
             -- Finish whatever trip it's on, then go to bed (or sleep where it is)
-            local beds = self:choose(self:near_home(rest_spots(graph, c.profile.climbs, self.last), c.home), others(world, me, true))
+            local beds = self:choose(self:near_home(rest_spots(graph, c, self.last, world), c.home), others(world, me, true))
             self:set(self:head(ctrl, beds, true) and 'to_rest' or 'rest')
             if self.doing == 'rest' then self.nights = self.nights + 1 end
         end
         return
     end
 
-    self.hunger = math.min(STARVING, self.hunger + dt / HUNGRY_AFTER)
+    -- (a slow plan's hunger rises slower, its body module's APPETITE, #77)
+    local plan = world.class_of and world.class_of(c.key)
+    self.hunger = math.min(STARVING, self.hunger + dt * (plan and plan.APPETITE or 1) / HUNGRY_AFTER)
     if CURIOUS[doing] and self:tempted(ctrl, graph, world, me) then return end
     if doing == 'rest' or doing == 'to_rest' then
         if arrived then self:set('idle', rng.range(rng.sim, 1, 4)) end

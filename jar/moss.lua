@@ -132,7 +132,9 @@ end
 function Moss:enrich(x0, x1, y)
     local s = self:beneath((x0 + x1) / 2, y)
     if not s then return end
-    local mid, half = (x0 + x1) / 2, max(4, (x1 - x0) / 2)
+    -- (Terrarium: the smallest body still richens the cell either side of it,
+    -- wherever it lies on them, #77)
+    local mid, half = (x0 + x1) / 2, max(s.w, (x1 - x0) / 2)
     for i = s.first, s.first + s.n - 1 do
         local d = abs(self.x[i] - mid) / half
         if d < 1.3 then
@@ -183,6 +185,7 @@ local BARE  = {0.29, 0.21, 0.13}
 local SHORT = {0.50, 0.49, 0.21}
 local LUSH  = {0.19, 0.39, 0.14}
 local RICH  = {0.13, 0.47, 0.13} -- where one returned to it
+Moss.LUSH, Moss.RICH = LUSH, RICH -- (Terrarium: for what grows over a snail's shell and its eggs, #77)
 
 local function tone(v)
     local a, b, t

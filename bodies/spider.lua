@@ -27,6 +27,7 @@
 -- pale; its legs lengthen in its sleep (Spider:grow).
 
 local Base = require('bodies.base')
+local Climb = require('bodies.climb')
 local Skin = require('bodies.skin')
 local fabrik = require('bodies.fabrik')
 local rng = require('core.rng')
@@ -226,12 +227,7 @@ function Spider:reset(x, y)
     self:plant_all()
 end
 
--- Body frame: tangent (along the surface, toward facing) and normal (up)
-function Spider:frame()
-    local nx, ny = self.nx, self.ny
-    local tx, ty = -ny * self.facing, nx * self.facing
-    return tx, ty, nx, ny
-end
+-- (its frame, tangent and normal, is Climb.frame)
 
 function Spider:body_center()
     local tx, ty, nx, ny = self:frame()
@@ -335,67 +331,10 @@ function Spider:light()
 end
 
 --------------------------------------------------------------------------------
--- Controller interface
+-- Controller interface: bodies/climb.lua's (Terrarium, #77), and plant_all above
 --------------------------------------------------------------------------------
 
-function Spider:ready() return self.mode == 'attached' end
-function Spider:airborne() return self.mode == 'air' end
-function Spider:support() return self.solid end
-function Spider:normal() return self.nx, self.ny end
-
--- Crawl straight toward a node; blends the normal across the move.
--- Returns true on arrival.
-function Spider:crawl_to(node, dt, speed_scale)
-    if self.mode ~= 'attached' then return false end
-    local dx, dy = node.x - self.a.x, node.y - self.a.y
-    local d = sqrt(dx * dx + dy * dy)
-    local speed = self.profile.crawl_speed * (speed_scale or 1) * self.gait -- Terrarium: held back by a straining leg
-    -- Terrarium: and careful round an edge, by how far it has yet to turn
-    local turn = 1 - (self.nx * node.nx + self.ny * node.ny)
-    speed = speed / (1 + 2.5 * max(0, turn))
-    -- Terrarium: and it gets going, rather than setting off at full speed
-    -- before its legs have
-    self.pace = self.pace + (speed - self.pace) * min(1, dt * 6)
-    self.crawled = true
-    local step = min(d, self.pace * dt)
-    if d > 0.5 then
-        self.a.x, self.a.y = self.a.x + dx / d * step, self.a.y + dy / d * step
-        -- Face along the direction of travel relative to the current normal
-        local along = dx * (-self.ny) + dy * self.nx
-        if abs(along) > 0.2 * d then self.facing = along > 0 and 1 or -1 end
-        self.speed = self.speed + (speed - self.speed) * min(1, dt * 8)
-    end
-    -- Normal eases toward the destination node's normal as we close in
-    local w = (d < 34) and (1 - d / 34) or 0
-    local nx = self.nx + (node.nx - self.nx) * w
-    local ny = self.ny + (node.ny - self.ny) * w
-    self.tnx, self.tny = nx, ny
-    self.solid = (d < 16) and node.solid or self.solid
-    if d <= 0.6 then
-        self.solid = node.solid
-        return true
-    end
-    return false
-end
-
-function Spider:halt(dt)
-    self.speed = self.speed * max(0, 1 - dt * 10)
-end
-
-function Spider:launch(vx, vy)
-    if self.mode ~= 'attached' then return false end
-    self.mover = Base.Mover.new(self.a.x, self.a.y, self.profile)
-    self.mover.solid = self.solid
-    self.mover:launch(vx, vy)
-    self.mode = 'anticipate'
-    if vx ~= 0 then self.facing = vx > 0 and 1 or -1 end
-    self.tnx, self.tny = 0, -1
-    return true
-end
-
-function Spider:steer(tx, ty, dt)
-    if self.mode == 'air' then self.mover:steer(tx, ty, dt) end
-end
+Climb.into(Spider)
 
 --------------------------------------------------------------------------------
 -- Simulation

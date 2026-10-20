@@ -123,7 +123,9 @@ end
 -- Terrarium: keep only the largest set of nodes that can all reach each other.
 -- Soil roofed over at both ends (under the arch, under the twig) can't be
 -- walked into or jumped out of, so a walker's graph drops it and never offers
--- it as a goal. A climber gets in over the walls, so its graph keeps it.
+-- it as a goal. A climber gets in over the walls where a roof leaves a way
+-- round (under the arch), but not under the twig: it lies flush on the stone
+-- and the cairn, so the dish beneath is shut in for everyone (#77).
 function NavGraph:keep_home()
     local nodes = self.nodes
     local n = #nodes
@@ -332,6 +334,20 @@ function NavGraph:exposed(x, y, nx, ny)
        and level:circle_clear(x + nx * (r + 2), y + ny * (r + 2), r * 0.7)
 end
 
+-- Terrarium: is the face between two neighbouring nodes of a solid's ring
+-- open all the way, a unit off it? (#77)
+function NavGraph:open_face(a, b)
+    local nx, ny = a.nx + b.nx, a.ny + b.ny
+    local d = sqrt(nx * nx + ny * ny)
+    nx, ny = nx / d, ny / d
+    local steps = math.max(2, math.ceil(dist(a, b) / 4))
+    for k = 1, steps - 1 do
+        local t = k / steps
+        if self.level:solid_at(a.x + (b.x - a.x) * t + nx, a.y + (b.y - a.y) * t + ny) then return false end
+    end
+    return true
+end
+
 function NavGraph:build_surface_nodes()
     local level = self.level
     local inv = 1 / sqrt(2)
@@ -368,7 +384,10 @@ function NavGraph:build_surface_nodes()
         local count = #ring
         for i = 1, count do
             local a, b = made[i], made[i % count + 1]
-            if a and b then
+            -- Terrarium: and only along open face (#77): a corner can be
+            -- clear when the face beside it is covered (the arch's lip), and
+            -- the way to the next node round would go through what covers it
+            if a and b and self:open_face(a, b) then
                 self:connect(a, b, 'crawl', dist(a, b))
                 self:connect(b, a, 'crawl', dist(a, b))
             end

@@ -283,6 +283,7 @@ local function drawCreatures(alpha, light)
         if c.draw_trail then c:draw_trail() end
     end
     Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
+    Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
     Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
     for i, c in ipairs(world.creatures) do

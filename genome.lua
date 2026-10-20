@@ -64,7 +64,15 @@ Genome.springtail = plan('springtail', {
     {name = 'antennae', real = {0.5, 1.5}},  -- times the standard antennae
 })
 
-Genome.order = {'worm', 'blob', 'spider', 'springtail'}
+-- (#77) A snail's `size` is how big it is and how fast it goes; `whorls` is
+-- how many turns its shell has, a hatchling's fewest.
+Genome.snail = plan('snail', {
+    {name = 'size', real = {0.7, 1.3}},      -- times the standard snail
+    {name = 'whorls', real = {2.0, 4.5}},    -- turns of its shell's spiral
+})
+
+-- (each new kind goes on the end, so the self-test's seeds for the others keep)
+Genome.order = {'worm', 'blob', 'spider', 'springtail', 'snail'}
 
 for _, key in ipairs(Genome.order) do
     local p = Genome[key]

@@ -136,8 +136,8 @@ local CLASSIC = require('jar.world').CLASSIC
 local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
 
 -- (and these casts, which between them hold every kind the classic one
--- doesn't: the gates a new kind has to pass run on them too, #76)
-local COVER = {{'worm', 'spider', 'springtail'}}
+-- doesn't: the gates a new kind has to pass run on them too, #76, #77)
+local COVER = {{'worm', 'spider', 'springtail'}, {'blob', 'spider', 'snail'}}
 
 -- A cast with `key` in it: the classic one if it has it, else the first in COVER
 local function cast_for(key)
@@ -1978,6 +1978,7 @@ end)
 test('spider', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local Spider = require('bodies.spider')
+    local NavGraph = require('nav.navgraph')
     local function spider(genome)
         rng.seed(14)
         local w = World.new(level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = {genome}})
@@ -2012,10 +2013,22 @@ test('spider', function(j, results)
             end
         end
         joins[#joins + 1] = n
-        -- (and a short reach still has all of the jar: solids that touch
-        -- join however far apart their nearest nodes are)
-        check(results, (w.graphs[i].dropped or 0) == 0, 'spider: at reach %.1f its graph seals off %d nodes', reach,
-            w.graphs[i].dropped or 0)
+        -- (and a short reach still has all of the jar but the dish under the
+        -- twig, which lies flush on the stone and cairn, #77: solids that
+        -- touch join however far apart their nearest nodes are)
+        local twig = w.level.by_id.twig
+        local keep_home = NavGraph.keep_home
+        NavGraph.keep_home = function() end
+        local whole = spider(string.format('spider legs=8 reach=%.1f', reach))
+        NavGraph.keep_home = keep_home
+        local under = 0
+        for _, node in ipairs(whole.graphs[i].nodes) do
+            -- (its floor, the walls of the stone and the cairn, and the twig's underside)
+            if node.x >= twig.x and node.x <= twig.x + twig.w and node.y >= twig.y + twig.h then under = under + 1 end
+        end
+        check(results, under > 0 and (w.graphs[i].dropped or 0) == under,
+            'spider: at reach %.1f its graph seals off %d nodes, and %d are under the twig', reach,
+            w.graphs[i].dropped or 0, under)
     end
     report[#report + 1] = string.format('joins %d/%d at reach 0.7/1.3', joins[1], joins[2])
     check(results, joins[2] > joins[1], 'spider: %d joins between solids at reach 0.7, %d at 1.3', joins[1], joins[2])
@@ -2255,6 +2268,216 @@ test('springtail', function(j, results)
     check(results, Springtail.new(100, 100).profile == Springtail.profile,
         'springtail: built without a genome, it is not the standard springtail')
     log.info('selftest', 'springtail   %s', table.concat(report, '; '))
+end)
+
+-- Terrarium: snails (#77). A snail never leaps: no graph of any size has a
+-- jump or a fall in it. An elder, at little more than half its pace, makes
+-- forty trips round the jar without once stalling. Through a jar's night it
+-- sleeps sealed in its shell (retracted at least RESTS of the time it rests),
+-- on the glass or under a ledge. As it goes it lays a ribbon of slime that
+-- dries and is gone in a few minutes, and that the state hash never sees.
+-- Something coming near makes it pull its eyes in, and after a while it looks
+-- again. Courting, a pair reach out until their heads meet, then rear up and
+-- sway, feelers touching on the beat. A hatchling is small, with fewer whorls
+-- than it will grow. And when one dies its shell stays in the moss for a jar
+-- day and more, and then it's grown over and gone.
+local RESTS = 0.9
+test('snail', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Pathfinder = require('nav.pathfinder')
+    local NavGraph = require('nav.navgraph')
+    local DayCycle = require('jar.daycycle')
+    local Genome = require('genome')
+    local statehash = require('core.statehash')
+    local Snail = class_of(World, 'snail')
+    local cast = cast_for('snail')
+    local function jar(seed, opts)
+        rng.seed(seed)
+        opts = opts or {}
+        opts.cast = opts.cast or cast
+        if opts.wander == nil then opts.wander = false end
+        opts.selected = opts.selected or 0
+        return World.new(level_data, opts)
+    end
+    local function snails(w)
+        local out = {}
+        for i, c in ipairs(w.creatures) do if c.key == 'snail' then out[#out + 1] = i end end
+        return out
+    end
+    local report = {}
+
+    -- No leaps, at any size
+    local level = require('jar.level').new(level_data)
+    local gene = Genome.snail.by_name.size.real
+    local leaps, seen = 0, {}
+    for k = 0, Snail.BUCKETS - 1 do
+        local nav = Snail.nav_profile({size = gene[1] + (gene[2] - gene[1]) * (k + 0.5) / Snail.BUCKETS})
+        if not seen[nav] then
+            seen[nav] = true
+            for _, n in ipairs(NavGraph.new(level, nav).nodes) do
+                for _, e in ipairs(n.edges) do
+                    if e.kind == 'jump' or e.kind == 'fall' then leaps = leaps + 1 end
+                end
+            end
+        end
+    end
+    check(results, leaps == 0, 'snail: %d leaps in its graphs', leaps)
+
+    -- An elder's trips
+    local w = jar(177)
+    local i = w:first('snail')
+    w:select(i)
+    local c, ctrl, g = w.creatures[i], w.controllers[i], w.graphs[i]
+    w.lives[i].born = w.time - 0.98 * w.lives[i].span
+    w:step(dt)
+    local pace = ctrl.pace
+    local gen = love.math.newRandomGenerator(577)
+    local ok, n_trips = 0, 0
+    for _ = 1, 40 do
+        local goal, start = g:random_node(gen), ctrl:start_node()
+        if goal and start and goal ~= start and Pathfinder.find(g, start, goal) then
+            n_trips = n_trips + 1
+            ctrl:go_to(goal)
+            local arrived = drive(w, ctrl, TRIP_SLACK[1] + TRIP_SLACK[2] * ctrl:eta(), dt)
+            local x, y = c:anchor()
+            if arrived and math.abs(x - goal.x) < 6 and math.abs(y - goal.y) < 6 then
+                ok = ok + 1
+            else
+                ctrl:clear()
+                c:reset(goal.x, goal.y)
+                c.solid, c.nx, c.ny, c.tnx, c.tny = goal.solid, goal.nx, goal.ny, goal.nx, goal.ny
+                c:plant_all()
+            end
+        end
+    end
+    report[#report + 1] = string.format('an elder at %.2f of its pace made %d/%d trips with %d repaths', pace, ok,
+        n_trips, ctrl.repaths)
+    check(results, pace < 0.65 and n_trips >= 30 and ok == n_trips and ctrl.repaths == 0,
+        'snail: an elder at %.2f of its pace made %d of %d trips, repathing %d times', pace, ok, n_trips, ctrl.repaths)
+    results.trips = (results.trips or 0) + n_trips
+
+    -- The slime it laid on the way, unhashed, and drying
+    local laid = #c.slime
+    local before = statehash.of(w).total
+    local kept = c.slime
+    c.slime = {}
+    local after = statehash.of(w).total
+    c.slime = kept
+    check(results, laid > 20 and before == after, 'snail: laid %d points of slime, and the hash %s it', laid,
+        before == after and 'skips' or 'sees')
+    w.minds[i].doing = 'rest'
+    for _ = 1, math.floor(250 / dt) do w:step(dt) end
+    check(results, #c.slime == 0, 'snail: %d points of slime still wet after 250 s', #c.slime)
+
+    -- A night in the jar: sealed in its shell asleep, on the glass or under a ledge
+    w = jar(20261018, {wander = true, hour = DayCycle.presets.evening, day = DAY})
+    local rested, sealed, bedded = 0, 0, 0
+    for _ = 1, math.floor(DAY * 0.6 / dt) do
+        w:step(dt)
+        for _, k in ipairs(snails(w)) do
+            local m, s = w.minds[k], w.creatures[k]
+            if m.doing == 'rest' then
+                rested = rested + 1
+                if s.retract >= 0.9 then sealed = sealed + 1 end
+                if s.ny > -0.5 then bedded = bedded + 1 end
+            end
+        end
+    end
+    report[#report + 1] = string.format('asleep %.0f s, sealed %.1f%% of it, %.0f%% of it on the glass or under a ledge',
+        rested * dt, sealed / math.max(1, rested) * 100, bedded / math.max(1, rested) * 100)
+    check(results, rested * dt > 200 and sealed >= RESTS * rested, 'snail: asleep %.0f s, sealed in its shell for %.0f s',
+        rested * dt, sealed * dt)
+    check(results, bedded >= 0.75 * rested, 'snail: slept on the glass or under a ledge %.0f%% of the time',
+        bedded / math.max(1, rested) * 100)
+
+    -- Startled: something comes near and it pulls its eyes in, and looks again later
+    w = jar(78)
+    local a, b = unpack(snails(w))
+    local sa, sb = w.creatures[a], w.creatures[b]
+    for _ = 1, math.floor(2 / dt) do w:step(dt) end
+    local withdrew = 0
+    w.events:on(function(ev) if ev.kind == 'withdraw' and ev.who == sa then withdrew = withdrew + 1 end end)
+    local other = w.creatures[w:first('blob')]
+    local hx = sa.foot[1].x
+    other:reset(hx + 20, sa.a.y)
+    other.mover.solid = sa.solid
+    for _ = 1, math.floor(0.6 / dt) do w:step(dt) end
+    local pulled = sa.stalks
+    for _ = 1, math.floor(6 / dt) do w:step(dt) end
+    check(results, withdrew == 1 and pulled < 0.2 and sa.stalks > 0.8,
+        'snail: startled %d times, its eyes in to %.2f, then out to %.2f', withdrew, pulled, sa.stalks)
+
+    -- Courting: heads meet, they rear up and sway, feelers touching on the beat
+    w = jar(22)
+    a, b = unpack(snails(w))
+    sa, sb = w.creatures[a], w.creatures[b]
+    local soil = w.level.by_id.soil
+    for k, s in ipairs({sa, sb}) do
+        s:reset(1000 + (k == 1 and -1 or 1) * (s.court_gap + 0.5), soil.y)
+        s.solid = soil
+        s:plant_all()
+    end
+    for _, pair in ipairs({{a, b}, {b, a}}) do
+        local m = w.minds[pair[1]]
+        m.doing, m.with, m.since = 'court', pair[2], w.time
+    end
+    local gap, rear, touch, low = math.huge, 0, 0, math.huge
+    for st = 1, math.floor(10 / dt) do
+        w:step(dt)
+        if st > 5 / dt then
+            gap = math.min(gap, math.sqrt((sa.foot[1].x - sb.foot[1].x) ^ 2 + (sa.foot[1].y - sb.foot[1].y) ^ 2))
+            rear, touch = math.max(rear, sa.rear), math.max(touch, sa.touch)
+            low = math.min(low, sa.rear)
+        end
+    end
+    report[#report + 1] = string.format('courting, heads %.1f apart, rearing %.1f to %.1f, feelers %.2f', gap, low, rear, touch)
+    check(results, gap < 6 and rear > 3 and rear - low > 2 and touch > 0.6,
+        'snail: courting, heads %.1f apart, rearing %.1f to %.1f, feelers touched %.2f', gap, low, rear, touch)
+
+    -- Its genes: a bigger snail is bigger and faster, more whorls coil tighter,
+    -- and a hatchling is small with few whorls
+    local small, big = Snail.profile_for(0.7), Snail.profile_for(1.3)
+    check(results, big.radius > small.radius and big.crawl_speed > small.crawl_speed,
+        'snail: size 1.3 has radius %.1f and speed %.1f, size 0.7 %.1f and %.1f', big.radius, big.crawl_speed,
+        small.radius, small.crawl_speed)
+    check(results, Snail.spiral(4.5).q > Snail.spiral(2).q + 0.2,
+        'snail: 4.5 whorls coil to %.2f a turn, 2 whorls to %.2f', Snail.spiral(4.5).q, Snail.spiral(2).q)
+    local grown = Genome.parse('snail size=1.2 whorls=4')
+    local young = Snail.new(100, 100, nil, Genome.young(grown, 0), 1)
+    check(results, young.size < 1.2 and young.whorls < 4 and young.skin.young == 1,
+        'snail: a hatchling is size %.2f with %.2f whorls', young.size, young.whorls)
+
+    -- Its death: the body goes, the shell stays for a jar day and more
+    w = jar(24, {day = DAY})
+    i = w:first('snail')
+    c = w.creatures[i]
+    -- (a third of its kind beside it, so the floor doesn't spare it)
+    w:lay(w.genomes[i], c.home.x + 40, c.home.solid)
+    while #w.eggs > 0 do w:step(dt) end
+    i = w:index_of(c)
+    w.lives[i].born = w.time - w.lives[i].span - 1
+    w.minds[i].doing = 'rest'
+    local left, sealed_at
+    w.events:on(function(ev)
+        if ev.kind == 'returned' and ev.who == c then
+            sealed_at = c.retract
+            for _, r in ipairs(w.remains) do if r.kept and r.at == w.time then left = r end end
+        end
+    end)
+    for _ = 1, math.floor((World.FADE + 10) / dt) do w:step(dt) end
+    local lasted, per = 0, math.floor(1 / dt + 0.5)
+    while left and lasted <= 3 * DAY do
+        local still = false
+        for _, r in ipairs(w.remains) do still = still or r == left end
+        if not still then break end
+        for _ = 1, per do w:step(dt) end
+        lasted = lasted + 1
+    end
+    report[#report + 1] = string.format('its shell lay in the moss %.2f days', lasted / DAY)
+    check(results, left ~= nil and lasted >= DAY and lasted <= 2 * DAY,
+        'snail: its shell lay in the moss %.2f days after it died', lasted / DAY)
+    check(results, sealed_at and sealed_at > 0.9, 'snail: it went back to the moss out of its shell (%.2f in)', sealed_at or -1)
+    log.info('selftest', 'snail        %s', table.concat(report, '; '))
 end)
 
 -- Terrarium: graphs by size bucket, built a slice at a time (#16). A bucket's

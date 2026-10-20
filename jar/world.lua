@@ -51,9 +51,14 @@ World.CREATURES = {
     {key = 'blob',   class = require('bodies.blob'),   grazes = true},
     {key = 'spider', class = require('bodies.spider'), grazes = true},
     {key = 'springtail', class = require('bodies.springtail'), grazes = true}, -- (#76)
+    {key = 'snail',  class = require('bodies.snail'),  grazes = true}, -- (#77)
 }
 local CLASS, GRAZES = {}, {}
 for _, def in ipairs(World.CREATURES) do CLASS[def.key], GRAZES[def.key] = def.class, def.grazes end
+
+-- Terrarium: the body module of kind `key` (#77: a mind asks it where its kind
+-- sleeps, and Remains how to draw what one left)
+function World.class_of(key) return CLASS[key] end
 
 -- Terrarium: a jar's cast (#74). The room has homes for a pair of every kind,
 -- and each jar is home to CAST of them, drawn from its seed. CAST is the
@@ -188,7 +193,9 @@ function World.new(level_data, opts)
     self.cast = assert(World.check_cast(level_data, opts.cast or World.cast_of(level_data, opts.seed or rng.jar)))
     local residents = World.residents(level_data, self.cast)
     for _, r in ipairs(residents) do
-        assert(r.x and not r.under, 'world: no ' .. r.key .. ' can start on a wall or under a ledge yet')
+        -- (a climber can start up a wall: `y` up its face, #77)
+        assert((r.x or (r.y and CLASS[r.key].profile.climbs)) and not r.under,
+            'world: no ' .. r.key .. ' can start there yet')
     end
     self.creatures, self.graphs, self.controllers = {}, {}, {}
     self.minds = {}
@@ -234,7 +241,7 @@ function World.new(level_data, opts)
     for i, r in ipairs(residents) do
         local nav = CLASS[r.key].nav_profile(self.genomes[i])
         if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
-        self:place(r.key, self.genomes[i], r.x, r.solid, r.name)
+        self:place(r.key, self.genomes[i], r.x, r.solid, r.name, nil, r.y)
     end
     self:census()
     return self
@@ -250,26 +257,39 @@ function World:built(key, nav, graph)
     log.info('nav', '%s graph%s: %d nodes, %d edges', key, tag, #graph.nodes, graph.edge_count)
 end
 
+-- Where a climber `y` up the face of `solid` that looks into the jar is
+-- (#77): that face's x, and its normal
+local function on_face(level, solid)
+    if solid.x + solid.w / 2 < level.width / 2 then return solid.x + solid.w, 1 end
+    return solid.x, -1
+end
+
 -- A creature from `genome`, standing at `x` on solid `solid_id`, with the
 -- graph of its nav profile (which must be built already). `young`, it's a
--- hatchling, with the body of its genome at nothing grown.
-function World:place(key, genome, x, solid_id, name, young)
+-- hatchling, with the body of its genome at nothing grown. Terrarium: with
+-- `y`, a climber starts that far up the face of the solid instead (#77).
+function World:place(key, genome, x, solid_id, name, young, y)
     local i = #self.creatures + 1
     local solid = self.level.by_id[solid_id]
     local body = young and Genome.young(genome, 0) or Genome.copy(genome)
+    local nx
+    if y then x, nx = on_face(self.level, solid) end
     local c
     if self.coarse then
-        c = Token.new(key, CLASS[key], x, solid.y, body, young and 1 or nil)
+        c = Token.new(key, CLASS[key], x, y or solid.y, body, young and 1 or nil)
     else
-        c = CLASS[key].new(x, solid.y, self, body, young and 1 or nil)
+        c = CLASS[key].new(x, y or solid.y, self, body, young and 1 or nil)
     end
     c.key, c.name = key, name
-    c.home = {x = x, solid = solid_id}
+    c.home = {x = x, solid = solid_id, y = y}
     -- (every body carries a Base.Mover, even a climber that only jumps with it, #73)
     assert(c.mover, 'world: a ' .. key .. ' has no mover')
     c.mover.solid = solid
     if c.profile.climbs then
         c.solid = solid
+        if nx then
+            if self.coarse then c:set(x, y, solid, nx, 0) else c.nx, c.ny, c.tnx, c.tny = nx, 0, nx, 0 end
+        end
         c:plant_all()
     end
     local graph = assert(self.navs[c.nav], 'world: no graph built for this body')
@@ -343,6 +363,7 @@ World.SLOW = 0.45     -- how much of its pace an elder has lost by the end
 World.GRACE = 0.5     -- jar days past its time it waits to fall asleep before dying awake
 World.FADE = 90       -- seconds it takes to settle into the moss and fade
 World.SPORES = 30     -- seconds the spores it gives up keep drifting after
+World.KEPT = 1.5      -- jar days what a body keeps (a snail's shell, #77) lies in the moss after
 
 -- Terrarium: the floor (#26). A kind down to FLOOR, counting its eggs but not
 -- its dying, is scarce: its clock stops, so none of them dies, and its minds
@@ -554,8 +575,11 @@ function World:return_to_moss(i)
     local s = self.moss:enrich(x0, x1, y)
     local x = (x0 + x1) / 2
     y = s and s.y or y
-    self.remains[#self.remains + 1] = {key = c.key, x = x, y = y, x0 = x0, x1 = x1, at = self.time,
-        born = self.lives[i].born, faded = World.FADE}
+    local r = {key = c.key, x = x, y = y, x0 = x0, x1 = x1, at = self.time, born = self.lives[i].born, faded = World.FADE}
+    -- (and what its body keeps stays in the moss a while, #77)
+    local kept = CLASS[c.key].keeps and not self.coarse and CLASS[c.key].keeps(c)
+    if kept then r.kept, r.keep = kept, World.KEPT * self:day_length() end
+    self.remains[#self.remains + 1] = r
     self:remove(i)
     self.events:emit('returned', {who = c, index = i, x = x, y = y})
 end
@@ -644,9 +668,16 @@ function World:reset()
     for i, c in ipairs(self.creatures) do
         local r = c.home
         local solid = self.level.by_id[r.solid]
-        c:reset(r.x, solid.y)
+        c:reset(r.x, r.y or solid.y)
         c.mover.solid = solid
-        if c.profile.climbs then c.solid = solid; c:plant_all() end
+        if c.profile.climbs then
+            c.solid = solid
+            if r.y then
+                local _, nx = on_face(self.level, solid)
+                c.nx, c.ny, c.tnx, c.tny = nx, 0, nx, 0
+            end
+            c:plant_all()
+        end
         self.controllers[i]:clear()
         self.minds[i] = Mind.new(self.genomes[i])
         self.minds[i].young = self.young[i] and true or nil
@@ -754,7 +785,11 @@ function World:step(dt)
     end
     -- Terrarium: everyone ages, and the old die in their sleep (#24)
     for i = #self.creatures, 1, -1 do self:age(i, dt) end
-    while self.remains[1] and self.time - self.remains[1].at > World.SPORES do table.remove(self.remains, 1) end
+    -- (the spores settle, and what a body kept is grown over, #77)
+    for k = #self.remains, 1, -1 do
+        local r = self.remains[k]
+        if self.time - r.at > (r.keep or World.SPORES) then table.remove(self.remains, k) end
+    end
     Mind.meet(self) -- Terrarium: who has met whom, for courting (#22)
     self.moss:update(dt, DayCycle.lampAt(hour))
     if self.flora then self.flora:update(dt, self:influencers(), self.time) end

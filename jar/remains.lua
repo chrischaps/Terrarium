@@ -7,6 +7,11 @@
 -- drifting up for a while after it's gone. What's left is in the moss
 -- itself: that patch grows back greener (Moss:enrich).
 --
+-- Terrarium: a body can keep a part of itself (#77): a snail's shell. Its
+-- body's `draw_kept` draws that as it is while the rest fades, and once it's
+-- gone the World keeps it in the moss (World.KEPT, its plan's `keeps`) and its
+-- plan's `draw_left` draws it there, the moss growing up over it.
+--
 -- Drawing only: it reads World.lives (through World:fading) and
 -- World.remains, and changes nothing but a dying body's skin (statehash
 -- skips `skin`).
@@ -30,6 +35,7 @@ local function smooth(t)
 end
 
 local canvas
+local kept_skins = setmetatable({}, {__mode = 'k'}) -- dying body -> its kept part's skin, barely earthed
 
 -- Draw creature `i` of `world` with its `method` (draw or draw_emissive,
 -- given `ctx`): as it is, or if it's dying, sunk, earthed and faded. `blend`
@@ -41,6 +47,22 @@ function Remains.through(world, i, method, ctx, blend)
     -- (its skin goes back to the moss in steps, not every frame)
     local earth = floor(smooth(f * 1.6) * 16) / 16
     if c.skin.earth ~= earth then c.skin = Skin.age(c.key, c.genome, c.skin, c.skin.old, earth) end
+
+    -- (what it keeps stays as it is, only just going to earth, and the rest
+    -- fades on top of it)
+    local keeps = method == 'draw' and c.draw_kept
+    if keeps then
+        local skin, kept = c.skin, kept_skins[c]
+        local e = floor(smooth(f) * 0.15 * 16) / 16
+        if not kept or kept.earth ~= e then
+            kept = Skin.age(c.key, c.genome, skin, skin.old, e)
+            kept_skins[c] = kept
+        end
+        c.skin = kept
+        c:draw_kept(ctx)
+        c.skin = skin
+        ctx.parted = true
+    end
 
     local target = love.graphics.getCanvas()
     local w, h
@@ -54,6 +76,7 @@ function Remains.through(world, i, method, ctx, blend)
     love.graphics.translate(0, SINK * smooth(f))
     c[method](c, ctx)
     love.graphics.pop()
+    ctx.parted = nil
     love.graphics.setCanvas(target)
 
     local a = 1 - smooth(f)
@@ -82,6 +105,17 @@ local function spores(x0, x1, y, seed, t, k)
             Render.drawBlob(x, sy, 4.5)
             love.graphics.setColor(SPORE[1], SPORE[2], SPORE[3], a)
             love.graphics.circle('fill', x, sy, 0.9)
+        end
+    end
+end
+
+-- What the dead kept, lying in the moss as it grows over them (#77), under
+-- the creatures' lighting
+function Remains.draw_left(world)
+    for _, r in ipairs(world.remains) do
+        local class = r.kept and world.class_of(r.key)
+        if class and class.draw_left then
+            class.draw_left(r, world, min(1, (world.time - r.at) / r.keep), world.light_dir)
         end
     end
 end

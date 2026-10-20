@@ -8,6 +8,8 @@
 --   spider  a sac of silk, with the spiderlings a faint stipple through it
 --   springtail  a little heap of glossy beads, each with a dark eye-spot
 --           showing as it ripens (#76)
+--   snail   a cluster of pearls half sunk in the moss, a speck of amber
+--           shell coiling in each as it ripens (#77)
 -- They sit pressed into the cushion of moss, and breathe a soft light that
 -- shows most at night and most of all in the eggs whose child will glow. In
 -- the last hours they tremble, and then there's an empty shell for a while.
@@ -22,7 +24,7 @@ local Eggs = {}
 
 local sin, cos, pi, max, min = math.sin, math.cos, math.pi, math.max, math.min
 
-local SIZE = {worm = {7.5, 5}, blob = {6.5, 6.5}, spider = {7.5, 6.5}, springtail = {6.5, 4.5}} -- half width, half height
+local SIZE = {worm = {7.5, 5}, blob = {6.5, 6.5}, spider = {7.5, 6.5}, springtail = {6.5, 4.5}, snail = {7, 4}} -- half width, half height
 local STIR = 0.85 -- of the way to hatching, it starts to tremble
 
 local function skin_of(e)
@@ -157,7 +159,45 @@ local function draw_springtail(e, skin, p, time, phase)
     end
 end
 
-local DRAW = {worm = draw_worm, blob = draw_blob, spider = draw_spider, springtail = draw_springtail}
+-- (where each pearl of a snail's clutch sits, and how big it is)
+local PEARLS = {{-4.4, 1.6, 1.8}, {-1.5, 2.0, 1.9}, {1.5, 1.9, 1.9}, {4.4, 1.7, 1.8}, {-3.0, -0.9, 1.8},
+    {0, -0.6, 1.9}, {3.0, -0.8, 1.75}, {-1.4, -3.0, 1.6}, {1.5, -2.9, 1.55}}
+local PEARL = {0.95, 0.93, 0.87}
+
+local function draw_snail(e, skin, p, time, phase, moss)
+    for k, b in ipairs(PEARLS) do
+        local x, y, r = b[1], b[2], b[3] * (0.92 + 0.16 * Skin.hash(phase, k))
+        set(skin.outline, 0.3)
+        love.graphics.circle('fill', x, y, r + 0.35)
+        set(PEARL, 0.95)
+        love.graphics.circle('fill', x, y, r)
+        -- the young one's shell, a speck of amber coiling as it ripens
+        local a = Skin.hash(k, phase) * 6.28
+        set(skin.whorl, 0.12 + 0.5 * p)
+        love.graphics.arc('line', 'open', x + 0.1, y + 0.15, r * (0.2 + 0.25 * p), a, a + 3 + 3 * p)
+        -- a pearl's sheen, rose on one side and green on the other
+        love.graphics.setColor(1, 0.86, 0.9, 0.35)
+        love.graphics.arc('fill', x, y, r * 0.85, 3.6, 4.5)
+        love.graphics.setColor(0.84, 1, 0.9, 0.3)
+        love.graphics.arc('fill', x, y, r * 0.85, 0.2, 1.1)
+        love.graphics.setColor(1, 1, 1, 0.8)
+        love.graphics.circle('fill', x - r * 0.35, y - r * 0.4, r * 0.24)
+    end
+    -- half sunk: the moss stands up in front of the lower row
+    if moss then
+        for k = 1, 11 do
+            local x = -6.5 + 13 * (k - 0.5) / 11 + (Skin.hash(phase, k + 20) - 0.5)
+            local tall = 2.2 + 1.8 * Skin.hash(k + 20, phase)
+            local c = Skin.hash(phase, k + 40) < 0.5 and moss.LUSH or moss.RICH
+            love.graphics.setColor(c[1], c[2], c[3], 0.95)
+            love.graphics.setLineWidth(1.1)
+            love.graphics.line(x, 4.4, x + (Skin.hash(k, 9) - 0.5) * 1.6, 4.4 - tall)
+        end
+        love.graphics.setLineWidth(1)
+    end
+end
+
+local DRAW = {worm = draw_worm, blob = draw_blob, spider = draw_spider, springtail = draw_springtail, snail = draw_snail}
 
 -- The clutches, under the creatures' lighting (in level units)
 function Eggs.draw(world, light)
@@ -173,7 +213,7 @@ function Eggs.draw(world, light)
             love.graphics.rotate(tilt + (Skin.hash(phase, 5) - 0.5) * 0.3)
             love.graphics.scale(k)
             love.graphics.translate(0, -SIZE[e.key][2])
-            DRAW[e.key](e, skin_of(e), p, time, phase)
+            DRAW[e.key](e, skin_of(e), p, time, phase, world.moss)
             love.graphics.pop()
         end
     end
