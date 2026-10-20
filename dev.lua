@@ -1617,16 +1617,29 @@ end)
 -- and the long one's body carries more bunches than the short one's.
 -- Colour (#15): the families never share a colour, the markings show against
 -- the skin, the glow is only there when the lamp dims, and every pattern on
--- every plan draws (into the null renderer) without touching the sim.
+-- every plan draws (into the null renderer) without touching the sim. Every
+-- family in Skin.families is compared (#75), so a palette can land before its
+-- body, and a moth's caterpillar wears colours nearer its parent's than any
+-- other family's.
 test('colour', function(j, results)
     local Genome, Skin, colour = require('genome'), require('bodies.skin'), require('core.colour')
     local DayCycle = require('jar.daycycle')
     local statehash = require('core.statehash')
 
-    -- Each family's main colour across its whole hue gene
+    -- Each family's main colour across its whole hue gene: the plans first,
+    -- then the families still waiting for their bodies
     local STEPS = 40
-    local samples = {}
+    local samples, families, listed = {}, {}, {}
     for _, key in ipairs(Genome.order) do
+        if Skin.families[key] then families[#families + 1], listed[key] = key, true end
+    end
+    local waiting = {}
+    for key in pairs(Skin.families) do
+        if not listed[key] then waiting[#waiting + 1] = key end
+    end
+    table.sort(waiting)
+    for _, key in ipairs(waiting) do families[#families + 1] = key end
+    for _, key in ipairs(families) do
         samples[key] = {}
         local faint = math.huge
         for i = 0, STEPS do
@@ -1639,11 +1652,14 @@ test('colour', function(j, results)
     end
     -- The nearest any two creatures of different families come, in OKLab. 0.02
     -- is about the least you'd notice side by side; families should be far
-    -- clearer apart than that.
+    -- clearer apart than that. Three families stood 0.2 apart; six can't
+    -- (with the first three fixed, the best a search found was 0.188), so the
+    -- bar is 0.18, and a body's shape now carries some of the difference.
+    local FAMILY_GAP = 0.18
     local nearest, pair = math.huge, ''
-    for a = 1, #Genome.order do
-        for b = a + 1, #Genome.order do
-            local ka, kb = Genome.order[a], Genome.order[b]
+    for a = 1, #families do
+        for b = a + 1, #families do
+            local ka, kb = families[a], families[b]
             for _, ca in ipairs(samples[ka]) do
                 for _, cb in ipairs(samples[kb]) do
                     local d = colour.distance(ca[1], ca[2], ca[3], cb[1], cb[2], cb[3])
@@ -1652,8 +1668,38 @@ test('colour', function(j, results)
             end
         end
     end
-    log.info('selftest', 'colour       families at least %.3f apart (closest %s)', nearest, pair)
-    check(results, nearest > 0.2, 'colour: a %s pair are only %.3f apart', pair, nearest)
+    log.info('selftest', 'colour       %d families at least %.3f apart (closest %s)', #families, nearest, pair)
+    check(results, nearest > FAMILY_GAP, 'colour: a %s pair are only %.3f apart', pair, nearest)
+
+    -- A larva (the moth's inchworm, #79) shows whose child it is: its
+    -- markings are nearer its own family's colours than any other's
+    for _, key in ipairs(families) do
+        if Skin.families[key].larva then
+            local strays = 0
+            for i = 0, STEPS do
+                local g = {plan = key, hue = i / STEPS, pattern = 1, glow = 0.5}
+                local m = Skin.larva(key, g).mark
+                local own = samples[key][i + 1]
+                local mine = colour.distance(m[1], m[2], m[3], own[1], own[2], own[3])
+                for _, other in ipairs(families) do
+                    if other ~= key then
+                        for _, c in ipairs(samples[other]) do
+                            if colour.distance(m[1], m[2], m[3], c[1], c[2], c[3]) < mine then
+                                strays = strays + 1
+                                break
+                            end
+                        end
+                    end
+                end
+                local sk = Skin.larva(key, g)
+                local c = sk[sk.main]
+                local d = colour.distance(c[1], c[2], c[3], m[1], m[2], m[3])
+                if d <= 0.15 then strays = strays + 1 end
+            end
+            check(results, strays == 0, 'colour: a %s larva looks more like another family %d times (or its markings fade)',
+                key, strays)
+        end
+    end
 
     -- Glow: nothing under the lamp, all of it in the dark
     local sk = Skin.of('worm', {plan = 'worm', hue = 0.5, pattern = 1, glow = 0.8})
