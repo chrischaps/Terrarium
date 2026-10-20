@@ -8,8 +8,10 @@
 -- selected one follows clicks instead. Each body gets
 -- the nav graph of its nav profile (its size bucket's); bodies with the same
 -- one share it. Eggs laid in the jar hatch once their graph is built, a slice
--- per step. The moss grid (jar/moss.lua) grows under the lamp and is grazed
--- and trodden here. Visual systems (flora, ambience, particles) step here too
+-- per step. A pair that has courted lays a clutch in the moss nearby (#23):
+-- each egg a child of the two, hatching about a day later as a small, pale
+-- body that grows into its genome in three moults, one a sleep. The moss
+-- grid (jar/moss.lua) grows under the lamp and is grazed and trodden here. Visual systems (flora, ambience, particles) step here too
 -- so that what you see is always in sync with the physics.
 
 local Level = require('jar.level')
@@ -19,6 +21,7 @@ local Mind = require('mind')
 local Moss = require('jar.moss')
 local DayCycle = require('jar.daycycle')
 local Genome = require('genome')
+local C = require('jar.config')
 local rng = require('core.rng')
 local log = require('core.log')
 
@@ -92,6 +95,12 @@ function World.new(level_data, opts)
     self.navs = {}     -- nav profile -> its graph, once built
     self.building = {} -- builds under way, oldest first
     self.eggs = {}     -- hatchlings waiting for their graph, in the order laid
+    self.young = {}    -- creature index -> how far a hatchling has grown, until it's grown
+    self.shells = {}   -- what's left of the eggs that hatched lately, until they fade
+    -- Terrarium: a pair that has courted lays a clutch (#23)
+    self.events:on(function(ev)
+        if ev.kind == 'courted' then self:clutch(ev.who, ev.with) end
+    end)
     for i, r in ipairs(level_data.residents) do
         local nav = CLASS[r.key].nav_profile(self.genomes[i])
         if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
@@ -112,11 +121,13 @@ function World:built(key, nav, graph)
 end
 
 -- A creature from `genome`, standing at `x` on solid `solid_id`, with the
--- graph of its nav profile (which must be built already)
-function World:place(key, genome, x, solid_id, name)
+-- graph of its nav profile (which must be built already). `young`, it's a
+-- hatchling, with the body of its genome at nothing grown.
+function World:place(key, genome, x, solid_id, name, young)
     local i = #self.creatures + 1
     local solid = self.level.by_id[solid_id]
-    local c = CLASS[key].new(x, solid.y, self, Genome.copy(genome))
+    local body = young and Genome.young(genome, 0) or Genome.copy(genome)
+    local c = CLASS[key].new(x, solid.y, self, body, young and 1 or nil)
     c.key, c.name = key, name
     c.home = {x = x, solid = solid_id}
     c.mover.solid = solid
@@ -131,20 +142,34 @@ function World:place(key, genome, x, solid_id, name)
     self.graphs[i] = graph
     self.controllers[i] = Controller.new(c, graph)
     self.minds[i] = Mind.new(genome)
+    if young then
+        self.young[i] = {stage = 0, born = self.time, nights = 0}
+        self.minds[i].young = true
+    end
     return i
 end
 
 -- Terrarium: lay an egg at `x` on solid `solid_id`. It hatches on a later step,
 -- once the graph for its body is ready, and a whole clutch laid together
 -- shares the builds it needs. Returns the egg.
-function World:lay(genome, x, solid_id, name)
+--
+-- With `opts.due`, it waits until the jar's clock reaches it as well; with
+-- `opts.young`, it hatches small (#23), and waits for the graph of every body
+-- it will grow through, so its graphs are built while it incubates and a
+-- moult never waits on one. `opts.parents` are the genomes it came from.
+function World:lay(genome, x, solid_id, name, opts)
+    opts = opts or {}
     genome = Genome.clamp(Genome.copy(genome))
     local key = genome.plan
-    local nav = CLASS[key].nav_profile(genome)
-    local egg = {key = key, genome = genome, x = x, solid = solid_id, name = name, nav = nav}
+    local navs = {}
+    for k = opts.young and 0 or World.STAGES, World.STAGES do
+        navs[#navs + 1] = CLASS[key].nav_profile(Genome.young(genome, k / World.STAGES))
+    end
+    local egg = {key = key, genome = genome, x = x, solid = solid_id, name = name, nav = navs[#navs], navs = navs,
+        laid = self.time, due = opts.due or self.time, young = opts.young, parents = opts.parents}
     self.eggs[#self.eggs + 1] = egg
-    if not self.navs[nav] then
-        local queued = false
+    for _, nav in ipairs(navs) do
+        local queued = self.navs[nav] ~= nil
         for _, b in ipairs(self.building) do queued = queued or b.nav == nav end
         if not queued then
             local b = NavGraph.builder(self.level, nav, World.BUILD_SLICE)
@@ -155,7 +180,63 @@ function World:lay(genome, x, solid_id, name)
     return egg
 end
 
--- One slice of the oldest build, then hatch every egg whose graph is ready
+-- Terrarium: clutches (#23). A pair lays one to three eggs, while the jar
+-- holds fewer than CAPACITY (counting the eggs already in it), in a row in
+-- the moss nearest where they courted. Each egg is a child of the two from
+-- Genome.child, and hatches about a jar day later.
+World.CAPACITY = 16
+World.CLUTCH = {1, 3}
+World.INCUBATE = {0.9, 1.1} -- jar days
+World.EGG_GAP = 16          -- between the eggs of a clutch
+World.STAGES = 3            -- moults from hatchling to grown
+World.GROW = 1.5            -- jar days from hatching to grown, at the soonest
+World.SHELL = 40            -- seconds an empty shell lies in the moss
+
+function World:day_length()
+    return self.day_seconds or C.DAY_SECONDS
+end
+
+local function index_of(list, v)
+    for i, x in ipairs(list) do if x == v then return i end end
+end
+
+-- The mossy top nearest (x, y) that `graph` stands on
+local function nest(graph, x, y)
+    local best, best_d
+    for _, n in ipairs(graph.nodes) do
+        if n.kind == 'top' and n.solid.moss then
+            local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+            if not best_d or d < best_d then best, best_d = n, d end
+        end
+    end
+    return best
+end
+
+-- A clutch from creatures `a` and `b`, laid near `a`. Returns the eggs.
+function World:clutch(a, b)
+    local i, j = index_of(self.creatures, a), index_of(self.creatures, b)
+    local room = World.CAPACITY - #self.creatures - #self.eggs
+    if not (i and j) or room <= 0 then return {} end
+    local x, y = a:anchor()
+    local spot = nest(self.graphs[i], x, y)
+    if not spot then return {} end
+    local count = math.min(room, rng.sim:random(World.CLUTCH[1], World.CLUTCH[2]))
+    local s, day = spot.solid, self:day_length()
+    local lo, hi = s.x + 12, s.x + s.w - 12
+    local first = math.max(lo, math.min(hi - (count - 1) * World.EGG_GAP, spot.x - (count - 1) * World.EGG_GAP / 2))
+    local eggs = {}
+    for k = 1, count do
+        local child = Genome.child(self.genomes[i], self.genomes[j], rng.sim)
+        local due = self.time + day * rng.range(rng.sim, World.INCUBATE[1], World.INCUBATE[2])
+        eggs[k] = self:lay(child, first + (k - 1) * World.EGG_GAP, s.id, nil,
+            {due = due, young = true, parents = {Genome.copy(self.genomes[i]), Genome.copy(self.genomes[j])}})
+    end
+    self.events:emit('laid', {who = a, with = b, eggs = eggs, x = spot.x, y = spot.y})
+    return eggs
+end
+
+-- One slice of the oldest build, then hatch every egg that's due and whose
+-- graphs are ready
 function World:hatch()
     local b = self.building[1]
     if b then
@@ -165,17 +246,54 @@ function World:hatch()
             self:built(b.key, b.nav, graph)
         end
     end
+    while self.shells[1] and self.time - self.shells[1].at > World.SHELL do table.remove(self.shells, 1) end
     if #self.eggs == 0 then return end
     local waiting = {}
     for _, egg in ipairs(self.eggs) do
-        if self.navs[egg.nav] then
-            egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name)
-            self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = self.level.by_id[egg.solid].y})
+        local ready = self.time >= egg.due
+        for _, nav in ipairs(egg.navs) do ready = ready and self.navs[nav] ~= nil end
+        if ready then
+            egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name, egg.young)
+            local y = self.level.by_id[egg.solid].y
+            self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = y})
+            if egg.young then
+                self.shells[#self.shells + 1] = {key = egg.key, genome = egg.genome, x = egg.x, y = y, at = self.time}
+            end
         else
             waiting[#waiting + 1] = egg
         end
     end
     self.eggs = waiting
+end
+
+-- Terrarium: a hatchling grows in its sleep (#23). Once it has slept since
+-- its last moult, and it's old enough for the next (a stage every GROW /
+-- STAGES of a jar day), it grows a third of the way more toward its genome
+-- where it lies, and takes the graph of its new body. The last moult leaves
+-- it grown: full-sized, its own colours, and ready to court.
+function World:moult(i)
+    local y, c, m = self.young[i], self.creatures[i], self.minds[i]
+    if m.doing ~= 'rest' or m.nights <= y.nights or self.controllers[i]:has_path() then return end
+    if c.profile.climbs then
+        if c.mode ~= 'attached' then return end
+    elseif c.mover.state ~= 'ground' then
+        return
+    end
+    local due = math.floor(World.STAGES * (self.time - y.born) / (World.GROW * self:day_length()))
+    if y.stage >= math.min(due, World.STAGES) then return end
+    y.stage, y.nights = y.stage + 1, m.nights
+    local grown = y.stage / World.STAGES
+    c:grow(Genome.young(self.genomes[i], grown), 1 - grown)
+    local graph = assert(self.navs[c.nav], 'world: no graph built for a moult')
+    if graph ~= self.graphs[i] then
+        self.graphs[i] = graph
+        self.controllers[i] = Controller.new(c, graph)
+    end
+    if y.stage == World.STAGES then
+        self.young[i], m.young = nil, nil
+    end
+    local x, ay = c:anchor()
+    self.events:emit('moulted', {who = c, stage = y.stage, grown = grown, x = x, y = ay})
 end
 
 -- Terrarium: the jar's hour now
@@ -219,6 +337,7 @@ function World:reset()
         if c.profile.climbs then c.solid = solid; c:plant_all() end
         self.controllers[i]:clear()
         self.minds[i] = Mind.new(self.genomes[i])
+        self.minds[i].young = self.young[i] and true or nil
     end
 end
 
@@ -307,6 +426,10 @@ function World:step(dt)
         end
     end
 
+    -- Terrarium: hatchlings grow in their sleep (#23)
+    for i = 1, #self.creatures do
+        if self.young[i] then self:moult(i) end
+    end
     Mind.meet(self) -- Terrarium: who has met whom, for courting (#22)
     self.moss:update(dt, DayCycle.lampAt(hour))
     if self.flora then self.flora:update(dt, self:influencers(), self.time) end

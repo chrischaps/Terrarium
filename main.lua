@@ -35,6 +35,7 @@ local Plants = require('jar.plants')
 local Motes = require('jar.motes')
 local Scenery = require('jar.scenery')
 local Moss = require('jar.moss')
+local Eggs = require('jar.eggs')
 local Condensation = require('jar.condensation')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
@@ -249,8 +250,10 @@ local function drawCreatures(alpha, light)
     for _, c in ipairs(world.creatures) do
         if c.draw_trail then c:draw_trail() end
     end
+    Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
     for _, c in ipairs(world.creatures) do c:draw(ctx) end
     love.graphics.setShader()
+    Eggs.draw_emissive(world, light)
     for _, c in ipairs(world.creatures) do
         if c.draw_emissive then c:draw_emissive(ctx) end
     end
@@ -350,9 +353,10 @@ function scriptApi()
 
     -- Open a jar from `seed` at `hour` (a number or a preset name such as
     -- 'midday'), in the jar's room or in `level`. Its composition is the seed's.
-    function api.open(seed, hour, level)
+    -- Terrarium: `day` compresses its day to that many seconds, as --day does.
+    function api.open(seed, hour, level, day)
         startHour = DayCycle.parseHour(hour) or DayCycle.presets.midday
-        daySeconds = C.DAY_SECONDS
+        daySeconds = day or C.DAY_SECONDS
         world = openJar(seed, startHour, daySeconds, level)
         furnish()
         accumulator = 0

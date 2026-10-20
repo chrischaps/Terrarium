@@ -276,9 +276,10 @@ function Mind.meet(world)
     end
 end
 
--- Fed, and it hasn't courted since it last slept
+-- Fed, grown (a hatchling is `young` until its last moult, #23), and it
+-- hasn't courted since it last slept
 function Mind:ready()
-    return self.hunger < FED and not self.wooed
+    return self.hunger < FED and not self.wooed and not self.young
 end
 
 -- Whom it would court now: one of its kind it's met often, ready and free
