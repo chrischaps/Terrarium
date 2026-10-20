@@ -5,16 +5,22 @@
 #   LOVE=... WINDOW="xvfb-run -a" sh tests/ci.sh       (also check a windowed jar)
 #
 # 1. The randomness lint.
-# 2. The whole self-test, headless.
-# 3. The replay hash from two separate processes. Inside one process the
+# 2. The whole self-test, headless, but for the month.
+# 3. The month (#27, the M3 gate): ten jars of 30 jar days each, one process
+#    per seed, side by side (it's the slowest test by far, and the timed
+#    tests in the self-test mustn't share the machine with it). Each writes
+#    its genes, day by day, to month_<seed>.csv in the save directory.
+# 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
 #    order, a table address, the wall clock.
-# 4. With $WINDOW set, a jar opened in a real window against one opened with
+# 5. With $WINDOW set, a jar opened in a real window against one opened with
 #    none. They must hash the same, because rendering never touches the sim.
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
 SECONDS_OF_JAR=${SECONDS_OF_JAR:-300}
+MONTH_SEEDS=${MONTH_SEEDS:-"20261018 1 2 3 4 5 6 7 8 9"} # (dev.lua's MONTH_SEEDS)
+JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
 failed=0
 
 hash_of() {
@@ -25,7 +31,18 @@ echo "== randomness lint"
 sh tests/check_random.sh || failed=1
 
 echo "== self-test"
-"$LOVE" . --selftest || failed=1
+"$LOVE" . --selftest --skip month || failed=1
+
+echo "== a month in the jar, $JOBS seeds at a time"
+logs=$(mktemp -d) || exit 1
+printf '%s\n' $MONTH_SEEDS | xargs -P "$JOBS" -I{} sh -c \
+    '"$1" . --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs"
+for seed in $MONTH_SEEDS; do grep -v '^\[nav\]' "$logs/$seed.log"; done
+if [ -s "$logs/failed" ]; then
+    echo "month: FAIL seeds $(tr '\n' ' ' < "$logs/failed")"
+    failed=1
+fi
+rm -rf "$logs"
 
 echo "== replay across processes ($SECONDS_OF_JAR s of jar)"
 a=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR")

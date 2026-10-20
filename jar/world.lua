@@ -19,10 +19,18 @@
 -- the lamp and is grazed and trodden here. Visual systems (flora, ambience,
 -- particles) step here too so that what you see is always in sync with the
 -- physics.
+--
+-- Terrarium: opened `coarse` (#27, #31), the creatures are tokens: anchors
+-- with no soft bodies (bodies/token.lua), each glided along its own graph
+-- (nav/glide.lua). The minds, moss, eggs, ageing and the floor are the same,
+-- so the jar can be stepped COARSE seconds at a time, and a month of it run
+-- in a minute and a half.
 
 local Level = require('jar.level')
 local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
+local Glide = require('nav.glide')
+local Token = require('bodies.token')
 local Mind = require('mind')
 local Moss = require('jar.moss')
 local Food = require('jar.food')
@@ -71,6 +79,7 @@ function World.new(level_data, opts)
     self.day_seconds = opts.day
     self.selected = opts.selected or 1 -- 0: nobody is guided and everyone wanders
     self.wander = opts.wander ~= false
+    self.coarse = opts.coarse -- Terrarium: tokens, not bodies (#27)
     self.creatures, self.graphs, self.controllers = {}, {}, {}
     self.minds = {}
     self.graph_of = {} -- the first resident's graph, per kind
@@ -139,7 +148,12 @@ function World:place(key, genome, x, solid_id, name, young)
     local i = #self.creatures + 1
     local solid = self.level.by_id[solid_id]
     local body = young and Genome.young(genome, 0) or Genome.copy(genome)
-    local c = CLASS[key].new(x, solid.y, self, body, young and 1 or nil)
+    local c
+    if self.coarse then
+        c = Token.new(key, CLASS[key], x, solid.y, body, young and 1 or nil)
+    else
+        c = CLASS[key].new(x, solid.y, self, body, young and 1 or nil)
+    end
     c.key, c.name = key, name
     c.home = {x = x, solid = solid_id}
     c.mover.solid = solid
@@ -152,7 +166,7 @@ function World:place(key, genome, x, solid_id, name, young)
     self.genomes[i] = Genome.copy(genome)
     self.graph_of[key] = self.graph_of[key] or graph
     self.graphs[i] = graph
-    self.controllers[i] = Controller.new(c, graph)
+    self.controllers[i] = (self.coarse and Glide or Controller).new(c, graph)
     self.minds[i] = Mind.new(genome)
     if young then
         self.young[i] = {stage = 0, born = self.time, nights = 0}
@@ -221,10 +235,15 @@ World.SPORES = 30     -- seconds the spores it gives up keep drifting after
 
 -- Terrarium: the floor (#26). A kind down to FLOOR, counting its eggs but not
 -- its dying, is scarce: its clock stops, so none of them dies, and its minds
--- court sooner (Mind:ready). The other kinds' clutches leave RESERVE places
+-- court sooner (Mind:ready), and held HELD days, will take any leap to reach
+-- each other (Mind:daring). The other kinds' clutches leave RESERVE places
 -- in the jar for each scarce one's. It's never shown, and never told.
 World.FLOOR = 2
 World.RESERVE = 2
+World.HELD = 1 -- jar days spared before it'll take any leap to reach its own kind (#27)
+
+-- Terrarium: the coarse step, in seconds (#27)
+World.COARSE = 1
 
 -- Which kinds are scarce, into `self.scarce` and each mind's `scarce`
 function World:census()
@@ -338,7 +357,7 @@ function World:moult(i)
     local graph = assert(self.navs[c.nav], 'world: no graph built for a moult')
     if graph ~= self.graphs[i] then
         self.graphs[i] = graph
-        self.controllers[i] = Controller.new(c, graph)
+        self.controllers[i] = (self.coarse and Glide or Controller).new(c, graph)
     end
     if y.stage == World.STAGES then
         self.young[i], m.young = nil, nil
@@ -373,6 +392,7 @@ function World:age(i, dt)
         return
     end
     if self.scarce[c.key] then life.spared = life.spared + dt end
+    m.held = life.spared > World.HELD * self:day_length() or nil
     local t, old = self:age_of(i)
     ctrl.pace = 1 - World.SLOW * old
     -- (its skin is redone in steps as it deepens, not every step)
@@ -593,13 +613,15 @@ function World:step(dt)
         end
 
         ctrl:update(dt)
-        local look = ctrl.path and ctrl:current_node() or nil
-        c:update(dt, self.level, {
-            events = self.events,
-            look_at = look and {x = look.x, y = look.y - 10} or mind:look(c, self),
-            light_dir = self.light_dir,
-            court = mind:courting(self, i), -- Terrarium: its partner and their beat (#22)
-        })
+        if not self.coarse then -- (a token has no body to move)
+            local look = ctrl.path and ctrl:current_node() or nil
+            c:update(dt, self.level, {
+                events = self.events,
+                look_at = look and {x = look.x, y = look.y - 10} or mind:look(c, self),
+                light_dir = self.light_dir,
+                court = mind:courting(self, i), -- Terrarium: its partner and their beat (#22)
+            })
+        end
         -- Terrarium: feet on the way somewhere wear the moss they cross
         if ctrl:has_path() then
             local x, y = c:anchor()

@@ -5,7 +5,9 @@
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
 --                                         hatch, crowd, ranges, moss, audio, or all;
---                                         --seed <n> reseeds the day)
+--                                         --seed <n> reseeds the day, month and others;
+--                                         --day <sec> shortens the month's days)
+--   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI runs the month apart)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
@@ -43,6 +45,7 @@ function dev.parse(args)
         if a == '--selftest' then o.selftest = true
         -- Terrarium: one named test, or a comma list (see dev.tests())
         elseif a == '--test' then o.selftest = true; o.test = args[i + 1]; i = i + 1
+        elseif a == '--skip' then o.skip = args[i + 1]; i = i + 1
         elseif a == '--snap' then
             o.snap = {who = args[i + 1], seconds = tonumber(args[i + 2]), file = args[i + 3]}
             i = i + 3
@@ -534,7 +537,9 @@ test('court', function(j, results)
                 if m.doing == 'court' then
                     if not since[i] then
                         since[i] = m.courts
-                        check(results, m.hunger < 0.6, 'court: %s courted hungry (%.2f, seed %d)',
+                        -- (fed when it was asked, and the one that waited may
+                        -- have waited half a minute, getting hungrier)
+                        check(results, m.hunger < 0.7, 'court: %s courted hungry (%.2f, seed %d)',
                             w.creatures[i].name, m.hunger, seed)
                     end
                     local x, y = w.creatures[i]:anchor()
@@ -1000,6 +1005,154 @@ test('floor', function(j, results)
     for _, key in ipairs(KEYS) do
         log.info('selftest', 'floor        %-7s %s', key .. 's', table.concat(by_key[key], ' '))
     end
+end)
+
+-- Terrarium: 3d. A month in the jar (#27), the M3 gate. Ten jars, each
+-- opened at lamp-on and left alone for 30 jar days of real length on the
+-- coarse step (World.COARSE, creatures as tokens, bodies/token.lua). In
+-- every one, the jar never holds fewer than MONTH_FEWEST or more than
+-- CAPACITY, counting eggs and not the dying, and none of the three kinds is
+-- ever gone. And it's alive, not held up by the floor: by the end every
+-- founder has gone back to the moss and every kind is MONTH_GENERATIONS
+-- generations on. Nothing is rigged: the founders' lives, the moss and the
+-- floor are the jar's own. Each jar day it logs every gene's mean and spread over
+-- the living, the first evidence of what grazing selects, and writes them to
+-- month_<seed>.csv in the save directory. --seed runs one jar, and --day
+-- compresses the days (900 makes a month a second). A coarse jar replays
+-- from its seed as a live one does.
+local MONTH_DAYS = 30
+local MONTH_SEEDS = {20261018, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+local MONTH_FEWEST = 4
+local MONTH_GENERATIONS = 4
+test('month', function(j, results)
+    local World, level_data = j.World, j.level_data
+    local DayCycle = require('jar.daycycle')
+    local Genome = require('genome')
+    local statehash = require('core.statehash')
+    local C = require('jar.config')
+    local day, dt = j.day or C.DAY_SECONDS, World.COARSE
+    local KEYS = {'worm', 'blob', 'spider'}
+    local function open(seed, days)
+        rng.seed(seed)
+        return World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = days or day, coarse = true})
+    end
+
+    -- Each kind, counting its eggs and not its dying, and all of them
+    local function counts(w)
+        local n, all = {worm = 0, blob = 0, spider = 0}, 0
+        for i, c in ipairs(w.creatures) do
+            if not w.lives[i].dying then n[c.key], all = n[c.key] + 1, all + 1 end
+        end
+        for _, egg in ipairs(w.eggs) do n[egg.key], all = n[egg.key] + 1, all + 1 end
+        return n, all
+    end
+
+    -- Every gene's mean and spread over the living of each plan, as rows
+    -- {plan, gene, n, mean, sd}
+    local function genes(w)
+        local rows = {}
+        for _, key in ipairs(KEYS) do
+            for _, g in ipairs(Genome[key].genes) do
+                local k, sum, sq = 0, 0, 0
+                for i, c in ipairs(w.creatures) do
+                    if c.key == key and not w.lives[i].dying then
+                        local v = w.genomes[i][g.name]
+                        k, sum, sq = k + 1, sum + v, sq + v * v
+                    end
+                end
+                local mean = k > 0 and sum / k or 0
+                rows[#rows + 1] = {key, g.name, k, mean, k > 0 and math.sqrt(math.max(0, sq / k - mean * mean)) or 0}
+            end
+        end
+        return rows
+    end
+
+    local seeds = j.seed and {j.seed} or MONTH_SEEDS
+    local t0 = love.timer.getTime()
+    for _, seed in ipairs(seeds) do
+        local w = open(seed)
+        -- (each one's generation, the founders' 0 and a child's one more than
+        -- its elder parent's, by matching each hatchling to its egg)
+        local born, died, gen, founders, laid = 0, 0, {}, {}, {}
+        local deepest = {worm = 0, blob = 0, spider = 0}
+        for _, c in ipairs(w.creatures) do gen[c], founders[c] = 0, true end
+        w.events:on(function(ev)
+            if ev.kind == 'laid' then
+                for _, egg in ipairs(ev.eggs) do
+                    laid[#laid + 1] = {egg = egg, gen = math.max(gen[ev.who] or 0, gen[ev.with] or 0) + 1}
+                end
+            elseif ev.kind == 'hatched' then
+                born = born + 1
+                for k, l in ipairs(laid) do
+                    if l.egg.key == ev.who.key and l.egg.x == ev.x then
+                        gen[ev.who] = l.gen
+                        deepest[l.egg.key] = math.max(deepest[l.egg.key], l.gen)
+                        table.remove(laid, k)
+                        break
+                    end
+                end
+            elseif ev.kind == 'returned' then
+                died, founders[ev.who] = died + 1, nil
+            end
+        end)
+        local per = math.floor(day / dt + 0.5)
+        local fewest, most, broke = math.huge, 0, nil
+        local by_key = {worm = {}, blob = {}, spider = {}}
+        local csv = {'day,plan,gene,n,mean,sd'}
+        local first, last
+        for d = 0, MONTH_DAYS do
+            if d > 0 then
+                for _ = 1, per do
+                    w:step(dt)
+                    local n, all = counts(w)
+                    fewest, most = math.min(fewest, all), math.max(most, #w.creatures + #w.eggs)
+                    if not broke and (all < MONTH_FEWEST or #w.creatures + #w.eggs > World.CAPACITY
+                        or n.worm == 0 or n.blob == 0 or n.spider == 0) then
+                        broke = string.format('month: seed %d on day %.2f held %d (%d worms, %d blobs, %d spiders)',
+                            seed, w.time / day, all, n.worm, n.blob, n.spider)
+                    end
+                end
+            end
+            local n = counts(w)
+            for _, key in ipairs(KEYS) do table.insert(by_key[key], n[key]) end
+            local rows = genes(w)
+            for _, r in ipairs(rows) do
+                csv[#csv + 1] = string.format('%d,%s,%s,%d,%.4f,%.4f', d, r[1], r[2], r[3], r[4], r[5])
+            end
+            first, last = first or rows, rows
+        end
+        check(results, not broke, '%s', broke)
+        local left = 0
+        for _ in pairs(founders) do left = left + 1 end
+        check(results, left == 0, 'month: %d founders of seed %d outlived the month', left, seed)
+        for _, key in ipairs(KEYS) do
+            check(results, deepest[key] >= MONTH_GENERATIONS, 'month: the %ss of seed %d only reached generation %d',
+                key, seed, deepest[key])
+        end
+        love.filesystem.write(string.format('month_%d.csv', seed), table.concat(csv, '\n') .. '\n')
+        log.info('selftest', 'month  seed %-9d %d days: %d to %d in the jar, %d hatched, %d went back to the moss, '
+            .. 'generation %d/%d/%d (%.1fs)', seed, MONTH_DAYS, fewest, most, born, died,
+            deepest.worm, deepest.blob, deepest.spider, love.timer.getTime() - t0)
+        for _, key in ipairs(KEYS) do
+            log.info('selftest', 'month    %-8s %s', key .. 's', table.concat(by_key[key], ' '))
+        end
+        -- (each gene from the founders to the living a month on)
+        for k, r in ipairs(last) do
+            local f = first[k]
+            log.info('selftest', 'month    %-6s %-11s %8.3f ±%-6.3f -> %8.3f ±%-6.3f (%d)', r[1], r[2], f[4], f[5], r[4], r[5], r[3])
+        end
+    end
+
+    -- A coarse jar is its seed plus its history too: two runs of two short
+    -- days, with births and deaths in them, agree
+    local hashes = {}
+    for k = 1, 2 do
+        local w = open(seeds[1], DAY)
+        for _ = 1, math.floor(2 * DAY / dt + 0.5) do w:step(dt) end
+        hashes[k] = statehash.of(w)
+    end
+    local where = statehash.diverged(hashes[1], hashes[2])
+    check(results, where == nil, 'month: two coarse runs of seed %d diverged, first in %s', seeds[1], tostring(where))
 end)
 
 -- Terrarium: 3c. A pinch of food (#25), the gate. In a jar at midday, a pinch
@@ -2079,21 +2232,32 @@ end
 -- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
 -- Returns true when every check passed, or nil and a message for a name it
 -- doesn't know.
-function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed)
-    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step, seed = seed}
-    local want
-    if only and only ~= 'all' then
-        want = {}
-        for name in only:gmatch('[^,]+') do want[name] = true end
-        for _, t in ipairs(TESTS) do want[t.name] = want[t.name] and t end
-        for name, t in pairs(want) do
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day)
+    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step, seed = seed,
+        day = day}
+    -- Terrarium: the names in a comma list, or nil and a message for one it doesn't know
+    local function names(list)
+        local out = {}
+        for name in list:gmatch('[^,]+') do out[name] = true end
+        for _, t in ipairs(TESTS) do out[t.name] = out[t.name] and t end
+        for name, t in pairs(out) do
             if t == true then return nil, string.format('no test %q (there are: %s)', name, table.concat(dev.tests(), ', ')) end
         end
+        return out
+    end
+    local want, skipped, err
+    if only and only ~= 'all' then
+        want, err = names(only)
+        if not want then return nil, err end
+    end
+    if skip then
+        skipped, err = names(skip)
+        if not skipped then return nil, err end
     end
     local results = {total = 0, pass = 0, fail = {}}
     local t0 = love.timer.getTime()
     for _, t in ipairs(TESTS) do
-        if not want or want[t.name] then t.fn(j, results) end
+        if (not want or want[t.name]) and not (skipped and skipped[t.name]) then t.fn(j, results) end
     end
     log.info('selftest', '%d/%d checks passed (%d trips) in %.1fs', results.pass, results.total, results.trips or 0,
         love.timer.getTime() - t0)

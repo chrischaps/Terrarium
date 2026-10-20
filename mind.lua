@@ -47,6 +47,10 @@ Mind.__index = Mind
 
 local HUNGRY_AFTER = 150 -- seconds awake before moss starts to call
 local DESPERATE = 1.6    -- hunger that takes any leap to reach moss
+-- Terrarium: and as hungry as it gets (#27). Hunger is a need, not a debt: a
+-- night owl up all of a real night on cropped moss that doesn't grow in the
+-- dark would otherwise owe hundreds, and never be fed enough to court again.
+local STARVING = 2
 local GRAZE = {6, 12}    -- seconds spent at the moss
 local FILL = 1.0         -- hunger a cell's worth of lush moss takes away
 local LUSH = 0.4         -- moss this high is worth walking to
@@ -76,7 +80,8 @@ local BESIDE = 90             -- this near on arrival, they court
 local FREE = {idle = true, wander = true, follow = true} -- what a partner leaves off to court
 -- A kind the World has found down to two (`scarce`, #26) courts sooner: after
 -- one meeting, and it follows its own kind more often (as much more as it's
--- unsociable, so a loner is still a loner)
+-- unsociable, so a loner is still a loner), and once it's been held a while
+-- it takes any leap to reach one of its own (Mind:daring)
 local SCARCE_MET = 1
 
 -- Treats
@@ -102,7 +107,7 @@ function Mind.new(genome)
         wooed = false,           -- it has courted since it last slept
         passed = {},             -- crumb id -> true, for crumbs it can't get to
         -- (the World sets `last` when its time has come, and `dying` as it fades, #24,
-        -- and `scarce` while its kind is down to two, #26)
+        -- `scarce` while its kind is down to two, and `held` once that's kept it alive a while, #26)
         wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, treats = 0, -- what it's done, for the self-tests
     }, Mind)
     self.boldness = genome.boldness or 0.5
@@ -121,9 +126,12 @@ function Mind:awake(hour)
     return h >= DayCycle.presets.lampon and h < DayCycle.presets.lampoff
 end
 
--- How big a leap it'll take now: its own, unless hunger has made it brave
-function Mind:daring()
-    return self.hunger >= DESPERATE and 1 or self.dare
+-- How big a leap it'll take now: its own, unless hunger has made it brave, or
+-- it's going to one of its own kind (`kin`) after the floor has held it a
+-- while (`held`, #26): the last two of a kind, kept past their time, will
+-- take any leap to find each other
+function Mind:daring(kin)
+    return (self.hunger >= DESPERATE or (kin and self.scarce and self.held)) and 1 or self.dare
 end
 
 -- Somewhere this body can rest the night. Its `last` bed (#24) is in the moss,
@@ -242,10 +250,10 @@ local function companion(world, me)
 end
 
 -- Head for wherever the one it follows is now
-function Mind:after(ctrl, graph, world)
+function Mind:after(ctrl, graph, world, me)
     local o = world.creatures[self.with]
     local x, y = o:anchor()
-    return ctrl:go_to(graph:node_near(x, y), self:daring())
+    return ctrl:go_to(graph:node_near(x, y), self:daring(o.key == world.creatures[me].key))
 end
 
 -- Something to do by day: follow someone, or wander off
@@ -254,7 +262,7 @@ function Mind:choose_errand(c, ctrl, graph, world, me)
         local j = companion(world, me)
         if j then
             self.with = j
-            if self:after(ctrl, graph, world) then
+            if self:after(ctrl, graph, world, me) then
                 self:set('follow', rng.range(rng.sim, FOLLOW_FOR[1], FOLLOW_FOR[2]))
                 self.follows = self.follows + 1
                 return
@@ -342,7 +350,7 @@ function Mind:court(ctrl, graph, world, me)
     local j = suitor(world, me)
     if not j then return false end
     local spot = beside(graph, world.creatures[me], world.creatures[j])
-    if not spot or not ctrl:go_to(spot, self:daring()) then return false end
+    if not spot or not ctrl:go_to(spot, self:daring(true)) then return false end
     local o = world.minds[j]
     world.controllers[j]:clear()
     self.with, o.with, self.lead = j, me, true
@@ -504,7 +512,7 @@ function Mind:update(dt, hour, world, me)
         return
     end
 
-    self.hunger = self.hunger + dt / HUNGRY_AFTER
+    self.hunger = math.min(STARVING, self.hunger + dt / HUNGRY_AFTER)
     if CURIOUS[doing] and self:tempted(ctrl, graph, world, me) then return end
     if doing == 'rest' or doing == 'to_rest' then
         if arrived then self:set('idle', rng.range(rng.sim, 1, 4)) end
@@ -522,7 +530,7 @@ function Mind:update(dt, hour, world, me)
         elseif arrived then
             local x, y = c:anchor()
             local ox, oy = world.creatures[self.with]:anchor()
-            if (ox - x) ^ 2 + (oy - y) ^ 2 > CLOSE * CLOSE * 4 then self:after(ctrl, graph, world) end
+            if (ox - x) ^ 2 + (oy - y) ^ 2 > CLOSE * CLOSE * 4 then self:after(ctrl, graph, world, me) end
         end
     elseif doing == 'to_court' or doing == 'await' or doing == 'court' then
         self:woo(dt, world, me, arrived)
