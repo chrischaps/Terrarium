@@ -3,9 +3,13 @@
 -- In the style of Fishbowl's species colours, but drawn from genes. Each body
 -- plan owns a stretch of the colour wheel, and `hue` only moves a creature
 -- within it, so the families never meet: worms are rose to apricot, blobs mint
--- to sky, spiders indigo to plum. Each family also keeps its own lightness, in
--- OKLCH, where equal lightness looks equally bright: worms are fleshy, blobs
--- pale and glassy, spiders dark. Colour alone tells you whose child it is.
+-- to sky, spiders indigo to plum, snails amber to bronze, springtails cobalt,
+-- moths the pinks of a rosy maple moth. Each family also keeps its own
+-- lightness, in OKLCH, where equal lightness looks equally bright: worms are
+-- fleshy, blobs pale and glassy, spiders dark, snails darker than worms,
+-- springtails between, moths palest of all. Colour alone tells you whose
+-- child it is (#75): six families sit a little closer than three did, and a
+-- body's shape carries the rest of the difference.
 --
 -- `pattern` is one of four kinds, and every plan wears all four in its own way:
 --   capped   the head end in the mark colour: a worm's dark head, a jelly's
@@ -92,16 +96,84 @@ Skin.families = {
         shell = {0.93, 0.91, 0.95, 1}, -- silk
         colours = function(h)
             return {
-                body    = rgb(0.34, 0.06, h),
-                body_hi = rgb(0.48, 0.08, h),
-                leg     = rgb(0.39, 0.06, h),
-                leg_far = rgb(0.26, 0.04, h),
-                joint   = rgb(0.56, 0.07, h),
+                -- (a shade darker since #75, to leave room for the snail)
+                body    = rgb(0.30, 0.06, h),
+                body_hi = rgb(0.44, 0.08, h),
+                leg     = rgb(0.35, 0.06, h),
+                leg_far = rgb(0.23, 0.04, h),
+                joint   = rgb(0.52, 0.07, h),
                 outline = rgb(0.14, 0.03, h),
                 mark    = rgb(0.78, 0.10, h + 10),
                 shine   = rgb(0.82, 0.15, h),
                 name    = rgb(0.82, 0.10, h),
                 main    = 'body',
+            }
+        end,
+    },
+    -- Terrarium: the families still to come (#75), ahead of their bodies
+    snail = {
+        hue = {79, 109}, -- dark amber, umber, bronze
+        shell = {0.94, 0.92, 0.84, 1}, -- a pearl of an egg, chalky white
+        colours = function(h)
+            return {
+                whorl   = rgb(0.44, 0.14, h),       -- the shell it carries
+                whorl_hi = rgb(0.56, 0.13, h + 4),
+                foot    = rgb(0.64, 0.05, h + 12),  -- the soft body, a grey-fawn
+                foot_far = rgb(0.54, 0.04, h + 12),
+                outline = rgb(0.18, 0.04, h),
+                mark    = rgb(0.70, 0.12, h - 8),   -- honey bands round the whorl
+                shine   = rgb(0.88, 0.13, h - 6),
+                name    = rgb(0.82, 0.10, h),
+                main    = 'whorl',
+            }
+        end,
+    },
+    springtail = {
+        hue = {222, 252}, -- cobalt
+        shell = 'belly',
+        colours = function(h)
+            return {
+                body    = rgb(0.56, 0.13, h),
+                belly   = rgb(0.74, 0.07, h - 8),
+                furca   = rgb(0.46, 0.10, h + 6),   -- the spring folded under it
+                antenna = rgb(0.40, 0.08, h),
+                outline = rgb(0.22, 0.05, h),
+                mark    = rgb(0.82, 0.08, h - 12),  -- a frost of pale scales
+                shine   = rgb(0.86, 0.14, h - 10),
+                name    = rgb(0.84, 0.10, h),
+                main    = 'body',
+            }
+        end,
+    },
+    moth = {
+        hue = {334, 358}, -- the rosy maple moth's pinks
+        shell = {0.88, 0.91, 0.76, 1}, -- eggs the pale green of a leaf's underside
+        colours = function(h)
+            return {
+                wing    = rgb(0.82, 0.16, h),
+                wing_far = rgb(0.72, 0.13, h),
+                body    = rgb(0.88, 0.13, h + 111), -- a furred yellow body
+                antenna = rgb(0.56, 0.07, h + 100),
+                outline = rgb(0.40, 0.08, h),
+                mark    = rgb(0.90, 0.14, h + 108), -- the yellow band across each wing
+                shine   = rgb(0.95, 0.10, h),
+                name    = rgb(0.88, 0.12, h),
+                main    = 'wing',
+            }
+        end,
+        -- Its caterpillar, the inchworm (#79): the moth's hue at a greener,
+        -- paler cast, a leaf-green body with rosy stripes and a rosy head, so
+        -- it reads as its parent's child and hides in the moss till it's grown
+        larva = function(h)
+            return {
+                back    = rgb(0.88, 0.09, 128),
+                belly   = rgb(0.93, 0.05, 120),
+                head    = rgb(0.80, 0.12, h),
+                outline = rgb(0.46, 0.07, 140),
+                mark    = rgb(0.84, 0.12, h),       -- its stripes
+                shine   = rgb(0.95, 0.10, h),
+                name    = rgb(0.88, 0.12, h),
+                main    = 'back',
             }
         end,
     },
@@ -114,20 +186,33 @@ function Skin.hash(a, b)
     return n - floor(n)
 end
 
--- The skin for a body of plan `key` with `genome` (nil: the middle of each
--- gene), `young` (0..1) pale with youth, `aged` (0..1) deepened with age, and
--- `earthed` (0..1) gone back toward the moss
-function Skin.of(key, genome, young, aged, earthed)
-    local fam = Skin.families[key]
+-- A skin from `colours` (a family's, or its larva's), for the rest see Skin.of
+local function dress(fam, colours, genome, young, aged, earthed)
     local hue = genome and genome.hue or 0.5
     local h = fam.hue[1] + hue * (fam.hue[2] - fam.hue[1])
     pale, old, earth = young or 0, aged or 0, earthed or 0
-    local skin = fam.colours(h)
+    local skin = colours(h)
     pale, old, earth = 0, 0, 0
     skin.h, skin.young, skin.old, skin.earth = h, young or 0, aged or 0, earthed or 0
     skin.pattern = Skin.PATTERNS[genome and genome.pattern or 2]
     skin.glow = genome and genome.glow or 0.5
     skin.seed = hue * 97 + skin.glow * 13 -- places the spots
+    return skin
+end
+
+-- The skin for a body of plan `key` with `genome` (nil: the middle of each
+-- gene), `young` (0..1) pale with youth, `aged` (0..1) deepened with age, and
+-- `earthed` (0..1) gone back toward the moss
+function Skin.of(key, genome, young, aged, earthed)
+    local fam = Skin.families[key]
+    return dress(fam, fam.colours, genome, young, aged, earthed)
+end
+
+-- Terrarium: the skin of a plan's larva (#75, #79: an inchworm is a moth's), as Skin.of
+function Skin.larva(key, genome, young, aged, earthed)
+    local fam = Skin.families[key]
+    local skin = dress(fam, assert(fam.larva, 'skin: a ' .. key .. ' has no larva'), genome, young, aged, earthed)
+    skin.larva = true
     return skin
 end
 
@@ -138,7 +223,7 @@ end
 -- Terrarium: the same skin aged (#24), keeping whatever a body added to it
 -- (its eyes, a worm's rim)
 function Skin.age(key, genome, skin, aged, earthed)
-    local new = Skin.of(key, genome, skin.young, aged, earthed)
+    local new = (skin.larva and Skin.larva or Skin.of)(key, genome, skin.young, aged, earthed)
     for k, v in pairs(skin) do
         if new[k] == nil then new[k] = v end
     end
