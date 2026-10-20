@@ -82,6 +82,7 @@ function Mind.new(genome)
         met = {},                -- creature index -> times they've met
         near = {},               -- creature index -> true while they're together
         wooed = false,           -- it has courted since it last slept
+        -- (the World sets `last` when its time has come, and `dying` as it fades, #24)
         wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, -- what it's done, for the self-tests
     }, Mind)
     self.boldness = genome.boldness or 0.5
@@ -104,12 +105,13 @@ function Mind:daring()
     return self.hunger >= DESPERATE and 1 or self.dare
 end
 
--- Somewhere this body can rest the night
-local function rest_spots(graph, climbs)
+-- Somewhere this body can rest the night. Its `last` bed (#24) is in the moss,
+-- for any body: a spider comes down off its ledge to lie on a mossy top.
+local function rest_spots(graph, climbs, last)
     local pool = {}
     for _, n in ipairs(graph.nodes) do
         local ok
-        if climbs then
+        if climbs and not last then
             ok = n.kind == 'face' and n.ny > 0.5 and n.solid.kind == 'ledge'
         else
             ok = n.kind == 'top' and n.solid.moss
@@ -276,10 +278,10 @@ function Mind.meet(world)
     end
 end
 
--- Fed, grown (a hatchling is `young` until its last moult, #23), and it
--- hasn't courted since it last slept
+-- Fed, grown (a hatchling is `young` until its last moult, #23), not at its
+-- end (#24), and it hasn't courted since it last slept
 function Mind:ready()
-    return self.hunger < FED and not self.wooed and not self.young
+    return self.hunger < FED and not self.wooed and not self.young and not self.last
 end
 
 -- Whom it would court now: one of its kind it's met often, ready and free
@@ -403,7 +405,7 @@ function Mind:update(dt, hour, world, me)
             end
         elseif arrived or doing == 'follow' or doing == 'to_court' then
             -- Finish whatever trip it's on, then go to bed (or sleep where it is)
-            local beds = self:choose(self:near_home(rest_spots(graph, c.profile.climbs), c.home), others(world, me, true))
+            local beds = self:choose(self:near_home(rest_spots(graph, c.profile.climbs, self.last), c.home), others(world, me, true))
             self:set(self:head(ctrl, beds, true) and 'to_rest' or 'rest')
             if self.doing == 'rest' then self.nights = self.nights + 1 end
         end

@@ -8,6 +8,10 @@
 -- it's the jar's record of where life has been: the ways they go are worn,
 -- the places they eat are bare, and by the next afternoon it's grown back.
 --
+-- Where a creature has returned to the moss (#24), the patch it lay on is
+-- pressed flat, then grows back faster, taller and greener than the moss
+-- around it: each cell keeps a richness that the lamp's hours slowly use up.
+--
 -- The heights are simulation: the World steps them on the fixed step and the
 -- state hash reads them. Moss.draw only reads them.
 
@@ -24,6 +28,9 @@ local BITE = {1, 0.4}  -- how much of that it takes from the cells either side
 local TREAD = 0.03    -- height passing feet wear away, per second
 local WORN = 0.15     -- feet wear moss down to this; only eating leaves it bare
 Moss.WORN = WORN
+local RICH_CAP = 0.35   -- how much higher a rich cell's ceiling stands
+local RICH_GROW = 3     -- and how much faster it grows
+local RICH_FOR = 150000 -- seconds of full lamp it takes to use up (about three days of lamp)
 local REACH = {18, 4} -- a body this far above a top (or this far into it) is on it
 
 local sqrt, exp, sin, min, max, floor, abs = math.sqrt, math.exp, math.sin, math.min, math.max, math.floor, math.abs
@@ -53,7 +60,7 @@ local function exposure(level, x, y)
 end
 
 function Moss.new(level)
-    local self = setmetatable({spans = {}, h = {}, cap = {}, sun = {}, x = {}}, Moss)
+    local self = setmetatable({spans = {}, h = {}, cap = {}, sun = {}, x = {}, rich = {}}, Moss)
     local n = 0
     for _, s in ipairs(level:top_spans()) do
         if s.solid.moss then
@@ -69,6 +76,7 @@ function Moss.new(level)
                 -- Shaded moss stays short; in the lamp's pool it grows deep
                 self.cap[n] = 0.4 + 0.6 * sun
                 self.h[n] = self.cap[n] * (0.8 + 0.2 * noise(n))
+                self.rich[n] = 0
             end
         end
     end
@@ -97,12 +105,42 @@ end
 -- most of its height in a few hours.
 function Moss:update(dt, lamp)
     if lamp <= 0 then return end
-    local h, cap, sun = self.h, self.cap, self.sun
+    local h, cap, sun, rich = self.h, self.cap, self.sun, self.rich
     local k = GROW * lamp * dt
     for i = 1, self.count do
-        local v, c = h[i], cap[i]
-        if v < c then h[i] = min(c, v + k * sun[i] * (0.15 + v) * (c - v)) end
+        local v, c, r = h[i], cap[i], rich[i]
+        if r > 0 then
+            c = c + RICH_CAP * r
+            rich[i] = max(0, r - lamp * dt / RICH_FOR)
+        end
+        if v < c then h[i] = min(c, v + k * (1 + RICH_GROW * r) * sun[i] * (0.15 + v) * (c - v)) end
     end
+end
+
+-- The moss a body at (x, y) lies on, or the nearest below it (a spider asleep
+-- under a ledge comes down to the moss beneath): its span, or nil
+function Moss:beneath(x, y)
+    local best
+    for _, s in ipairs(self.spans) do
+        if x >= s.x0 and x <= s.x1 and s.y >= y - REACH[1] and (not best or s.y < best.y) then best = s end
+    end
+    return best
+end
+
+-- A creature returns to the moss (#24): the cells from x0 to x1 of the moss
+-- at or below y are pressed down where it lay, and grow back rich
+function Moss:enrich(x0, x1, y)
+    local s = self:beneath((x0 + x1) / 2, y)
+    if not s then return end
+    local mid, half = (x0 + x1) / 2, max(4, (x1 - x0) / 2)
+    for i = s.first, s.first + s.n - 1 do
+        local d = abs(self.x[i] - mid) / half
+        if d < 1.3 then
+            self.h[i] = min(self.h[i], WORN)
+            self.rich[i] = max(self.rich[i], min(1, 1.3 - d))
+        end
+    end
+    return s
 end
 
 -- A mouth at (x, y) grazing for dt. Returns how much it ate, in cells' worth
@@ -144,6 +182,7 @@ local depth = {}
 local BARE  = {0.29, 0.21, 0.13}
 local SHORT = {0.50, 0.49, 0.21}
 local LUSH  = {0.19, 0.39, 0.14}
+local RICH  = {0.13, 0.47, 0.13} -- where one returned to it
 
 local function tone(v)
     local a, b, t
@@ -202,7 +241,12 @@ function Moss.draw(m, light, time, creatures)
             local tr = (depth[i] + (i < last and depth[i + 1] or depth[i] * 0.3)) / 2
             local tc = depth[i]
             -- Its colour is how cropped it is: shaded moss is short but green
-            local r, g, b = tone(v / m.cap[i])
+            local r, g, b = tone(min(1, v / m.cap[i]))
+            -- and where one returned to it, it's greener while it's lush
+            local rich = m.rich[i] * min(1, v / m.cap[i])
+            if rich > 0 then
+                r, g, b = r + (RICH[1] - r) * rich, g + (RICH[2] - g) * rich, b + (RICH[3] - b) * rich
+            end
             -- The cushion, rolling through each cell's thickness and tucked a
             -- little over the edge of what it grows on
             k = quad(k, x0, y - tl, cx, y - tc, cx, y + 1.4, x0, y + 1.4, r, g, b, 0.6)
@@ -241,7 +285,7 @@ function Moss.draw(m, light, time, creatures)
         love.graphics.setBlendMode('add')
         for _, s in ipairs(m.spans) do
             for i = s.first, s.first + s.n - 1 do
-                local f = m.h[i] / m.cap[i]
+                local f = min(1, m.h[i] / m.cap[i])
                 if f > 0.7 and noise(i, 3) < 0.6 then
                     local a = glow * ((f - 0.7) / 0.3) ^ 2 * (1.1 - 0.6 * m.sun[i]) * (0.6 + 0.4 * sin(time * 0.4 + i))
                     love.graphics.setColor(0.55 * a, 0.62 * a, 0.14 * a, 1)

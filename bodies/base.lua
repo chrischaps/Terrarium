@@ -199,6 +199,7 @@ function Face.new()
         gaze_x = 0, gaze_y = 0,                      -- smoothed look offset (-1..1)
         glance_x = 0, glance_y = 0,
         next_glance = rng.range(rng.look, 2, 5),
+        shut = 0,                                    -- Terrarium: eyes closing for good (#24), 0..1
     }, Face)
 end
 
@@ -211,6 +212,8 @@ function Face:update(dt, look_x, look_y, idle)
         if rng.look:random() < 0.2 then self.next_blink = 0.25 end -- double blink
     end
     self.blink = max(0, self.blink - dt * 7)
+    -- Terrarium: a dying one's eyes close slowly, and stay closed (#24)
+    if self.closing then self.shut = min(1, self.shut + dt / 4) end
 
     if idle then
         self.next_glance = self.next_glance - dt
@@ -229,7 +232,7 @@ end
 -- Eyelid openness 0..1 (smooth close/open)
 function Face:openness()
     local b = self.blink
-    return 1 - min(1, b * 2 - b * b)
+    return min(1 - min(1, b * 2 - b * b), 1 - self.shut)
 end
 
 -- Draw one eye: white, pupil toward gaze, glint, lid. scale squishes it.

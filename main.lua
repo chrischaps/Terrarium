@@ -36,6 +36,7 @@ local Motes = require('jar.motes')
 local Scenery = require('jar.scenery')
 local Moss = require('jar.moss')
 local Eggs = require('jar.eggs')
+local Remains = require('jar.remains')
 local Condensation = require('jar.condensation')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
@@ -85,6 +86,11 @@ local function openJar(seed, hour, day, level)
     Motes.init(rng.look, 120)
     Scenery.init(rng.scape, w.level)
     Condensation.init(rng.scape) -- last, so the jar's composition doesn't shift
+    -- The lantern follows by index: when one goes back to the moss, it lets go
+    -- of it, and keeps up with the others as they're renumbered
+    w.events:on(function(ev)
+        if ev.kind == 'returned' then lantern:forget(ev.index) end
+    end)
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
     for k = #w.creatures + 1, args.crowd or 0 do
@@ -251,11 +257,15 @@ local function drawCreatures(alpha, light)
         if c.draw_trail then c:draw_trail() end
     end
     Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
-    for _, c in ipairs(world.creatures) do c:draw(ctx) end
+    -- (a dying one through Remains, sinking and fading into the moss, #24)
+    for i, c in ipairs(world.creatures) do
+        Remains.through(world, i, 'draw', ctx)
+    end
     love.graphics.setShader()
+    Remains.draw(world)
     Eggs.draw_emissive(world, light)
-    for _, c in ipairs(world.creatures) do
-        if c.draw_emissive then c:draw_emissive(ctx) end
+    for i, c in ipairs(world.creatures) do
+        if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
     world:restore()
 end
