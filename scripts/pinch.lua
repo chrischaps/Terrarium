@@ -15,8 +15,8 @@ return {run = function(api)
     w:pinch(x)
     local views = {
         {x - 330, 150, x + 270, 150 + 600 * 9 / 16}, -- coming down through the lamp
-        {x - 200, 400, x + 160, 400 + 360 * 9 / 16}, -- down in the moss
-        {x - 200, 400, x + 160, 400 + 360 * 9 / 16}, -- nibbled
+        {x - 200, 700, x + 160, 700 + 360 * 9 / 16}, -- down in the moss
+        {x - 200, 700, x + 160, 700 + 360 * 9 / 16}, -- nibbled
     }
     for k, t in ipairs({4, 6, 8}) do
         api.step(t)

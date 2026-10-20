@@ -18,18 +18,18 @@ C.K_BACK = 0.84             -- projected scale at the back glass
 -- never see S); the jar is wide and its residents small, drawn at S world px
 -- per unit, so you look for them the way you would in a real tank.
 C.S = 0.6
-C.OX, C.OY = 40, 266
+C.OX, C.OY = 40, 86
 C.PLANE_D = 0.70            -- the creatures' plane: sharp, a little behind the glass
-C.LEVEL_W, C.LEVEL_H = 2000, 780
+C.LEVEL_W, C.LEVEL_H = 2000, 1080
 
 -- Terrarium: the box, in level coordinates. Inner side faces match the level's
 -- walls (22 in, where Level:top_spans expects them); the lid's underside is 32.
 C.GLASS_L, C.GLASS_R = 22, 1978
 C.GLASS_T = 32              -- underside of the lid
-C.GLASS_B = 780             -- the jar's base, which stands on the desk
+C.GLASS_B = 1080            -- the jar's base, which stands on the desk
 C.GLASS_THICK = 10
 C.LID_THICK = 20
-C.SOIL_Y = 560              -- soil top on the creatures' plane
+C.SOIL_Y = 860              -- soil top on the creatures' plane
 C.SOIL_RISE = 24            -- the soil banks up a little toward the back glass
 
 -- Terrarium: the desk runs from the wall behind the jar to just past the camera

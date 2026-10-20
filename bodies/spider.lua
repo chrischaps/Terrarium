@@ -592,6 +592,11 @@ function Spider:update(dt, level, ctx)
             fabrik.solve(leg.chain, hx, hy, fx, fy, nil, nil, 4)
             clear_joints(leg.chain.joints, level)
         end
+        -- Terrarium: a foot out of reach leaves the leg pointing at it, and on
+        -- a riser just under a corner that line cuts through the corner, so the
+        -- tip comes out of the stone the same way
+        local tip = leg.chain.joints[#leg.chain.joints]
+        tip.x, tip.y = outside(level, tip.x, tip.y)
     end
 
     if stuck then
