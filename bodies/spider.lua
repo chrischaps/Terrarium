@@ -69,6 +69,7 @@ end
 -- come in Spider.BUCKETS stretches that share a graph, built for the shortest
 -- legs in the stretch: only the gaps those can step across.
 Spider.BUCKETS = 8
+Spider.BUCKET_GENE = 'reach' -- (#73: the gene the buckets divide, for the self-test)
 local navs = {}
 function Spider.nav_profile(genome)
     local k, lo, hi = Genome.bucket('spider', 'reach', genome and genome.reach or 1, Spider.BUCKETS)
@@ -76,6 +77,7 @@ function Spider.nav_profile(genome)
     local p = {}
     for key, v in pairs(Spider.profile_for(lo)) do p[key] = v end
     p.reach, p.reaches, p.bucket = nil, {lo, hi}, k
+    p.bucket_label = string.format('reaches %.3f-%.3f', lo, hi)
     navs[k] = p
     return p
 end
@@ -886,6 +888,42 @@ function Spider:draw_debug()
     love.graphics.circle('fill', self.a.x, self.a.y, 2.5)
     love.graphics.setColor(1, 1, 1, 0.5)
     love.graphics.line(self.a.x, self.a.y, self.a.x + self.nx * 16, self.a.y + self.ny * 16)
+end
+
+--------------------------------------------------------------------------------
+-- Terrarium: what the self-test knows of a spider (#73); see Worm.LIMITS
+Spider.LIMITS = {
+    -- of its planted feet, over every look, the ones its legs don't reach
+    {measure = 'slip', most = 0.02, says = "stood on feet it can't reach %.1f%% of the time", scale = 100},
+}
+
+-- Fold a look at spider `c` into `m`: of the feet it has planted (not
+-- stepping or tapping), how many its legs don't reach or that stand on
+-- nothing, counted over every look while it's on a surface
+function Spider.health(c, m, dt)
+    local bad, planted = 0, 0
+    if c.mode == 'attached' then
+        for _, leg in ipairs(c.legs) do
+            if not leg.stepping and not (c.tap and c.legs[c.tap.leg] == leg) then
+                planted = planted + 1
+                local tip = leg.chain.joints[#leg.chain.joints]
+                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 4 or not leg.grounded then bad = bad + 1 end
+            end
+        end
+    end
+    m.slips, m.planted = (m.slips or 0) + bad, (m.planted or 0) + planted
+    m.slip = m.slips / max(1, m.planted)
+    return m
+end
+
+-- How big spider `c` is built now: its reach
+function Spider.grown_size(c) return c.scale end
+
+-- `genome` with the body the sim works hardest for: the most legs, the longest
+function Spider.heaviest(genome)
+    local legs = Genome.spider.by_name.legs.pick
+    genome.legs, genome.reach = legs[#legs], Genome.spider.by_name.reach.real[2]
+    return genome
 end
 
 return Spider

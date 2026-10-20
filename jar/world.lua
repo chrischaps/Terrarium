@@ -136,8 +136,7 @@ World.BUILD_SLICE = 15000
 
 function World:built(key, nav, graph)
     self.navs[nav] = graph
-    local tag = (nav.sizes and string.format(' (sizes %.3f-%.3f)', nav.sizes[1], nav.sizes[2]))
-        or (nav.reaches and string.format(' (reaches %.3f-%.3f)', nav.reaches[1], nav.reaches[2])) or ''
+    local tag = nav.bucket_label and ' (' .. nav.bucket_label .. ')' or ''
     log.info('nav', '%s graph%s: %d nodes, %d edges', key, tag, #graph.nodes, graph.edge_count)
 end
 
@@ -156,6 +155,8 @@ function World:place(key, genome, x, solid_id, name, young)
     end
     c.key, c.name = key, name
     c.home = {x = x, solid = solid_id}
+    -- (every body carries a Base.Mover, even a climber that only jumps with it, #73)
+    assert(c.mover, 'world: a ' .. key .. ' has no mover')
     c.mover.solid = solid
     if c.profile.climbs then
         c.solid = solid

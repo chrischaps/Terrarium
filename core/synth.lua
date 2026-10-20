@@ -386,18 +386,78 @@ local function along(key, genome, name)
     return max(0, min(1, (v - r[1]) / (r[2] - r[1])))
 end
 
+-- Terrarium: what each plan sounds like (#73). A plan with no entry is
+-- silent, and the rest of the synth never asks which plan a body is.
+--   size, octaves, give  the genes its voice reads (Synth.voice), and how far
+--                        its pitch travels over the size gene's range
+--   jump, land, step     play(self, D, ev, v, k, near): its moments, with `k`
+--                        how hard (0 to 1) and `near` already turned down to MOVE
+--   call(D, v)           its voice, heard at a hatching and a moult
+--   court                the sound its courtship keeps on its beat, how loud,
+--                        and beat(c, t, i, with): the beat it's on at jar time
+--                        `t`, with `with` its partner's index, and a pitch to sound it at
+--   move                 the loop its movement plays, louder the faster it goes
+local SOUNDS = {
+    worm = {
+        size = 'segments', octaves = 1.0, give = 'stiffness',
+        jump = function(self, D, ev, v, k, near)
+            self:play(D.chirp[v.kind], ev.x, (0.35 + k * 0.2) * near * v.gain, v.pitch * (0.95 + k * 0.15 + random() * 0.05))
+        end,
+        land = function(self, D, ev, v, k, near)
+            self:play(D.thump, ev.x, (0.25 + k * 0.45) * near * v.gain, v.pitch * (1.15 - k * 0.3))
+        end,
+        call = function(D, v) return D.chirp[v.kind] end,
+        -- at the top of each turn of its coil, half a turn from its partner's
+        court = {sound = 'trill', vol = 0.24, beat = function(c, t, i, with)
+            return floor((t * c.COIL_SPIN + (i < with and 0 or pi) - pi / 2) / TAU), 1
+        end},
+        move = 'slither',
+    },
+    blob = {
+        size = 'size', octaves = 1.2, give = 'pressure',
+        jump = function(self, D, ev, v, k, near)
+            self:play(D.boing[v.kind], ev.x, (0.35 + k * 0.2) * near * v.gain, v.pitch * (0.9 + k * 0.2))
+        end,
+        land = function(self, D, ev, v, k, near)
+            self:play(D.squelch[v.kind], ev.x, (0.3 + k * 0.5) * near * v.gain, v.pitch * (1.2 - k * 0.45 + random() * 0.08))
+        end,
+        call = function(D, v) return D.boing[v.kind] end,
+        court = {sound = 'hum', vol = 0.2, beat = function(c, t) return floor(t / c.PULSE), 1 end},
+        move = 'roll',
+    },
+    spider = {
+        size = 'reach', octaves = 0.9, give = 'legs',
+        jump = function(self, D, ev, v, k, near)
+            self:play(D.skitter, ev.x, 0.4 * near * v.gain, v.pitch * (1.2 + random() * 0.2))
+        end,
+        land = function(self, D, ev, v, k, near)
+            self:play(D.skitter, ev.x, (0.2 + k * 0.3) * near * v.gain, v.pitch * 0.9)
+        end,
+        step = function(self, D, ev, v, k, near)
+            local set = D.ticks[v.kind]
+            self:play(set[random(1, #set)], ev.x, (ev.near and 0.16 or 0.09) * near * v.gain, v.pitch * (0.85 + random() * 0.3))
+        end,
+        call = function(D) return D.skitter end,
+        -- as each front foot comes down, the near and then the far
+        court = {sound = 'tap', vol = 0.16, beat = function(c, t)
+            local beat = floor(t / c.TAP_BEAT)
+            return beat, beat % 2 == 0 and 1 or 0.84
+        end},
+    },
+}
+Synth.SOUNDS = SOUNDS
+
 -- Terrarium: a body's voice (#28), from its genes as they are now (a
 -- hatchling's are the bottom of their ranges) and how old it is (0 until
 -- it's an elder, 1 at its end). Its pitch spans about an octave across the
 -- size gene's range, and an elder's falls a fifth of one; a bigger body is a
 -- little louder; `kind` (1 to 3) is the variant its give speaks with.
-local SIZE = {worm = {'segments', 1.0}, blob = {'size', 1.2}, spider = {'reach', 0.9}}
-local GIVE = {worm = 'stiffness', blob = 'pressure', spider = 'legs'}
 function Synth.voice(c, old)
-    local size, octaves = SIZE[c.key][1], SIZE[c.key][2]
-    local t = along(c.key, c.genome, size)
-    local pitch = 2 ^ (octaves * (0.5 - t) - 0.2 * (old or 0))
-    local kind = 1 + floor(along(c.key, c.genome, GIVE[c.key]) * 2.999)
+    local s = SOUNDS[c.key]
+    if not s then return {pitch = 1, gain = 1, kind = 1} end
+    local t = along(c.key, c.genome, s.size)
+    local pitch = 2 ^ (s.octaves * (0.5 - t) - 0.2 * (old or 0))
+    local kind = 1 + floor(along(c.key, c.genome, s.give) * 2.999)
     return {pitch = pitch, gain = 0.85 + 0.3 * t, kind = kind}
 end
 
@@ -416,11 +476,9 @@ local function heed(who, focus)
     return who == focus and 1.2 or 0.5
 end
 
--- Terrarium: a plan's voice, the sound it jumps with
-local function call_of(D, key, v)
-    if key == 'worm' then return D.chirp[v.kind]
-    elseif key == 'blob' then return D.boing[v.kind] end
-    return D.skitter
+-- Terrarium: a plan's voice, heard at a hatching and a moult
+local function call_of(D, s, v)
+    return s and s.call and s.call(D, v)
 end
 
 -- React to world events
@@ -429,29 +487,16 @@ function Synth:on_event(ev, world, focus)
     local who = ev.who
     local near = heed(who, focus)
     local D = self.data
-    local key = who and who.key
+    local s = who and SOUNDS[who.key] or {}
     local v = who and voice_of(world, who)
     if ev.kind == 'jump' then
-        local k = min(1, abs(ev.vy or 300) / 500)
-        near = near * MOVE
-        local vol, p = (0.35 + k * 0.2) * near * v.gain, v.pitch
-        if key == 'worm' then self:play(D.chirp[v.kind], ev.x, vol, p * (0.95 + k * 0.15 + random() * 0.05))
-        elseif key == 'blob' then self:play(D.boing[v.kind], ev.x, vol, p * (0.9 + k * 0.2))
-        elseif key == 'spider' then self:play(D.skitter, ev.x, 0.4 * near * v.gain, p * (1.2 + random() * 0.2)) end
+        if s.jump then s.jump(self, D, ev, v, min(1, abs(ev.vy or 300) / 500), near * MOVE) end
     elseif ev.kind == 'land' then
-        local k = min(1, (ev.impact or 0) / 600)
-        local p = v.pitch
-        near = near * MOVE
-        if key == 'worm' then self:play(D.thump, ev.x, (0.25 + k * 0.45) * near * v.gain, p * (1.15 - k * 0.3))
-        elseif key == 'blob' then
-            self:play(D.squelch[v.kind], ev.x, (0.3 + k * 0.5) * near * v.gain, p * (1.2 - k * 0.45 + random() * 0.08))
-        elseif key == 'spider' then self:play(D.skitter, ev.x, (0.2 + k * 0.3) * near * v.gain, p * 0.9) end
+        if s.land then s.land(self, D, ev, v, min(1, (ev.impact or 0) / 600), near * MOVE) end
     elseif ev.kind == 'step' then
-        if self.tick_budget > 0 then
+        if s.step and self.tick_budget > 0 then
             self.tick_budget = self.tick_budget - 1
-            local set = D.ticks[v.kind]
-            self:play(set[random(1, #set)], ev.x, (ev.near and 0.16 or 0.09) * near * MOVE * v.gain,
-                v.pitch * (0.85 + random() * 0.3))
+            s.step(self, D, ev, v, 0, near * MOVE)
         end
     elseif ev.kind == 'courted' then
         -- a rising arpeggio from the pair, one note each and then both
@@ -468,10 +513,10 @@ function Synth:on_event(ev, world, focus)
         end
     elseif ev.kind == 'hatched' then
         self:play(D.crack, ev.x, 0.3, 0.9 + random() * 0.2)
-        self:play(call_of(D, key, v), ev.x, 0.3 * near, v.pitch * 1.2, 0.2)
+        self:play(call_of(D, s, v), ev.x, 0.3 * near, v.pitch * 1.2, 0.2)
     elseif ev.kind == 'moulted' then
         self:play(D.rustle, ev.x, 0.3 * near, 0.9 + random() * 0.2)
-        self:play(call_of(D, key, v), ev.x, 0.3 * near, v.pitch, 0.6)
+        self:play(call_of(D, s, v), ev.x, 0.3 * near, v.pitch, 0.6)
     elseif ev.kind == 'dying' then
         self:play(D.sigh, ev.x, 0.35 * near, v.pitch * 0.9)
     elseif ev.kind == 'returned' then
@@ -525,28 +570,18 @@ end
 -- Terrarium: a courting body sounds on its beat (#22), louder as it warms to it
 function Synth:court(world, i, c, near)
     local m = world.minds[i]
-    if m.doing ~= 'court' or not m.with or (c.ardour or 0) < 0.3 then
+    local s = SOUNDS[c.key] and SOUNDS[c.key].court
+    if not s or m.doing ~= 'court' or not m.with or (c.ardour or 0) < 0.3 then
         self.beats[c] = nil
         return
     end
-    local D, v, t = self.data, voice_of(world, c), world.time
-    local beat, data, vol, pitch
-    if c.key == 'worm' then
-        -- at the top of each turn of its coil, half a turn from its partner's
-        local a = t * c.COIL_SPIN + (i < m.with and 0 or pi) - pi / 2
-        beat, data, vol, pitch = floor(a / TAU), D.trill, 0.24, v.pitch
-    elseif c.key == 'blob' then
-        beat, data, vol, pitch = floor(t / c.PULSE), D.hum, 0.2, v.pitch
-    else
-        -- as each front foot comes down, the near and then the far
-        beat = floor(t / c.TAP_BEAT)
-        data, vol, pitch = D.tap, 0.16, v.pitch * (beat % 2 == 0 and 1 or 0.84)
-    end
+    local v = voice_of(world, c)
+    local beat, pitch = s.beat(c, world.time, i, m.with)
     local last = self.beats[c]
     self.beats[c] = beat
     if last and beat ~= last then
         local x = c:anchor()
-        self:play(data, x, vol * c.ardour * near * v.gain, pitch)
+        self:play(self.data[s.sound], x, s.vol * c.ardour * near * v.gain, v.pitch * pitch)
     end
 end
 
@@ -586,8 +621,8 @@ function Synth:update(dt, world, focus)
         live[c] = true
         local near = heed(c, focus)
         self:court(world, i, c, near)
-        local loop_data = (c.key == 'worm' and self.data.slither) or (c.key == 'blob' and self.data.roll) or nil
-        if loop_data and c.mover then
+        local loop_data = SOUNDS[c.key] and self.data[SOUNDS[c.key].move]
+        if loop_data then
             local L = self.loops[c]
             if not L then
                 L = self:start(loop_data)

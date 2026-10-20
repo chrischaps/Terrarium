@@ -1,5 +1,5 @@
--- The M2 gate (#19): eight random genomes of each plan, lined up on three
--- shelves in the jar's own light, by day and by night. Nobody is chosen: the
+-- The M2 gate (#19): eight random genomes of each plan, lined up on a shelf
+-- each in the jar's own light, by day and by night. Nobody is chosen: the
 -- genomes are the seed's first draws from rng.sim, so a lineup is a fair look
 -- at what the genes make.
 --
@@ -11,17 +11,37 @@
 
 local SEED = 19
 local PER_PLAN = 8
-local W, H = 2400, 660 -- the plate, in pixels
+local W = 2400 -- the plate's width in pixels; its height fits the shelves
 
--- Worms on a cork log, blobs on a stone ledge, spiders on a slate shelf above
-local ROWS = {
-    { plan = 'spider', y = 330, material = 'slate', h = 20 },
-    { plan = 'blob', y = 440, material = 'stone', h = 26 },
-    { plan = 'worm', y = 545, material = 'cork', h = 24 },
-}
+local Genome = require('genome')
+local World = require('jar.world')
+
+-- A shelf per plan (#73), the first in Genome.order lowest: cork, stone and
+-- slate in turn, each a shelf's height above the last (closer together when
+-- there are more of them, so the top one stays clear of the lid). Rows are
+-- filled from the top down.
+local MATERIALS = { { 'cork', 24 }, { 'stone', 26 }, { 'slate', 20 } }
+local LOWEST, HIGHEST, GAP = 545, 150, 107.5
+local ROWS = {}
+local gap = math.min(GAP, (LOWEST - HIGHEST) / math.max(1, #Genome.order - 1))
+for k = #Genome.order, 1, -1 do
+    local m = MATERIALS[(k - 1) % #MATERIALS + 1]
+    ROWS[#ROWS + 1] = { plan = Genome.order[k], y = LOWEST - (k - 1) * gap, material = m[1], h = m[2] }
+end
 local X0, X1 = 400, 1600 -- under the lamp
-local WORM_SEGMENT = 7.5 -- about how much worm one segment makes, lying down
-local VIEW = { 340, 248, 1660, 248 + (1660 - 340) * H / W } -- level units on the plate
+-- Level units on the plate: from above the top shelf (room for what stands on
+-- it) to below the lowest
+local TOP, BOTTOM = ROWS[1].y - 82, 611
+local VIEW = { 340, TOP, 1660, BOTTOM }
+local H = math.floor(W * (BOTTOM - TOP) / (1660 - 340) + 0.5)
+
+-- How far a body lies out behind where it stands (a worm trails its length)
+local function length(g)
+    for _, def in ipairs(World.CREATURES) do
+        if def.key == g.plan then return def.class.length and def.class.length(g) or 0 end
+    end
+    return 0
+end
 
 local function lineup(seed)
     local rng = require('core.rng')
@@ -44,18 +64,18 @@ local function lineup(seed)
             id = id, kind = 'ledge', material = row.material,
             x = X0 - 40, y = row.y, w = X1 - X0 + 80, h = row.h,
         })
-        -- A worm stands at its head and trails its body behind it, so worms
-        -- are spaced by their lengths; everyone else evenly
-        local row_genomes, length = {}, 0
+        -- A worm stands at its head and trails its body behind it, so a row
+        -- is spaced by its bodies' lengths
+        local row_genomes, lengths = {}, 0
         for k = 1, PER_PLAN do
-            row_genomes[k] = require('genome').random(row.plan, rng.sim)
-            length = length + (row.plan == 'worm' and row_genomes[k].segments * WORM_SEGMENT or 0)
+            row_genomes[k] = Genome.random(row.plan, rng.sim)
+            lengths = lengths + length(row_genomes[k])
         end
-        local gap = (X1 - X0 - length) / PER_PLAN
+        local gap = (X1 - X0 - lengths) / PER_PLAN
         local x = X0 + gap / 2
         for k, g in ipairs(row_genomes) do
             genomes[#genomes + 1] = g
-            x = x + (row.plan == 'worm' and g.segments * WORM_SEGMENT or 0)
+            x = x + length(g)
             table.insert(level.residents, {
                 key = row.plan, name = row.plan .. ' ' .. k, solid = id, genome = g, x = x,
             })

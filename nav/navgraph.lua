@@ -9,6 +9,11 @@
 --   span            - (climbers) the widest gap between solids its legs step across (Terrarium)
 --   min_radius      - (Terrarium) a size bucket's graph is shared by bodies of every
 --                     radius from this to `radius`, and every check covers them all
+--   leaps           - (Terrarium, #73) false: it never jumps or falls, so no
+--                     ballistic edges (a snail goes the long way round)
+--   flies           - (Terrarium, #73) reserved for a body that crosses the air
+--                     itself (the moth, #78); nothing reads it yet
+-- Ways of moving are flags on the profile, never a body's name.
 --
 -- Edge types:
 --   walk  - along a surface (or a small step between surfaces)
@@ -51,7 +56,7 @@ function NavGraph:build()
     else
         self:build_top_nodes()
     end
-    self:build_ballistic_edges()
+    if self.profile.leaps ~= false then self:build_ballistic_edges() end
     self:keep_home() -- Terrarium
     return self
 end

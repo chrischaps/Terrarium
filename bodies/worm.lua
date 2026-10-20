@@ -649,4 +649,49 @@ function Worm:draw_debug()
     love.graphics.circle('fill', m.x, m.y, 2.5)
 end
 
+--------------------------------------------------------------------------------
+-- Terrarium: what the self-test knows of a worm (#73), so it never has to ask
+-- which plan a body is. LIMITS are how far a body may come apart before the
+-- ranges test (#17) fails it: each of the measures health() keeps, the most it
+-- may reach, and how a fault reads (`scale` times the measure).
+Worm.LIMITS = {
+    {measure = 'torn', most = 2, says = 'tore a segment to %.1fx its length'}, -- longest segment over its rest length
+    {measure = 'knot', most = 2, says = 'stayed knotted %.1fs'}, -- s knotted (three sharp bends): a dropped tail shakes out
+}
+
+-- Fold a look at worm `c`, `dt` seconds after the last, into `m`, the worst
+-- it has been (a fresh `m` and dt 0 is a single look). How far its longest
+-- segment is stretched, and how long it has been knotted: a hairpin turn bends
+-- one or two joints back on themselves, a knot three or more.
+function Worm.health(c, m, dt)
+    local pts, most, sharp = c.points, 0, 0
+    for k = 2, #pts do
+        local a, b, q = pts[k - 1], pts[k], pts[k + 1]
+        local ux, uy = b.x - a.x, b.y - a.y
+        most = max(most, sqrt(ux * ux + uy * uy))
+        if q then
+            local vx, vy = q.x - b.x, q.y - b.y
+            local d = sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+            if d > 0 and (ux * vx + uy * vy) / d < -0.17 then sharp = sharp + 1 end
+        end
+    end
+    m.torn = max(m.torn or 0, most / SEG_LEN)
+    m.knotted = sharp >= 3 and (m.knotted or 0) + dt or 0
+    m.knot = max(m.knot or 0, m.knotted)
+    return m
+end
+
+-- How big worm `c` is built now: its segments
+function Worm.grown_size(c) return #c.points end
+
+-- `genome` with the body the sim works hardest for: the longest
+function Worm.heaviest(genome)
+    genome.segments = Genome.worm.by_name.segments.int[2]
+    return genome
+end
+
+-- How far a worm of `genome` lies out behind its head, lying down (a segment
+-- settles a little shorter than its rest length)
+function Worm.length(genome) return genome.segments * 7.5 end
+
 return Worm

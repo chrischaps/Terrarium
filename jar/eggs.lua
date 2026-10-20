@@ -97,7 +97,7 @@ local function draw_blob(e, skin, p, time, phase)
     love.graphics.circle('fill', -r * 0.38, -r * 0.42, 0.9)
 end
 
-local SILK = {0.93, 0.91, 0.95, 1}
+local SILK = Skin.families.spider.shell
 
 local function draw_spider(e, skin, p, time, phase)
     local rx, ry = SIZE.spider[1], SIZE.spider[2]
@@ -164,7 +164,8 @@ function Eggs.draw(world, light)
             local skin = skin_of(s)
             local rx = SIZE[s.key][1]
             local x, y = s.x, s.y - 1 - rx * 0.7
-            local c = s.key == 'spider' and SILK or (s.key == 'worm' and skin.band or skin.core)
+            local shell = Skin.families[s.key].shell -- (a colour of its skin, by name, or a colour)
+            local c = type(shell) == 'string' and skin[shell] or shell or skin[skin.main]
             set(c, 0.6 * a)
             love.graphics.arc('fill', x - rx * 2.6, y, rx * 0.75, pi * 0.1, pi * 1.0)
             love.graphics.arc('fill', x + rx * 2.4, y + 0.5, rx * 0.65, 0, pi * 0.85)
