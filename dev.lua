@@ -564,6 +564,179 @@ test('court', function(j, results)
         by_plan.spider, #SEEDS)
 end)
 
+-- Terrarium: 3c. Eggs (#23), the gate. In a jar of 900-second days from
+-- lamp-on, the first pair to court lays a clutch in the moss, each egg a
+-- child of the two. The clutch hatches about a day later, small and pale (the
+-- body of its genome at nothing grown, its graphs built while it waited),
+-- and each hatchling grows a stage at a time in its sleep, never twice in
+-- one, until it's its own genome, its own colours, and on its own graph. A
+-- few seconds after each moult its body is whole: a worm's new segments
+-- joined on, a blob filled out, a spider standing on its feet.
+-- Grown, a child mixes its parents: some genes from one, some from the other.
+local EGGS_DAYS = 5
+test('eggs', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local DayCycle = require('jar.daycycle')
+    local Genome = require('genome')
+    local SEEDS = j.seed and {j.seed} or {20261018, 2}
+    local mixed, raised = 0, 0
+    for _, seed in ipairs(SEEDS) do
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local clutch, hatched, laid_at = nil, {}, nil
+        local moults, slept, settle = {}, {}, {}
+        w.events:on(function(ev)
+            if ev.kind == 'laid' and not clutch then
+                clutch, laid_at = ev.eggs, w.time
+            elseif ev.kind == 'hatched' and clutch then
+                for _, egg in ipairs(clutch) do
+                    local c = w.creatures[egg.who]
+                    if c == ev.who then
+                        hatched[#hatched + 1] = egg
+                        -- Hatched about a day after it was laid, small and pale
+                        local waited = (w.time - egg.laid) / DAY
+                        check(results, waited >= World.INCUBATE[1] - 0.01 and waited <= World.INCUBATE[2] + 0.01,
+                            'eggs: an egg hatched after %.2f days (seed %d)', waited, seed)
+                        local small = Genome.young(egg.genome, 0)
+                        for _, g in ipairs(Genome[egg.key].own) do
+                            check(results, c.genome[g.name] == small[g.name], 'eggs: a %s hatched with %s %s, not %s (seed %d)',
+                                egg.key, g.name, tostring(c.genome[g.name]), tostring(small[g.name]), seed)
+                        end
+                        check(results, c.skin.young == 1, 'eggs: a %s hatched in its grown colours (seed %d)', egg.key, seed)
+                    end
+                end
+            elseif ev.kind == 'moulted' then
+                local i
+                for k, c in ipairs(w.creatures) do if c == ev.who then i = k end end
+                local nights = w.minds[i].nights
+                check(results, slept[i] ~= nights, 'eggs: creature %d moulted twice in one sleep (seed %d)', i, seed)
+                slept[i] = nights
+                moults[i] = (moults[i] or 0) + 1
+                settle[#settle + 1] = {i = i, at = w.time + 3}
+            end
+        end)
+        local steps, grown = math.floor(EGGS_DAYS * DAY / dt), false
+        -- Whole after growing: no segment stretched past twice its length, a
+        -- blob holding most of its area, a spider with its feet on something
+        local function whole(i)
+            local c = w.creatures[i]
+            local ok, what = true, ''
+            if c.key == 'worm' then
+                for k = 2, #c.points do
+                    local a, b = c.points[k - 1], c.points[k]
+                    if (b.x - a.x) ^ 2 + (b.y - a.y) ^ 2 > (2 * 8.5) ^ 2 then ok, what = false, 'torn' end
+                end
+            elseif c.key == 'blob' then
+                ok, what = math.abs(c:area()) > 0.5 * c.area0, 'crushed'
+            else
+                local feet = 0
+                for _, leg in ipairs(c.legs) do feet = feet + (leg.grounded and 1 or 0) end
+                ok, what = feet >= #c.legs / 2, 'off its feet'
+            end
+            check(results, ok, 'eggs: a %s was %s after a moult (seed %d)', c.key, what, seed)
+        end
+        for _ = 1, steps do
+            w:step(dt)
+            while settle[1] and w.time >= settle[1].at do whole(table.remove(settle, 1).i) end
+            if clutch and #hatched == #clutch then
+                grown = true
+                for _, egg in ipairs(clutch) do grown = grown and not w.young[egg.who] end
+                if grown and #settle == 0 then break end
+            end
+        end
+        check(results, clutch ~= nil, 'eggs: nobody laid in %d days of seed %d', EGGS_DAYS, seed)
+        if clutch then
+            local s = w.level.by_id[clutch[1].solid]
+            check(results, #clutch >= World.CLUTCH[1] and #clutch <= World.CLUTCH[2] and s.moss,
+                'eggs: a clutch of %d laid on %s (seed %d)', #clutch, s.id, seed)
+            check(results, #hatched == #clutch, 'eggs: %d of %d eggs hatched (seed %d)', #hatched, #clutch, seed)
+            for _, egg in ipairs(clutch) do
+                local a, b = egg.parents[1], egg.parents[2]
+                local i = egg.who
+                local c = i and w.creatures[i]
+                -- Each gene is one parent's, give or take a mutation's step
+                local from = {0, 0}
+                for _, g in ipairs(Genome[egg.key].genes) do
+                    local v, va, vb = egg.genome[g.name], a[g.name], b[g.name]
+                    local near = g.real and Genome.BIG * (g.real[2] - g.real[1]) + 1e-9 or 1
+                    if g.pick then
+                        local function at(x) for k, p in ipairs(g.pick) do if p == x then return k end end end
+                        v, va, vb = at(v), at(va), at(vb)
+                    end
+                    local da, db = math.abs(v - va), math.abs(v - vb)
+                    check(results, math.min(da, db) <= near, 'eggs: a child\'s %s %s is no parent\'s (%s, %s; seed %d)',
+                        g.name, tostring(egg.genome[g.name]), tostring(a[g.name]), tostring(b[g.name]), seed)
+                    if da < db then from[1] = from[1] + 1 elseif db < da then from[2] = from[2] + 1 end
+                end
+                if from[1] > 0 and from[2] > 0 then mixed = mixed + 1 end
+                if c then
+                    -- Grown into its genome, on its own graph
+                    local body = c.genome
+                    for _, g in ipairs(Genome[egg.key].own) do
+                        check(results, body[g.name] == egg.genome[g.name], 'eggs: a grown %s has %s %s, not %s (seed %d)',
+                            egg.key, g.name, tostring(body[g.name]), tostring(egg.genome[g.name]), seed)
+                    end
+                    check(results, not w.young[i] and not w.minds[i].young and c.skin.young == 0,
+                        'eggs: a hatchling never grew up (seed %d, %d moults)', seed, moults[i] or 0)
+                    check(results, moults[i] == World.STAGES, 'eggs: a hatchling moulted %d times (seed %d)',
+                        moults[i] or 0, seed)
+                    check(results, w.graphs[i] == w.navs[c.nav] and w.controllers[i].graph == w.graphs[i],
+                        'eggs: a grown %s walks a graph not its own (seed %d)', egg.key, seed)
+                    local x, y = c:anchor()
+                    check(results, x > 0 and x < level_data.width and y < 600,
+                        'eggs: a %s grew up outside the jar at %.0f, %.0f (seed %d)', egg.key, x, y, seed)
+                    raised = raised + 1
+                end
+            end
+            log.info('selftest', 'eggs  seed %-9d %s clutch of %d laid at %.0f s, hatched %s, grown by %.0f s',
+                seed, clutch[1].key, #clutch, laid_at, #hatched == #clutch and 'all' or (#hatched .. ''), w.time)
+        end
+    end
+    -- And every plan's growing, wherever the seeds' clutches fell: a hatchling
+    -- of the biggest body each plan has, moulted in turn as if each were a
+    -- night, settles whole into each new body and ends as its genome
+    for _, key in ipairs({'worm', 'blob', 'spider'}) do
+        rng.seed(23)
+        local w = World.new(level_data, {wander = false, selected = 0, hour = DayCycle.presets.night, day = DAY})
+        local g = Genome.random(key, rng.sim)
+        g.segments, g.size, g.reach = g.segments and 24, g.size and 1.4, g.reach and 1.3
+        local r
+        for _, res in ipairs(level_data.residents) do r = r or (res.key == key and res) end
+        local egg = w:lay(g, r.x + 30, r.solid, nil, {young = true})
+        while #w.eggs > 0 do w:step(dt) end
+        local i = egg.who
+        w.young[i].born = -math.huge
+        for stage = 1, World.STAGES do
+            w.minds[i].doing, w.minds[i].nights = 'rest', stage
+            for _ = 1, 2 / dt do w:step(dt) end
+            check(results, w.young[i] == nil or w.young[i].stage == stage, 'eggs: a %s didn\'t moult on night %d', key, stage)
+            local c = w.creatures[i]
+            if key == 'worm' then
+                local most = 0
+                for k = 2, #c.points do
+                    local a, b = c.points[k - 1], c.points[k]
+                    most = math.max(most, math.sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2))
+                end
+                check(results, most < 2 * 8.5 and #c.points == c.n, 'eggs: a worm grown to %d segments is torn (%.1f)',
+                    c.n, most)
+            elseif key == 'blob' then
+                check(results, math.abs(c:area()) > 0.8 * c.area0, 'eggs: a blob grown to size %.2f hasn\'t filled out',
+                    c.size)
+            else
+                local feet = 0
+                for _, leg in ipairs(c.legs) do feet = feet + (leg.grounded and 1 or 0) end
+                check(results, feet == #c.legs, 'eggs: a spider grown to reach %.2f stands on %d of %d feet',
+                    c.scale, feet, #c.legs)
+            end
+        end
+        local c = w.creatures[i]
+        check(results, not w.young[i] and c.genome.segments == g.segments and c.genome.size == g.size
+            and c.genome.reach == g.reach and w.graphs[i] == w.navs[c.nav], 'eggs: a %s didn\'t grow into its genome', key)
+    end
+    check(results, mixed >= 1, 'eggs: no child mixed its parents\' genes')
+    log.info('selftest', 'eggs         %d raised, %d with genes from both parents', raised, mixed)
+end)
+
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)

@@ -239,6 +239,22 @@ function Genome.child(a, b, gen)
     return out
 end
 
+-- Terrarium: the body of `genome` at `grown` (0 a hatchling, 1 an adult, #23).
+-- Each gene that makes its body starts at the low end of its range (the
+-- shortest worm, the smallest blob, the shortest legs) and grows toward its
+-- own value; picks (a spider's legs) and temperament are its own from the
+-- egg. Every stage is a body the ranges test has proven, so a hatchling is
+-- never a body nobody has tried.
+function Genome.young(genome, grown)
+    local p = plan_of(genome.plan)
+    local out = Genome.copy(genome)
+    for _, g in ipairs(p.own) do
+        local r = g.real or g.int
+        if r then out[g.name] = hold(g, r[1] + (genome[g.name] - r[1]) * grown) end
+    end
+    return out
+end
+
 -- Terrarium: which of `n` equal stretches of a real gene's range `v` falls in
 -- (#16). Returns the stretch (0 to n-1) and its two ends. Worked in thousandths,
 -- the way genes are kept, so a value on a boundary always lands on the same

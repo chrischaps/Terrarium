@@ -22,6 +22,9 @@
 -- foot lifts and reaches toward the other, then the other front foot, on a
 -- beat they share (the jar's clock), and the body bobs and the markings
 -- flush in time.
+--
+-- Terrarium: a hatchling (#23) has all its legs but they're short, and it's
+-- pale; its legs lengthen in its sleep (Spider:grow).
 
 local Base = require('bodies.base')
 local Skin = require('bodies.skin')
@@ -125,9 +128,9 @@ local COLORS = {
     eye      = {1.00, 0.80, 0.45},
 }
 
-function Spider.new(x, y, world, genome)
-    local self = setmetatable({}, Spider)
-    -- Terrarium: the body from its genes
+-- Terrarium: the parts of a spider its genes make: its legs, how long they
+-- are and the profile that goes with them. `young` (0..1) is how pale it is (#23).
+function Spider:take(genome, young)
     if genome then Genome.clamp(genome) end
     local scale = genome and genome.reach or 1
     self.genome = genome
@@ -138,10 +141,18 @@ function Spider.new(x, y, world, genome)
     self.bones = {BONES[1] * scale, BONES[2] * scale, BONES[3] * scale}
     self.ride = RIDE * (0.6 + 0.4 * scale) -- long legs stand it taller
     self.step_dist = STEP_DIST * scale
-    self.world = world
-    self.skin = Skin.of('spider', genome)
+    self.court_gap = 17 * scale + 4 -- Terrarium: its half of the gap to a partner (#22)
+    self.skin = Skin.of('spider', genome, young)
     self.skin.eye = COLORS.eye
     self.color_name = self.skin.name
+end
+
+function Spider.new(x, y, world, genome, young)
+    local self = setmetatable({}, Spider)
+    -- Terrarium: the body from its genes
+    self:take(genome, young)
+    local scale = self.scale
+    self.world = world
     self.a = {x = x, y = y}                 -- anchor on the surface
     self.nx, self.ny = 0, -1                -- smoothed surface normal
     self.tnx, self.tny = 0, -1              -- target normal
@@ -157,7 +168,6 @@ function Spider.new(x, y, world, genome)
     self.bob = 0
     self.tap = nil
     self.next_tap = rng.range(rng.look, 3, 7)
-    self.court_gap = 17 * scale + 4 -- Terrarium: its half of the gap to a partner (#22)
     self.ardour, self.flush = 0, 0
     self.legs = {}
     for i, def in ipairs(self.layout) do
@@ -173,6 +183,22 @@ function Spider.new(x, y, world, genome)
     end
     self:plant_all()
     return self
+end
+
+-- Terrarium: grow into `genome` where it stands or hangs (#23). Its legs
+-- lengthen in place and every foot is set down again for legs that long.
+function Spider:grow(genome, young)
+    self:take(genome, young)
+    self.mover.profile = self.profile
+    for i, leg in ipairs(self.legs) do
+        leg.def = self.layout[i]
+        local hx, hy = self:hip(leg.def)
+        leg.chain = fabrik.chain(hx, hy, self.bones, 0, 1)
+    end
+    -- (the new layout faces right, as a spider's does when it's built)
+    self.legs_facing = 1
+    if self.facing ~= 1 then self:turn_legs() end
+    self:plant_all()
 end
 
 function Spider:get_name() return "Cave Spider" end

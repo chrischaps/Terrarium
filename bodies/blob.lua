@@ -21,6 +21,9 @@
 -- Terrarium: courting (#22), two blobs pulse in time. Each swells on the same
 -- beat, the jar's clock, and leans in toward the other, and its markings
 -- flush as it swells.
+--
+-- Terrarium: a hatchling (#23) is small, soft and pale, and swells in its
+-- sleep (Blob:grow).
 
 local Base = require('bodies.base')
 local Genome = require('genome')
@@ -96,9 +99,10 @@ local COLORS = {
     eye_far = {0.96, 1.00, 0.98},
 }
 
-function Blob.new(x, y, world, genome)
-    local self = setmetatable({}, Blob)
-    -- Terrarium: the body from its genes
+-- Terrarium: the parts of a blob its genes make: its size and the profile
+-- that goes with it, and how firmly it holds itself. `young` (0..1) is how
+-- pale it is (#23).
+function Blob:take(genome, young)
     if genome then Genome.clamp(genome) end
     local size = genome and genome.size or 1
     local firm = genome and genome.pressure or 1
@@ -113,18 +117,25 @@ function Blob.new(x, y, world, genome)
     self.give = 0.55 / firm                      -- how far a landing carries into the floor
     self.dent = 0.08 / firm                      -- how much pressure a landing knocks out
     self.recover = 7 * firm                      -- how fast it fills back out
-    self.mover = Base.Mover.new(x, y, self.profile)
-    self.face = Base.Face.new()
-    self.skin = Skin.of('blob', genome)
+    self.rest_edge = 2 * self.R * sin(pi / N)
+    self.area0 = 0.5 * N * self.R * self.R * sin(2 * pi / N)
+    self.court_gap = self.R + 3 -- Terrarium: its half of the gap to a partner (#22)
+    self.skin = Skin.of('blob', genome, young)
     self.skin.eye, self.skin.eye_far = COLORS.eye, COLORS.eye_far
     self.color_name = self.skin.name
+end
+
+function Blob.new(x, y, world, genome, young)
+    local self = setmetatable({}, Blob)
+    -- Terrarium: the body from its genes
+    self:take(genome, young)
+    local size = self.size
+    self.mover = Base.Mover.new(x, y, self.profile)
+    self.face = Base.Face.new()
     self.points = {}
     self.ax, self.ay = x, y
     self:layout(x, y)
-    self.rest_edge = 2 * self.R * sin(pi / N)
-    self.area0 = 0.5 * N * self.R * self.R * sin(2 * pi / N)
     self.pressure = 1
-    self.court_gap = self.R + 3 -- Terrarium: its half of the gap to a partner (#22)
     self.ardour, self.flush = 0, 0
     self.rot = 0
     self.trail = {}
@@ -147,6 +158,21 @@ function Blob:layout(x, y)
         local px, py = x + cos(a) * R, y - R + sin(a) * R
         self.points[i] = {x = px, y = py, px = px, py = py}
     end
+end
+
+-- Terrarium: grow into `genome` where it sits (#23). The ring swells about the
+-- point it rests on, so it stays on the ground, and the pressure constraint
+-- fills it out to its new area over the next steps.
+function Blob:grow(genome, young)
+    local was = self.R
+    self:take(genome, young)
+    local k, m = self.R / was, self.mover
+    m.profile = self.profile
+    for _, p in ipairs(self.points) do
+        p.x, p.y = m.x + (p.x - m.x) * k, m.y + (p.y - m.y) * k
+        p.px, p.py = p.x, p.y
+    end
+    for _, b in ipairs(self.bubbles) do b.r = b.r * k end
 end
 
 function Blob:get_name() return "Jelly Blob" end

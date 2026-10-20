@@ -25,6 +25,9 @@
 -- round the point between them, half a turn from its partner's, so the two
 -- bodies follow their heads up and over each other and twine; and the
 -- markings flush with every turn.
+--
+-- Terrarium: a hatchling (#23) is short, loose and pale, and grows in its
+-- sleep: Worm:grow adds segments at its tail.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
@@ -72,16 +75,11 @@ local COLORS = {
     pupil    = {0.10, 0.05, 0.08},
 }
 
-function Worm.new(x, y, world, genome)
-    local self = setmetatable({}, Worm)
-    self.world = world
-    self.profile = Worm.profile
-    self.nav = Worm.nav_profile(genome)
-    self.mover = Base.Mover.new(x, y, Worm.profile)
-    self.face = Base.Face.new()
-    -- Terrarium: the body from its genes
+-- Terrarium: the parts of a worm its genes make: its length, its tone, its
+-- clitellum and how thick each segment is. `young` (0..1) is how pale it is (#23).
+function Worm:take(genome, young)
     if genome then Genome.clamp(genome) end
-    self.skin = Skin.of('worm', genome)
+    self.skin = Skin.of('worm', genome, young)
     self.skin.rim, self.skin.eye, self.skin.eye_far, self.skin.pupil = COLORS.rim, COLORS.eye, COLORS.eye_far, COLORS.pupil
     self.color_name = self.skin.name
     local n = genome and genome.segments or SEGMENTS
@@ -95,16 +93,30 @@ function Worm.new(x, y, world, genome)
     self.bear = min(1, 0.4 / stiff)               -- the share of its weight it doesn't carry
     self.squeeze = 0.24 * stiff ^ -0.5            -- how short a bunched segment gets
     self.band = math.floor(0.35 * (n - 1) + 0.5) + 1 -- the clitellum, a third of the way down
-    self.points = {}
     self.radii = {}
-    local dir = Worm.layout_dir(world and world.level, x, y, 1, n)
     for i = 1, n do
-        local px = x - (i - 1) * SEG_LEN * dir
-        self.points[i] = {x = px, y = y - 7, px = px, py = y - 7}
         local t = (i - 1) / (n - 1)
         local r = 8.6 * (1 - t) ^ 0.75 + 2.4 * t
         if i == self.band or i == self.band + 1 then r = r + 1.1 end   -- the band (clitellum)
         self.radii[i] = r
+    end
+end
+
+function Worm.new(x, y, world, genome, young)
+    local self = setmetatable({}, Worm)
+    self.world = world
+    self.profile = Worm.profile
+    self.nav = Worm.nav_profile(genome)
+    self.mover = Base.Mover.new(x, y, Worm.profile)
+    self.face = Base.Face.new()
+    -- Terrarium: the body from its genes
+    self:take(genome, young)
+    local n = self.n
+    self.points = {}
+    local dir = Worm.layout_dir(world and world.level, x, y, 1, n)
+    for i = 1, n do
+        local px = x - (i - 1) * SEG_LEN * dir
+        self.points[i] = {x = px, y = y - 7, px = px, py = y - 7}
     end
     self.phase = 0
     self.head_lift = 0
@@ -115,6 +127,25 @@ function Worm.new(x, y, world, genome)
     self.ardour, self.flush = 0, 0
     self.mesh = nil
     return self
+end
+
+-- Terrarium: grow into `genome` where it lies (#23). New segments come at the
+-- tail, the way an earthworm's do, each laid on along the line of the last
+-- two (or on the last, if that line runs into the scenery), and the chain
+-- settles them in its next steps.
+function Worm:grow(genome, young)
+    local level = self.world and self.world.level
+    self:take(genome, young)
+    local pts = self.points
+    while #pts < self.n do
+        local a, b = pts[#pts - 1], pts[#pts]
+        local dx, dy = b.x - a.x, b.y - a.y
+        local d = sqrt(dx * dx + dy * dy)
+        local x, y = b.x, b.y
+        if d > 0.01 then x, y = b.x + dx / d * SEG_LEN, b.y + dy / d * SEG_LEN end
+        if level and level:solid_at(x, y) then x, y = b.x, b.y end
+        pts[#pts + 1] = {x = x, y = y, px = x, py = y}
+    end
 end
 
 function Worm:get_name() return "Earthworm" end

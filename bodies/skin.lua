@@ -33,7 +33,15 @@ Skin.PATTERNS = {'capped', 'banded', 'spotted', 'striped'}
 
 -- Each family's stretch of hue, in OKLCH degrees, and its colours at hue h.
 -- Light falling on a body (a worm's rim, a blob's lit edge) stays the lamp's.
-local function rgb(L, C, h, a) local r, g, b = oklch(L, C, h) return {r, g, b, a or 1} end
+-- Terrarium: a hatchling is pale (#23): `pale` (1 just hatched, 0 grown)
+-- lifts every colour toward milk-white and takes away most of its chroma, so
+-- a young one wears its family's colours faintly and darkens into them.
+local pale = 0
+local function rgb(L, C, h, a)
+    L, C = L + (0.92 - L) * 0.6 * pale, C * (1 - 0.65 * pale)
+    local r, g, b = oklch(L, C, h)
+    return {r, g, b, a or 1}
+end
 
 Skin.families = {
     worm = {
@@ -94,13 +102,16 @@ function Skin.hash(a, b)
     return n - floor(n)
 end
 
--- The skin for a body of plan `key` with `genome` (nil: the middle of each gene)
-function Skin.of(key, genome)
+-- The skin for a body of plan `key` with `genome` (nil: the middle of each
+-- gene), `young` (0..1) pale with youth
+function Skin.of(key, genome, young)
     local fam = Skin.families[key]
     local hue = genome and genome.hue or 0.5
     local h = fam.hue[1] + hue * (fam.hue[2] - fam.hue[1])
+    pale = young or 0
     local skin = fam.colours(h)
-    skin.h = h
+    pale = 0
+    skin.h, skin.young = h, young or 0
     skin.pattern = Skin.PATTERNS[genome and genome.pattern or 2]
     skin.glow = genome and genome.glow or 0.5
     skin.seed = hue * 97 + skin.glow * 13 -- places the spots
