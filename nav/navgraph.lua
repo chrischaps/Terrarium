@@ -13,6 +13,16 @@
 --                     ballistic edges (a snail goes the long way round)
 --   flies           - (Terrarium, #73) reserved for a body that crosses the air
 --                     itself (the moth, #78); nothing reads it yet
+--   hops            - (Terrarium, #76) it leaps along a surface as well as between
+--                     them: jumps also join the nodes of one span up to `hop_max`
+--                     apart (a springtail gets about by hopping)
+--   walk_cost       - (Terrarium, #76) a walk edge costs this many times its length
+--                     (1 if unset), so a body that would rather hop does
+--   loft            - (Terrarium, #76) the lowest a leap's apex goes over its higher
+--                     end (ballistics.solve_jump)
+--   jump_flat       - (Terrarium, #76) what every leap costs on top of its length
+--                     (60 if unset): a hopper's are cheap. No edge costs less than
+--                     its chord, so A*'s straight-line heuristic never overestimates.
 -- Ways of moving are flags on the profile, never a body's name.
 --
 -- Edge types:
@@ -245,6 +255,7 @@ end
 function NavGraph:build_top_nodes()
     local level, p = self.level, self.profile
     local margin = math.max(8, p.radius * 0.7)
+    local wc = p.walk_cost or 1 -- Terrarium (#76)
     self.spans = {}
 
     for _, span in ipairs(level:top_spans()) do
@@ -263,8 +274,8 @@ function NavGraph:build_top_nodes()
                     })
                     list[#list + 1] = n
                     if prev then
-                        self:connect(prev, n, 'walk', dist(prev, n))
-                        self:connect(n, prev, 'walk', dist(prev, n))
+                        self:connect(prev, n, 'walk', dist(prev, n) * wc)
+                        self:connect(n, prev, 'walk', dist(prev, n) * wc)
                     end
                     prev = n
                 else
@@ -288,7 +299,7 @@ function NavGraph:build_top_nodes()
                and abs(b.y - a.y) <= p.step then
                 local mx, my = (a.x + b.x) / 2, math.min(a.y, b.y)
                 if self:clear(mx, my, 1, 1, 0.8) then
-                    self:connect(a, b, 'walk', dist(a, b) + 4)
+                    self:connect(a, b, 'walk', (dist(a, b) + 4) * wc)
                 end
             end
         end
@@ -419,22 +430,26 @@ function NavGraph:build_ballistic_edges()
         if n.kind == 'top' then tops[#tops + 1] = n end
     end
 
+    local flat = p.jump_flat or 60 -- Terrarium (#76)
     for _, a in ipairs(tops) do
         self:work(#tops)
         for _, b in ipairs(tops) do
             local dx, dy = b.x - a.x, b.y - a.y
-            if a.solid ~= b.solid and abs(dx) <= MAX_JUMP_DX and not self:has_step(a, b) then
+            local across = a.solid ~= b.solid and abs(dx) <= MAX_JUMP_DX and not self:has_step(a, b)
+            -- Terrarium: a hopper leaps along its own span too (#76)
+            local hop = p.hops and a ~= b and a.span ~= nil and a.span == b.span and abs(dx) <= p.hop_max
+            if across or hop then
                 self:work(NavGraph.JUMP_WORK)
                 -- Jump: any standing node to any other surface
                 local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p, level) -- Terrarium: the lowest clear arc
                 if vx then
                     local d = dist(a, b)
-                    self:connect(a, b, 'jump', d * 1.25 + 60,
+                    self:connect(a, b, 'jump', d * 1.25 + flat,
                         {vx = vx, vy = vy, t = t, dare = NavGraph.dare(p, vx, vy)})
                 end
 
                 -- Fall: only off the end of a span, in the direction of the drop
-                if dy > p.step and not p.climbs then
+                if across and dy > p.step and not p.climbs then
                     local dir = (a.end_right and dx > 0) and 1 or ((a.end_left and dx < 0) and -1 or 0)
                     if dir ~= 0 then
                         local ex = (dir > 0) and a.span.x1 or a.span.x0

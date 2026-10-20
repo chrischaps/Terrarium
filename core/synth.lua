@@ -203,6 +203,24 @@ function Synth:generate()
         return (random() * 2 - 1) * env * 0.3 + sin(TAU * 900 * t) * env * 0.15
     end)
 
+    -- Terrarium: springtail (#76). The furcula's snap, a tiny dry crack with a
+    -- glassy ping after it (short antennae click, long ones ring a little),
+    -- and on the beat of its courting hops a soft rising pip
+    D.snap = three(function(k)
+        local nz = lp_noise(0.95)
+        local dur = 0.05 + 0.04 * k
+        return render(dur, function(t)
+            local crack = nz() * exp(-t * 900)
+            local ping = sin(TAU * (2300 + 500 * k) * t) * exp(-t * (180 - 90 * k))
+            return (crack * 0.8 + ping * (0.25 + 0.2 * k)) * min(1, t / 0.0004) * 0.6
+        end)
+    end)
+    D.pip = render(0.09, function(t)
+        local f = 1500 + 900 * min(1, t / 0.05)
+        local env = min(1, t / 0.004) * exp(-t * 40)
+        return sin(TAU * f * t) * env * 0.45
+    end)
+
     -- Spore puff: breathy band of noise
     local nz4 = lp_noise(0.25)
     D.spores = render(0.45, function(t)
@@ -443,6 +461,18 @@ local SOUNDS = {
             local beat = floor(t / c.TAP_BEAT)
             return beat, beat % 2 == 0 and 1 or 0.84
         end},
+    },
+    -- (#76) it snaps up and lands with a pat, and pips as it hops in place courting
+    springtail = {
+        size = 'spring', octaves = 0.8, give = 'antennae',
+        jump = function(self, D, ev, v, k, near)
+            self:play(D.snap[v.kind], ev.x, (0.3 + k * 0.2) * near * v.gain, v.pitch * (0.95 + random() * 0.1))
+        end,
+        land = function(self, D, ev, v, k, near)
+            self:play(D.pat, ev.x, (0.15 + k * 0.25) * near * v.gain, v.pitch * (1.1 + random() * 0.2))
+        end,
+        call = function(D, v) return D.pip end,
+        court = {sound = 'pip', vol = 0.14, beat = function(c, t) return floor(t / c.HOP_BEAT), 1 end},
     },
 }
 Synth.SOUNDS = SOUNDS

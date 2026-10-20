@@ -50,6 +50,7 @@ World.CREATURES = {
     {key = 'worm',   class = require('bodies.worm'),   grazes = true},
     {key = 'blob',   class = require('bodies.blob'),   grazes = true},
     {key = 'spider', class = require('bodies.spider'), grazes = true},
+    {key = 'springtail', class = require('bodies.springtail'), grazes = true}, -- (#76)
 }
 local CLASS, GRAZES = {}, {}
 for _, def in ipairs(World.CREATURES) do CLASS[def.key], GRAZES[def.key] = def.class, def.grazes end
@@ -732,6 +733,7 @@ function World:step(dt)
                 look_at = look and {x = look.x, y = look.y - 10} or mind:look(c, self),
                 light_dir = self.light_dir,
                 court = mind:courting(self, i), -- Terrarium: its partner and their beat (#22)
+                rest = mind.doing == 'rest', -- Terrarium: asleep, for a body that sleeps its own way (#76)
             })
         end
         -- Terrarium: feet on the way somewhere wear the moss they cross

@@ -6,6 +6,8 @@
 --   blob    a bead of clear jelly, like frogspawn, with the child curled inside
 --           and growing as the day goes by
 --   spider  a sac of silk, with the spiderlings a faint stipple through it
+--   springtail  a little heap of glossy beads, each with a dark eye-spot
+--           showing as it ripens (#76)
 -- They sit pressed into the cushion of moss, and breathe a soft light that
 -- shows most at night and most of all in the eggs whose child will glow. In
 -- the last hours they tremble, and then there's an empty shell for a while.
@@ -20,7 +22,7 @@ local Eggs = {}
 
 local sin, cos, pi, max, min = math.sin, math.cos, math.pi, math.max, math.min
 
-local SIZE = {worm = {7.5, 5}, blob = {6.5, 6.5}, spider = {7.5, 6.5}} -- half width, half height
+local SIZE = {worm = {7.5, 5}, blob = {6.5, 6.5}, spider = {7.5, 6.5}, springtail = {6.5, 4.5}} -- half width, half height
 local STIR = 0.85 -- of the way to hatching, it starts to tremble
 
 local function skin_of(e)
@@ -136,7 +138,26 @@ local function draw_spider(e, skin, p, time, phase)
     love.graphics.line(rx * 0.7, ry * 0.5, rx * 1.4, ry * 1.2)
 end
 
-local DRAW = {worm = draw_worm, blob = draw_blob, spider = draw_spider}
+-- (where each bead of a springtail's heap sits, and how big it is)
+local BEADS = {{-3.6, 1.6, 2.1}, {0, 1.9, 2.3}, {3.7, 1.5, 2.0}, {-1.9, -1.4, 2.0}, {1.9, -1.5, 2.1}, {0.1, -3.9, 1.7}}
+
+local function draw_springtail(e, skin, p, time, phase)
+    for k, b in ipairs(BEADS) do
+        local x, y, r = b[1], b[2], b[3] * (0.92 + 0.16 * Skin.hash(phase, k))
+        set(skin.outline, 0.45)
+        love.graphics.circle('fill', x, y, r + 0.4)
+        set(skin.belly, 0.9)
+        love.graphics.circle('fill', x, y, r)
+        -- the young one's eye-spot, darkening as it ripens
+        set(skin.body, 0.15 + 0.6 * p)
+        love.graphics.circle('fill', x + r * 0.2, y + r * 0.15, r * (0.18 + 0.12 * p))
+        -- each one glossy
+        love.graphics.setColor(1, 1, 1, 0.75)
+        love.graphics.circle('fill', x - r * 0.38, y - r * 0.4, r * 0.28)
+    end
+end
+
+local DRAW = {worm = draw_worm, blob = draw_blob, spider = draw_spider, springtail = draw_springtail}
 
 -- The clutches, under the creatures' lighting (in level units)
 function Eggs.draw(world, light)

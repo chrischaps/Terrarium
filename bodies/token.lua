@@ -15,14 +15,6 @@
 local Token = {}
 Token.__index = Token
 
--- How far either side of its anchor each plan's body lies, for where it goes
--- back to the moss: half a worm's length, a blob's radius, a spider's legs
-local HALF = {
-    worm = function(t) return t.n * 8.5 / 2 end,
-    blob = function(t) return t.R end,
-    spider = function(t) return 30 * t.scale end,
-}
-
 -- A token of plan `key` (whose body class is `class`) at (x, y), from
 -- `genome`; `young` as the plan's own body takes it
 function Token.new(key, class, x, y, genome, young)
@@ -39,7 +31,9 @@ function Token:take(genome, young)
     self.profile = self.profile or self.class.profile
     self.nav = self.nav or self.class.nav_profile(genome)
     self.court_gap = self.court_gap or 9 -- (a worm's, which only its new sets)
-    self.half = HALF[self.key](self)
+    -- (how far either side of its anchor its body lies, for where it goes back
+    -- to the moss: its plan's `half`, #76)
+    self.half = self.class.half(self)
 end
 
 function Token:anchor() return self.x, self.y end
