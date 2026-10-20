@@ -221,6 +221,32 @@ function Synth:generate()
         return sin(TAU * f * t) * env * 0.45
     end)
 
+    -- Terrarium: snail (#77). As it goes, a slow wet ooze with now and then a
+    -- tiny bubble giving way; as its eyes pull in, a soft suck (a shell of
+    -- few whorls hollow and low, a many-whorled one ringing a little); and on
+    -- each sway of its courtship a small wet kiss
+    local nz8 = lp_noise(0.04)
+    local pops = grains(5, 1.6)
+    D.ooze = self:loop(1.6, function(t)
+        local swell = 0.6 + 0.4 * sin(TAU * t / 1.6)
+        return nz8() * 1.4 * swell + pops(t) * 0.35
+    end)
+    D.suck = three(function(k)
+        local nz = lp_noise(0.15 + 0.2 * k)
+        local dur = 0.16 + 0.06 * k
+        return render(dur, function(t)
+            local p = t / dur
+            local f = 260 + 380 * p
+            local env = min(1, t / 0.012) * (1 - p) ^ 2
+            return (nz() * 0.9 + sin(TAU * f * t) * (0.25 + 0.2 * k)) * env * 0.5
+        end)
+    end)
+    local nz9 = lp_noise(0.35)
+    D.kiss = render(0.1, function(t)
+        local env = min(1, t / 0.003) * exp(-t * 55)
+        return (nz9() * 0.8 + sin(TAU * (700 - 2000 * t) * t) * 0.4) * env * 0.5
+    end)
+
     -- Spore puff: breathy band of noise
     local nz4 = lp_noise(0.25)
     D.spores = render(0.45, function(t)
@@ -415,6 +441,10 @@ end
 --                        and beat(c, t, i, with): the beat it's on at jar time
 --                        `t`, with `with` its partner's index, and a pitch to sound it at
 --   move                 the loop its movement plays, louder the faster it goes
+--                        (and `hush`, how much quieter, and `speed(c)`, how fast
+--                        of its best it goes, for a body that doesn't walk)
+--   on                   {event = play(self, D, ev, v, near)}: any other moment
+--                        of its own its body tells the World of
 local SOUNDS = {
     worm = {
         size = 'segments', octaves = 1.0, give = 'stiffness',
@@ -473,6 +503,18 @@ local SOUNDS = {
         end,
         call = function(D, v) return D.pip end,
         court = {sound = 'pip', vol = 0.14, beat = function(c, t) return floor(t / c.HOP_BEAT), 1 end},
+    },
+    -- (#77) it oozes as it goes, sucks its eyes in when something comes near
+    -- (or it settles to sleep), and kisses on each sway courting
+    snail = {
+        size = 'size', octaves = 0.9, give = 'whorls',
+        call = function(D, v) return D.suck[v.kind] end,
+        on = {withdraw = function(self, D, ev, v, near)
+            self:play(D.suck[v.kind], ev.x, 0.22 * near * v.gain, v.pitch * (0.92 + random() * 0.12))
+        end},
+        court = {sound = 'kiss', vol = 0.15, beat = function(c, t) return floor(t / c.SWAY_BEAT), 1 end},
+        move = 'ooze', hush = 0.55,
+        speed = function(c) return c.pace / c.profile.crawl_speed end,
     },
 }
 Synth.SOUNDS = SOUNDS
@@ -558,6 +600,8 @@ function Synth:on_event(ev, world, focus)
     elseif ev.kind == 'pinch' then
         self:play(D.lid, ev.x, 0.3, 1)
         self:play(D.sprinkle, ev.x, 0.25, 0.95 + random() * 0.1, 0.3)
+    elseif s.on and s.on[ev.kind] then
+        s.on[ev.kind](self, D, ev, v, near * MOVE)
     end
 end
 
@@ -651,7 +695,8 @@ function Synth:update(dt, world, focus)
         live[c] = true
         local near = heed(c, focus)
         self:court(world, i, c, near)
-        local loop_data = SOUNDS[c.key] and self.data[SOUNDS[c.key].move]
+        local s = SOUNDS[c.key]
+        local loop_data = s and self.data[s.move]
         if loop_data then
             local L = self.loops[c]
             if not L then
@@ -659,11 +704,12 @@ function Synth:update(dt, world, focus)
                 self.loops[c] = L
             end
             local m = c.mover
-            local speed = (m.state == 'ground') and math.abs(m.vx) / c.profile.walk_speed or 0
+            local speed
+            if s.speed then speed = s.speed(c) else speed = (m.state == 'ground') and math.abs(m.vx) / c.profile.walk_speed or 0 end
             local v = voice_of(world, c)
-            local target = self.muted and 0 or min(1, speed) * 0.22 * STIR * near * v.gain * (1 - world:fading(i))
+            local target = self.muted and 0 or min(1, speed) * 0.22 * STIR * (s.hush or 1) * near * v.gain * (1 - world:fading(i))
             L.vol = L.vol + (target - L.vol) * min(1, dt * 8)
-            self:set(L, L.vol, (0.8 + min(1, speed) * 0.35) * v.pitch, pan_of(m.x))
+            self:set(L, L.vol, (0.8 + min(1, speed) * 0.35) * v.pitch, pan_of(c:anchor()))
         end
     end
     -- (and the ones gone back to the moss go quiet)

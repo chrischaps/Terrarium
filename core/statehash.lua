@@ -24,6 +24,7 @@ local SKIP = {
     bucket_label = true,       -- a nav profile's name in the log (#73)
     cast = true,               -- the World's kinds (#74), an input like the seed: who it brought is hashed
     homes = true,              -- where the room puts each kind's pair (#74): who moved in is hashed
+    slime = true,              -- a snail's ribbon of slime (#77), drawn and never read
 }
 
 local FNV_OFFSET = -2128831035 -- 2166136261 as a signed 32-bit int

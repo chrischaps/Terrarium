@@ -54,6 +54,16 @@ function Glide:has_path()
     return self.path ~= nil
 end
 
+-- About how long the rest of its path should take, as Controller:eta reckons it
+function Glide:eta()
+    local p, cost = self.creature.profile, 0
+    for k = self.i, #(self.path or {}) do
+        local e = self.path[k].edge
+        cost = cost + (e and e.cost or 0)
+    end
+    return cost / ((p.climbs and p.crawl_speed or p.walk_speed) * self.pace)
+end
+
 function Glide:current_node()
     return self.path and self.path[self.i] and self.path[self.i].node
 end
