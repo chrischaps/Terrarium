@@ -540,8 +540,9 @@ function Scape.drawRoom(light)
     Render.drawBlob(sx, sy + 6, (C.GLASS_R - C.GLASS_L) * C.S * 0.62, 46)
 
     -- The lamp's pool of light, on the wall and on the desk around the jar
-    -- Terrarium: the lamp hangs on its cord to just above the lid
-    local hang = Tank.wy(C.GLASS_T - C.LID_THICK) - 150
+    -- Terrarium: the lamp hangs on its cord to just above the lid, which in a
+    -- tall jar is near the top of the view
+    local hang = Tank.wy(C.GLASS_T - C.LID_THICK) - 76
     local l = light.lamp
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.10, l[2] * 0.10, l[3] * 0.10, 1)

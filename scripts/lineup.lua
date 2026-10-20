@@ -21,7 +21,7 @@ local World = require('jar.world')
 -- there are more of them, so the top one stays clear of the lid). Rows are
 -- filled from the top down.
 local MATERIALS = { { 'cork', 24 }, { 'stone', 26 }, { 'slate', 20 } }
-local LOWEST, HIGHEST, GAP = 545, 150, 107.5
+local LOWEST, HIGHEST, GAP = 845, 450, 107.5
 local ROWS = {}
 local gap = math.min(GAP, (LOWEST - HIGHEST) / math.max(1, #Genome.order - 1))
 for k = #Genome.order, 1, -1 do
@@ -31,7 +31,7 @@ end
 local X0, X1 = 400, 1600 -- under the lamp
 -- Level units on the plate: from above the top shelf (room for what stands on
 -- it) to below the lowest
-local TOP, BOTTOM = ROWS[1].y - 82, 611
+local TOP, BOTTOM = ROWS[1].y - 82, 911
 local VIEW = { 340, TOP, 1660, BOTTOM }
 local H = math.floor(W * (BOTTOM - TOP) / (1660 - 340) + 0.5)
 
@@ -47,13 +47,13 @@ local function lineup(seed)
     local rng = require('core.rng')
     rng.seed(seed)
     local level = {
-        width = 2000, height = 780, seed = 1,
+        width = 2000, height = 1080, seed = 1,
         lamp = { x = 1000, y = -40 },
         solids = {
-            { id = 'glass_l', kind = 'wall', x = -60, y = -60, w = 82, h = 1180 },
-            { id = 'glass_r', kind = 'wall', x = 1978, y = -60, w = 82, h = 1180 },
+            { id = 'glass_l', kind = 'wall', x = -60, y = -60, w = 82, h = 1480 },
+            { id = 'glass_r', kind = 'wall', x = 1978, y = -60, w = 82, h = 1480 },
             { id = 'lid', kind = 'ceiling', x = -60, y = -60, w = 2120, h = 92 },
-            { id = 'soil', kind = 'floor', x = -60, y = 560, w = 2120, h = 280 },
+            { id = 'soil', kind = 'floor', x = -60, y = 860, w = 2120, h = 280 },
         },
         homes = {},
     }

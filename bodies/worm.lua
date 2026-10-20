@@ -54,6 +54,7 @@ function Worm.nav_profile(genome) return Worm.profile end
 
 local SEGMENTS = 13 -- Terrarium: a worm built without a genome (Character's)
 local SEG_LEN = 8.5
+local FOLD = 0.6 -- Terrarium: the shortest a segment gets in the fold of a turn
 -- Terrarium: the stiffness every tone below was tuned at (Character's worm).
 -- It's the middle of the gene's range.
 local STIFF = 0.55
@@ -314,8 +315,11 @@ function Worm:update(dt, level, ctx)
             rest = rest * (1 - 0.3 * self.coil)
             local dx, dy = b.x - a.x, b.y - a.y
             local d = sqrt(dx * dx + dy * dy)
-            -- Terrarium: turning, the body only follows (see the top)
-            if d > 0.0001 and not (self.turning and d < rest) then
+            -- Terrarium: turning, the body only follows (see the top), though
+            -- no segment gives way past FOLD of its length, or a long soft
+            -- worm's fold bunches into a zigzag instead of one bend
+            if self.turning and d < rest then rest = max(d, rest * FOLD) end
+            if d > 0.0001 and d ~= rest then
                 local diff = (d - rest) / d
                 if i == 1 then
                     b.x, b.y = b.x - dx * diff, b.y - dy * diff

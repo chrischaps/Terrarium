@@ -325,7 +325,7 @@ test('framerate', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local Genome = require('genome')
     -- (each plan sent to one of these, in turn)
-    local GOALS, goals = {{620, 300}, {120, 300}, {400, 40}}, {}
+    local GOALS, goals = {{620, 600}, {120, 600}, {400, 340}}, {}
     for p, key in ipairs(Genome.order) do goals[key] = GOALS[(p - 1) % #GOALS + 1] end
     local function run(frame_dt)
         rng.seed(42)
@@ -786,7 +786,7 @@ test('eggs', function(j, results)
                     check(results, w.graphs[i] == w.navs[c.nav] and w.controllers[i].graph == w.graphs[i],
                         'eggs: a grown %s walks a graph not its own (seed %d)', egg.key, seed)
                     local x, y = c:anchor()
-                    check(results, x > 0 and x < level_data.width and y < 600,
+                    check(results, x > 0 and x < level_data.width and y < w.level.by_id.soil.y + 40,
                         'eggs: a %s grew up outside the jar at %.0f, %.0f (seed %d)', egg.key, x, y, seed)
                     raised = raised + 1
                 end
@@ -1270,13 +1270,20 @@ test('food', function(j, results)
         rng.seed(seed)
         local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, day = DAY})
         seconds(w, 5)
-        -- Beside the first one up and about on the soil
+        -- Beside the first one up and about on the soil, where the pinch will
+        -- land on the soil too (not on a stone beside it)
         local x
+        local soil, lid = w.level.by_id.soil, w.level.by_id.lid
         for i, c in ipairs(w.creatures) do
             local m = w.minds[i]
             if not x and (m.doing == 'idle' or m.doing == 'wander' or m.doing == 'graze') then
                 local cx, cy = c:anchor()
-                if cy > 540 then x = cx + (cx < 1000 and 90 or -90) end
+                if cy > soil.y - 20 then
+                    for _, dx in ipairs(cx < 1000 and {90, -90} or {-90, 90}) do
+                        local _, under = w.level:surface_below(cx + dx, lid.y + lid.h + 1)
+                        if not x and under == soil then x = cx + dx end
+                    end
+                end
             end
         end
         x = x or 960
@@ -1901,14 +1908,16 @@ test('blob', function(j, results)
         return (y1 - y0) / (x1 - x0)
     end
     -- At rest on the soil, then at its flattest after a 150px drop onto it
+    -- (on the open soil between the cairn and the flat stone)
     local function land(genome)
         local w, _, c = blob(genome)
         local soil = w.level.by_id.soil
-        c:reset(120, soil.y)
+        local x = (w.level.by_id.cairn.x + w.level.by_id.flat.x) / 2
+        c:reset(x, soil.y)
         c.mover.solid = soil
         for _ = 1, math.floor(2 / dt) do w:step(dt) end
         local rest, flat, landed = aspect(c), math.huge, false
-        c:reset(120, soil.y - 150)
+        c:reset(x, soil.y - 150)
         c.mover:release(0, 0)
         for _ = 1, math.floor(2 / dt) do
             w:step(dt)
@@ -2033,18 +2042,19 @@ test('spider', function(j, results)
     report[#report + 1] = string.format('joins %d/%d at reach 0.7/1.3', joins[1], joins[2])
     check(results, joins[2] > joins[1], 'spider: %d joins between solids at reach 0.7, %d at 1.3', joins[1], joins[2])
 
-    -- The ticket's walk: a lap of the cork arch, over its top, down to the
-    -- soil past its lip and back along its underside, with every leg count
+    -- The ticket's walk: a lap of the cork arch, from the foot of the stair
+    -- it leans on, over its top, down to the soil past its lip and back along
+    -- its underside, with every leg count
     -- at both ends of reach. A stumble is a planted foot the leg can't reach
     -- (the chain's tip off the foothold), a foot planted on nothing, or fewer
     -- than half the legs on the ground.
     local laps
     local function lap(w)
-        local arch, soil = w.level.by_id.arch, w.level.by_id.soil
+        local arch, soil, stair = w.level.by_id.arch, w.level.by_id.soil, w.level.by_id.col_1
         return {
-            {arch.x - 70, soil.y, soil, 0, -1}, {arch.x + arch.w / 2, arch.y, arch, 0, -1},
+            {stair.x + stair.w / 2, stair.y, stair, 0, -1}, {arch.x + arch.w / 2, arch.y, arch, 0, -1},
             {arch.x + arch.w + 60, soil.y, soil, 0, -1}, {arch.x + arch.w / 2, arch.y + arch.h, arch, 0, 1},
-            {arch.x - 70, soil.y, soil, 0, -1},
+            {stair.x + stair.w / 2, stair.y, stair, 0, -1},
         }
     end
     for _, legs in ipairs({4, 6, 8}) do
