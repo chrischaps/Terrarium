@@ -295,15 +295,18 @@ end)
 
 -- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole
 -- day, compressed to DAY seconds, starting at midday. Each wanders and grazes
--- by lamplight, rests through the night and lies still once it gets there,
--- and is up and about again by noon. Nobody leaves the jar, comes apart into
--- NaNs or ends up sunk in the scenery.
+-- through its own day, rests through its own night and lies still once it
+-- gets there, and is up and about again by noon, or (a night owl, #21) asleep
+-- at noon both times, having slept twice. Nobody leaves the jar, comes apart
+-- into NaNs or ends up sunk in the scenery.
 local DAY = 900
 test('day', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     rng.seed(j.seed or 20261018)
     local w = World.new(level_data, {wander = true, selected = 0, hour = 13, day = DAY})
     local level = w.level
+    local owl = {} -- asleep at noon
+    for i, m in ipairs(w.minds) do owl[i] = not m:awake(w:hour()) end
     local lost, still_for, moved_at_rest = {}, {}, {}
     local last = {}
     local steps = math.floor(DAY / fixed_dt + 0.5)
@@ -337,12 +340,16 @@ test('day', function(j, results)
         check(results, sunk <= n / 2, '%s ended the day sunk in a solid (%d of %d points)', who, sunk, n)
         check(results, m.wanders >= 3, '%s wandered only %d times', who, m.wanders)
         check(results, m.grazes >= 1, '%s never grazed', who)
-        check(results, m.nights == 1, '%s rested %d times in one night', who, m.nights)
+        check(results, m.nights == (owl[i] and 2 or 1), '%s rested %d times in one night', who, m.nights)
         check(results, (still_for[i] or 0) > DAY * 0.2, '%s rested only %.0fs of the night', who, still_for[i] or 0)
         check(results, (moved_at_rest[i] or 0) < 4, '%s moved %.1fpx while resting', who, moved_at_rest[i] or 0)
-        check(results, m:awake(w:hour()) and m.doing ~= 'rest', '%s is still asleep at noon', who)
-        log.info('selftest', 'day   %-6s %-6s wandered %2d, grazed %d, rested %3.0fs', c.name, c.key, m.wanders, m.grazes,
-            still_for[i] or 0)
+        if owl[i] then
+            check(results, not m:awake(w:hour()) and m.doing == 'rest', '%s, a night owl, is up at noon', who)
+        else
+            check(results, m:awake(w:hour()) and m.doing ~= 'rest', '%s is still asleep at noon', who)
+        end
+        log.info('selftest', 'day   %-6s %-6s wandered %2d, grazed %d, followed %d, rested %3.0fs%s', c.name, c.key,
+            m.wanders, m.grazes, m.follows, still_for[i] or 0, owl[i] and ' (a night owl)' or '')
     end
 end)
 
@@ -399,6 +406,102 @@ test('moss', function(j, results)
         back, #cropped, worst)
     log.info('selftest', 'moss         %d cells: %d bare and %d worn after %.0f min; %d of %d back by the next afternoon',
         m.count, bare, worn, MOSS_WATCH / 60, back, #cropped)
+end)
+
+-- Terrarium: 3c. Temperament (#21). Opposite temperaments look different
+-- within a minute of watching. Each trait is tried on one resident twice,
+-- from the same seed, the gene at one end and then the other, and everything
+-- else the same: a bold worm roams farther from home than a timid one, which
+-- stays near its own and never takes a leap bigger than it dares; a sociable
+-- blob keeps nearer the others than a loner; and at ten at night an early
+-- riser has gone to bed while a night owl is still up and about.
+local function subject(plan, body, temper)
+    return string.format('%s %s hue=0.5 pattern=1 glow=0.5 %s', plan, body, temper)
+end
+local WORM, BLOB = 'segments=14 stiffness=0.5', 'size=1 pressure=1'
+test('temperament', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local SEEDS = {1, 2, 3, 4}
+    -- One minute of the jar at `hour`, with `genomes`, calling `watch(w)` every half second
+    local function minute(seed, hour, genomes, watch)
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, hour = hour, genomes = genomes})
+        for s = 1, math.floor(60 / fixed_dt + 0.5) do
+            w:step(fixed_dt)
+            if s % 60 == 0 then watch(w) end
+        end
+        return w
+    end
+    local function mean(t)
+        local sum = 0
+        for _, v in ipairs(t) do sum = sum + v end
+        return sum / #t
+    end
+
+    -- Boldness: Loam, from the soil at the left of the jar
+    local roam = {[0] = {}, [1] = {}}
+    for _, seed in ipairs(SEEDS) do
+        for b = 0, 1 do
+            local far, leap, dared = 0, 0, nil
+            local w = minute(seed, 10, {subject('worm', WORM, 'boldness=' .. b .. ' sociability=0.5 chronotype=0.2')},
+                function(w)
+                    local c, ctrl = w.creatures[1], w.controllers[1]
+                    local x = c:anchor()
+                    far = math.max(far, math.abs(x - c.home.x))
+                    for _, st in ipairs(ctrl.path or {}) do
+                        if st.edge and st.edge.dare then leap = math.max(leap, st.edge.dare) end
+                    end
+                    dared = w.minds[1].dare
+                end)
+            roam[b][#roam[b] + 1] = far
+            if b == 0 then
+                check(results, leap <= dared, 'temperament: a timid worm (seed %d) took a leap of %.2f, daring %.2f',
+                    seed, leap, dared)
+                check(results, far <= w.minds[1].range + 160, 'temperament: a timid worm (seed %d) went %.0f from home',
+                    seed, far)
+            end
+        end
+    end
+    check(results, mean(roam[1]) > 2 * mean(roam[0]), 'temperament: a bold worm roamed %.0f from home, a timid one %.0f',
+        mean(roam[1]), mean(roam[0]))
+
+    -- Sociability: Dew, among the other five
+    local apart = {[0] = {}, [1] = {}}
+    for _, seed in ipairs(SEEDS) do
+        for s = 0, 1 do
+            local gaps = {}
+            minute(seed, 10, {subject('blob', BLOB, 'boldness=1 sociability=' .. s .. ' chronotype=0.2')}, function(w)
+                local me = w:first('blob')
+                local x, y = w.creatures[me]:anchor()
+                local d = math.huge
+                for i, o in ipairs(w.creatures) do
+                    if i ~= me then
+                        local ox, oy = o:anchor()
+                        d = math.min(d, math.sqrt((ox - x) ^ 2 + (oy - y) ^ 2))
+                    end
+                end
+                gaps[#gaps + 1] = d
+            end)
+            apart[s][#apart[s] + 1] = mean(gaps)
+        end
+    end
+    check(results, mean(apart[1]) < 0.6 * mean(apart[0]),
+        'temperament: a sociable blob kept %.0f from the nearest other, a loner %.0f', mean(apart[1]), mean(apart[0]))
+
+    -- Chronotype: Loam an early riser and Rill a night owl, at ten at night
+    local slept, up = 0, 0
+    for _, seed in ipairs(SEEDS) do
+        local w = minute(seed, 22, {subject('worm', WORM, 'boldness=0.5 sociability=0.5 chronotype=0'),
+            subject('worm', WORM, 'boldness=0.5 sociability=0.5 chronotype=1')}, function() end)
+        local lark, owl = w.minds[1], w.minds[2]
+        if lark.doing == 'rest' or lark.doing == 'to_rest' then slept = slept + 1 end
+        if owl.doing ~= 'rest' and owl.doing ~= 'to_rest' and owl.wanders + owl.follows > 0 then up = up + 1 end
+    end
+    check(results, slept == #SEEDS and up == #SEEDS,
+        'temperament: at ten at night %d of %d early risers had gone to bed and %d night owls were about',
+        slept, #SEEDS, up)
+    log.info('selftest', 'temperament  roamed %.0f bold, %.0f timid; kept %.0f sociable, %.0f alone; %d/%d up at night',
+        mean(roam[1]), mean(roam[0]), mean(apart[1]), mean(apart[0]), up, #SEEDS)
 end)
 
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened

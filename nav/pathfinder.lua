@@ -2,6 +2,10 @@
 -- A* over a NavGraph, with a binary heap open set and a closed set.
 -- Returns a list of steps {node = n, edge = e} where edge is how we arrive at
 -- n (nil for the first step).
+--
+-- Terrarium: `dare` (0 to 1, optional) leaves out the jumps and falls that ask
+-- more of the body than that (navgraph's `edge.dare`), and makes the ones it
+-- keeps cost more the timider it is, so a timid body walks the long way round.
 
 local Pathfinder = {}
 
@@ -42,7 +46,7 @@ local function pop(heap)
     return top[1]
 end
 
-function Pathfinder.find(graph, start, goal)
+function Pathfinder.find(graph, start, goal, dare)
     if not start or not goal then return nil end
     if start == goal then return {{node = start}} end
 
@@ -66,8 +70,8 @@ function Pathfinder.find(graph, start, goal)
             closed[id] = true
             local node = nodes[id]
             for _, e in ipairs(node.edges) do
-                if not closed[e.to] then
-                    local ng = g[id] + e.cost
+                if not closed[e.to] and not (dare and e.dare and e.dare > dare) then
+                    local ng = g[id] + ((dare and e.dare) and e.cost * (1 + 2 * (1 - dare)) or e.cost)
                     if ng < (g[e.to] or math.huge) then
                         g[e.to] = ng
                         came[e.to] = id

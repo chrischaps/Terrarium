@@ -60,19 +60,22 @@ function Controller:start_node()
     return self.graph:node_near(x, y, support(c), nx, ny)
 end
 
-function Controller:go_to(goal)
+-- Terrarium: `dare` (optional) is how big a leap the path may ask for
+-- (Pathfinder.find); it holds for the repaths on the way too
+function Controller:go_to(goal, dare)
     if not goal then return false end
+    self.dare = dare
     local c = self.creature
     if not ready(c) then
         -- Mid-jump: plan from wherever we land. Say yes if a path exists from
         -- the node we're flying toward (or the nearest one).
         local target = (self.flight and self.flight.node) or self:start_node()
-        if not Pathfinder.find(self.graph, target, goal) then return false end
+        if not Pathfinder.find(self.graph, target, goal, dare) then return false end
         self.pending = goal
         return true
     end
     self.pending = nil
-    local path = Pathfinder.find(self.graph, self:start_node(), goal)
+    local path = Pathfinder.find(self.graph, self:start_node(), goal, dare)
     self.goal = goal
     self.flight = nil
     self.stall, self.still = 0, 0
@@ -101,7 +104,7 @@ function Controller:repath(reason)
     self.repaths = self.repaths + 1
     log.info('ctrl', '%s repath (%s)', self.creature.profile.name, reason)
     local goal = self.goal
-    if not goal or not self:go_to(goal) then
+    if not goal or not self:go_to(goal, self.dare) then
         self:clear()
     end
 end
@@ -118,7 +121,7 @@ end
 function Controller:update(dt)
     local c = self.creature
     if self.pending and ready(c) and not (self.flight and self.flight.launched) then
-        self:go_to(self.pending)
+        self:go_to(self.pending, self.dare)
     end
     if not self.path then
         if climbs(c) then c:halt(dt) end

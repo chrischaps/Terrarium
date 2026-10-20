@@ -15,6 +15,9 @@
 --   crawl - along any surface incl. walls/ceilings and around corners (climbers)
 --   jump  - ballistic arc, vx/vy precomputed by ballistics.solve_jump
 --   fall  - step off an edge, vx precomputed by ballistics.solve_fall
+--
+-- Terrarium: jumps and falls carry `dare`, how much of the body they ask for
+-- (1 is all it has), so a timid mind can leave the big ones out (mind.lua).
 
 local ballistics = require('nav.ballistics')
 
@@ -421,7 +424,8 @@ function NavGraph:build_ballistic_edges()
                 local vx, vy, t = ballistics.solve_jump(a.x, a.y, b.x, b.y, p, level) -- Terrarium: the lowest clear arc
                 if vx then
                     local d = dist(a, b)
-                    self:connect(a, b, 'jump', d * 1.25 + 60, {vx = vx, vy = vy, t = t})
+                    self:connect(a, b, 'jump', d * 1.25 + 60,
+                        {vx = vx, vy = vy, t = t, dare = NavGraph.dare(p, vx, vy)})
                 end
 
                 -- Fall: only off the end of a span, in the direction of the drop
@@ -433,13 +437,24 @@ function NavGraph:build_ballistic_edges()
                         if fx and fx * dir > 20
                            and ballistics.arc_clear(level, ex, a.y, fx, 0, ft, p.radius, p.min_radius) then
                             self:connect(a, b, 'fall', dist(a, b) + 30,
-                                {vx = fx, vy = 0, t = ft, ex = ex, dir = dir})
+                                {vx = fx, vy = 0, t = ft, ex = ex, dir = dir, dare = NavGraph.dare(p, fx, 0, dy)})
                         end
                     end
                 end
             end
         end
     end
+end
+
+-- Terrarium: how much of a body's spring a leap asks for, 0 to 1: the larger
+-- of its rise against the highest the body can rise and its speed against
+-- the fastest it can go. A fall's drop counts as rising a third of it, so a
+-- long way down is daunting too, but less than the same way up.
+function NavGraph.dare(p, vx, vy, drop)
+    local g = ballistics.GRAVITY
+    local most = p.jump_vy * p.jump_vy / (2 * g)
+    local rise = math.max(vy * vy / (2 * g), (drop or 0) / 3)
+    return math.floor(math.min(1, math.max(rise / most, abs(vx) / p.jump_vx)) * 1000 + 0.5) / 1000
 end
 
 function NavGraph:has_step(a, b)
