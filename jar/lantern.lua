@@ -49,6 +49,12 @@ function Lantern:pick(world, lx, ly)
     return self.who
 end
 
+--- Creature `i` has gone back to the moss (#24): let go if it was the one
+-- followed, and keep up with the renumbering if not
+function Lantern:forget(i)
+    if self.who == i then self.who = nil elseif self.who and self.who > i then self.who = self.who - 1 end
+end
+
 function Lantern:following(world)
     return self.who and world.creatures[self.who]
 end

@@ -36,9 +36,18 @@ Skin.PATTERNS = {'capped', 'banded', 'spotted', 'striped'}
 -- Terrarium: a hatchling is pale (#23): `pale` (1 just hatched, 0 grown)
 -- lifts every colour toward milk-white and takes away most of its chroma, so
 -- a young one wears its family's colours faintly and darkens into them.
-local pale = 0
+-- Terrarium: and an elder deepens (#24): `old` (0 in its prime, 1 at the end)
+-- takes its colours darker and richer, the way an old leaf's are. `earth`
+-- (0..1, as it returns to the moss) draws them toward the moss's own green-brown.
+local pale, old, earth = 0, 0, 0
+local MOSS_H = 125
 local function rgb(L, C, h, a)
     L, C = L + (0.92 - L) * 0.6 * pale, C * (1 - 0.65 * pale)
+    L, C = L * (1 - 0.2 * old), C * (1 + 0.45 * old)
+    if earth > 0 then
+        local dh = (MOSS_H - h + 180) % 360 - 180
+        L, C, h = L + (0.42 - L) * earth, C + (0.07 - C) * earth, h + dh * earth
+    end
     local r, g, b = oklch(L, C, h)
     return {r, g, b, a or 1}
 end
@@ -103,15 +112,16 @@ function Skin.hash(a, b)
 end
 
 -- The skin for a body of plan `key` with `genome` (nil: the middle of each
--- gene), `young` (0..1) pale with youth
-function Skin.of(key, genome, young)
+-- gene), `young` (0..1) pale with youth, `aged` (0..1) deepened with age, and
+-- `earthed` (0..1) gone back toward the moss
+function Skin.of(key, genome, young, aged, earthed)
     local fam = Skin.families[key]
     local hue = genome and genome.hue or 0.5
     local h = fam.hue[1] + hue * (fam.hue[2] - fam.hue[1])
-    pale = young or 0
+    pale, old, earth = young or 0, aged or 0, earthed or 0
     local skin = fam.colours(h)
-    pale = 0
-    skin.h, skin.young = h, young or 0
+    pale, old, earth = 0, 0, 0
+    skin.h, skin.young, skin.old, skin.earth = h, young or 0, aged or 0, earthed or 0
     skin.pattern = Skin.PATTERNS[genome and genome.pattern or 2]
     skin.glow = genome and genome.glow or 0.5
     skin.seed = hue * 97 + skin.glow * 13 -- places the spots
@@ -122,6 +132,16 @@ end
 -- so a middling glow still shows across the jar.
 -- (and `flush`, 0..1, is how much a courting body's markings light up on
 -- the beat, by day or night, #22)
+-- Terrarium: the same skin aged (#24), keeping whatever a body added to it
+-- (its eyes, a worm's rim)
+function Skin.age(key, genome, skin, aged, earthed)
+    local new = Skin.of(key, genome, skin.young, aged, earthed)
+    for k, v in pairs(skin) do
+        if new[k] == nil then new[k] = v end
+    end
+    return new
+end
+
 function Skin.shine(skin, light, flush)
     return skin.glow ^ 0.7 * math.max(light and light.glow or 0, 0.8 * (flush or 0))
 end

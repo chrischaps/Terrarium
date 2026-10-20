@@ -592,6 +592,7 @@ test('eggs', function(j, results)
                 for _, egg in ipairs(clutch) do
                     local c = w.creatures[egg.who]
                     if c == ev.who then
+                        egg.c = c -- (by the creature: indices move as the old die, #24)
                         hatched[#hatched + 1] = egg
                         -- Hatched about a day after it was laid, small and pale
                         local waited = (w.time - egg.laid) / DAY
@@ -606,20 +607,19 @@ test('eggs', function(j, results)
                     end
                 end
             elseif ev.kind == 'moulted' then
-                local i
-                for k, c in ipairs(w.creatures) do if c == ev.who then i = k end end
-                local nights = w.minds[i].nights
-                check(results, slept[i] ~= nights, 'eggs: creature %d moulted twice in one sleep (seed %d)', i, seed)
-                slept[i] = nights
-                moults[i] = (moults[i] or 0) + 1
-                settle[#settle + 1] = {i = i, at = w.time + 3}
+                local c = ev.who
+                local nights = w.minds[w:index_of(c)].nights
+                check(results, slept[c] ~= nights, 'eggs: a %s moulted twice in one sleep (seed %d)', c.key, seed)
+                slept[c] = nights
+                moults[c] = (moults[c] or 0) + 1
+                settle[#settle + 1] = {c = c, at = w.time + 3}
             end
         end)
         local steps, grown = math.floor(EGGS_DAYS * DAY / dt), false
         -- Whole after growing: no segment stretched past twice its length, a
         -- blob holding most of its area, a spider with its feet on something
-        local function whole(i)
-            local c = w.creatures[i]
+        local function whole(c)
+            if not w:index_of(c) then return end
             local ok, what = true, ''
             if c.key == 'worm' then
                 for k = 2, #c.points do
@@ -637,10 +637,10 @@ test('eggs', function(j, results)
         end
         for _ = 1, steps do
             w:step(dt)
-            while settle[1] and w.time >= settle[1].at do whole(table.remove(settle, 1).i) end
+            while settle[1] and w.time >= settle[1].at do whole(table.remove(settle, 1).c) end
             if clutch and #hatched == #clutch then
                 grown = true
-                for _, egg in ipairs(clutch) do grown = grown and not w.young[egg.who] end
+                for _, egg in ipairs(clutch) do grown = grown and not w.young[w:index_of(egg.c) or 0] end
                 if grown and #settle == 0 then break end
             end
         end
@@ -652,8 +652,9 @@ test('eggs', function(j, results)
             check(results, #hatched == #clutch, 'eggs: %d of %d eggs hatched (seed %d)', #hatched, #clutch, seed)
             for _, egg in ipairs(clutch) do
                 local a, b = egg.parents[1], egg.parents[2]
-                local i = egg.who
-                local c = i and w.creatures[i]
+                local c = egg.c
+                local i = c and w:index_of(c)
+                if not i then c = nil end
                 -- Each gene is one parent's, give or take a mutation's step
                 local from = {0, 0}
                 for _, g in ipairs(Genome[egg.key].genes) do
@@ -677,9 +678,9 @@ test('eggs', function(j, results)
                             egg.key, g.name, tostring(body[g.name]), tostring(egg.genome[g.name]), seed)
                     end
                     check(results, not w.young[i] and not w.minds[i].young and c.skin.young == 0,
-                        'eggs: a hatchling never grew up (seed %d, %d moults)', seed, moults[i] or 0)
-                    check(results, moults[i] == World.STAGES, 'eggs: a hatchling moulted %d times (seed %d)',
-                        moults[i] or 0, seed)
+                        'eggs: a hatchling never grew up (seed %d, %d moults)', seed, moults[c] or 0)
+                    check(results, moults[c] == World.STAGES, 'eggs: a hatchling moulted %d times (seed %d)',
+                        moults[c] or 0, seed)
                     check(results, w.graphs[i] == w.navs[c.nav] and w.controllers[i].graph == w.graphs[i],
                         'eggs: a grown %s walks a graph not its own (seed %d)', egg.key, seed)
                     local x, y = c:anchor()
@@ -735,6 +736,159 @@ test('eggs', function(j, results)
     end
     check(results, mixed >= 1, 'eggs: no child mixed its parents\' genes')
     log.info('selftest', 'eggs         %d raised, %d with genes from both parents', raised, mixed)
+end)
+
+-- Terrarium: 3c. Death (#24), the gate. Every creature has three to five jar
+-- days, and a resident has lived up to one of them when the jar opens. One of
+-- each plan is brought near its end: an elder walks at less than its own pace
+-- and wears deeper colours. When its time has come it goes to bed in the moss
+-- (a spider too, off its ledge), dies in its sleep there, fades for FADE
+-- seconds and is gone. Everyone else is renumbered without a thread left
+-- hanging (no mind follows, courts or remembers meeting the dead), the jar
+-- carries on, and the moss it lay on, pressed flat, grows back by the next
+-- afternoon taller than moss can grow there by itself. Two runs of one seed
+-- are the same jar after a death.
+test('death', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local DayCycle = require('jar.daycycle')
+    local Moss = require('jar.moss')
+    local Skin = require('bodies.skin')
+    local statehash = require('core.statehash')
+    local SEEDS = j.seed and {j.seed} or {20261018, 5}
+
+    -- Every list the World keeps by creature index agrees with the others
+    local function consistent(w, seed)
+        local n, ok = #w.creatures, true
+        for _, list in ipairs({w.graphs, w.controllers, w.minds, w.genomes, w.lives}) do ok = ok and #list == n end
+        for k, m in ipairs(w.minds) do
+            ok = ok and w.controllers[k].creature == w.creatures[k]
+            ok = ok and (m.with == nil or (m.with >= 1 and m.with <= n and m.with ~= k))
+            for q in pairs(m.met) do ok = ok and q >= 1 and q <= n end
+            for q in pairs(m.near) do ok = ok and q >= 1 and q <= n end
+        end
+        for q in pairs(w.young) do ok = ok and q >= 1 and q <= n end
+        check(results, ok, 'death: the jar lost count of who is who after a death (seed %d)', seed)
+    end
+
+    -- One run of `seed`. With `upto`, it stops at that step and returns the
+    -- state hash; otherwise it checks everything, and returns the step and
+    -- hash at the end of the step the first one went back to the moss.
+    local function run(seed, upto)
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        if not upto then
+            for _, life in ipairs(w.lives) do
+                check(results, life.span >= World.LIFE[1] * DAY and life.span <= World.LIFE[2] * DAY
+                    and life.born <= 0 and life.born >= -World.LIVED * DAY,
+                    'death: a resident born at %.0f s with %.2f days to live (seed %d)', life.born, life.span / DAY, seed)
+            end
+        end
+        -- One of each plan with a fifth of a short life left
+        local old, count = {}, 0
+        for _, key in ipairs({'worm', 'blob', 'spider'}) do
+            local i = w:first(key)
+            w.lives[i].span, w.lives[i].born = DAY, -0.8 * DAY
+            old[w.creatures[i]] = {key = key, name = w.creatures[i].name, genome = w.genomes[i]}
+            count = count + 1
+        end
+        local returned, first = 0, nil
+        w.events:on(function(ev)
+            local o = old[ev.who]
+            if not o then return end
+            local c = ev.who
+            if ev.kind == 'dying' then
+                local i = w:index_of(c)
+                local life = w.lives[i]
+                o.dying = w.time
+                o.asleep = w.time < life.born + life.span + World.GRACE * DAY
+                local on = c.profile.climbs and c.solid or c.mover.solid
+                o.moss = on and on.moss
+            elseif ev.kind == 'returned' then
+                o.returned = w.time
+                returned = returned + 1
+                for _, r in ipairs(w.remains) do
+                    if r.at == w.time and r.x == ev.x then o.remains = r end
+                end
+                o.cells = {}
+                local m = w.moss
+                for k = 1, m.count do
+                    if m.rich[k] >= 0.3 and m.x[k] >= o.remains.x0 - 10 and m.x[k] <= o.remains.x1 + 10 then
+                        o.cells[#o.cells + 1] = k
+                    end
+                end
+                o.pressed = true
+                for _, k in ipairs(o.cells) do o.pressed = o.pressed and m.h[k] <= Moss.WORN end
+            end
+        end)
+
+        local steps = math.floor(2.5 * DAY / dt)
+        for s = 1, steps do
+            w:step(dt)
+            if upto and s == upto then return statehash.of(w).total end
+            if s == 1 then
+                -- Elders: slower than their bodies can go, and deeper in colour
+                for c, o in pairs(old) do
+                    local i = w:index_of(c)
+                    local base = Skin.of(c.key, c.genome)
+                    local fresh, aged = base[base.main], c.skin[base.main]
+                    check(results, w.controllers[i].pace < 0.95, 'death: an elder %s walks at %.2f of its pace (seed %d)',
+                        o.key, w.controllers[i].pace, seed)
+                    check(results, c.skin.old > 0 and aged[1] + aged[2] + aged[3] < fresh[1] + fresh[2] + fresh[3],
+                        'death: an elder %s hasn\'t deepened (seed %d)', o.key, seed)
+                end
+            end
+            if returned > 0 and not first then
+                first = {step = s, hash = statehash.of(w).total}
+                consistent(w, seed)
+            end
+            if returned == count then break end
+        end
+        consistent(w, seed)
+
+        for c, o in pairs(old) do
+            check(results, o.returned ~= nil, 'death: %s the %s never went back to the moss (seed %d)', o.name, o.key, seed)
+            if o.returned then
+                check(results, o.asleep, 'death: %s the %s died awake (seed %d)', o.name, o.key, seed)
+                check(results, o.moss, 'death: %s the %s died off the moss (seed %d)', o.name, o.key, seed)
+                check(results, math.abs(o.returned - o.dying - World.FADE) < 2 * dt,
+                    'death: %s the %s faded in %.1f s (seed %d)', o.name, o.key, o.returned - o.dying, seed)
+                check(results, w:index_of(c) == nil, 'death: %s the %s is still in the jar (seed %d)', o.name, o.key, seed)
+                check(results, #o.cells >= 2, 'death: %s the %s left only %d rich cells (seed %d)', o.name, o.key, #o.cells, seed)
+                check(results, o.pressed, 'death: the moss under %s the %s was never pressed down (seed %d)', o.name, o.key, seed)
+                log.info('selftest', 'death seed %-9d %-6s %-6s died asleep at %.2f days, gone %.0f s later, %d cells rich',
+                    seed, o.key, o.name, (o.dying + 0.8 * DAY) / DAY, o.returned - o.dying, #o.cells)
+            end
+        end
+
+        -- The jar carries on without them
+        for _ = 1, math.floor(30 / dt) do w:step(dt) end
+        consistent(w, seed)
+
+        -- By the next afternoon the patches it lay on are back, taller than
+        -- the moss there grows by itself (the moss alone, a second at a time)
+        local m, hour = w.moss, w:hour()
+        local until_afternoon = ((24 + DayCycle.presets.afternoon - hour) % 24 + 24) * 3600
+        for t = 1, until_afternoon do m:update(1, DayCycle.lampAt((hour + t / 3600) % 24)) end
+        for _, o in pairs(old) do
+            local taller, low = 0, math.huge
+            for _, k in ipairs(o.cells or {}) do
+                if m.h[k] > m.cap[k] + 0.05 then taller = taller + 1 end
+                low = math.min(low, m.h[k] - m.cap[k])
+            end
+            check(results, o.cells and taller == #o.cells,
+                'death: by the next afternoon only %d of %d cells where the %s lay grew back rich (lowest %.2f over)',
+                taller, o.cells and #o.cells or 0, o.key, low)
+        end
+        return first
+    end
+
+    for k, seed in ipairs(SEEDS) do
+        local first = run(seed)
+        if k == 1 and first then
+            local again = run(seed, first.step)
+            check(results, again == first.hash, 'death: two runs of seed %d differ after a death', seed)
+        end
+    end
 end)
 
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened

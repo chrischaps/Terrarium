@@ -28,6 +28,7 @@ function Controller.new(creature, graph)
         last_x = nil,
         repaths = 0,
         arrived = false,
+        pace = 1,            -- Terrarium: of its body's own speed it walks at (an elder slows, #24)
     }, Controller)
 end
 
@@ -171,7 +172,7 @@ function Controller:update(dt)
 
     if kind == 'walk' or kind == 'crawl' then
         if climbs(c) then
-            if c:crawl_to(n, dt, last and 0.8 or 1) then self:advance() end
+            if c:crawl_to(n, dt, (last and 0.8 or 1) * self.pace) then self:advance() end
         else
             -- A step up onto a different surface: the blob hops it
             if c.profile.hop_steps and e and n.solid ~= support(c) and n.y < y - 5 then
@@ -186,7 +187,7 @@ function Controller:update(dt)
             if abs(dx) < 2.5 and (support(c) == n.solid or abs(y - n.y) < 3) then
                 self:advance()
             else
-                local speed = c.profile.walk_speed
+                local speed = c.profile.walk_speed * self.pace -- Terrarium: an elder is slower (#24)
                 if last then speed = speed * max(0.35, min(1, abs(dx) / 30)) end
                 c.mover:walk(dx > 0 and 1 or -1, speed)
                 self:watch_still(x, dt)
