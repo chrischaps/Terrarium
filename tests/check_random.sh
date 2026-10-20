@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # All randomness comes from the jar's seeded streams in core/rng.lua (sim, look,
-# scape). This fails if any game code calls math.random or love.math.random
+# scape, sound). This fails if any game code calls math.random or love.math.random
 # directly, or makes a generator of its own outside core/rng.lua and the
 # self-test. Comments are fine. lib/ is a vendored subtree and isn't checked:
 # LoveLibs' audio noise uses math.random, which never shares state with the
@@ -22,7 +22,7 @@ hits=$(code 'math\.random(seed)?[^A-Za-z_]')
 gens=$(code 'newRandomGenerator' | grep -vE '^\./(core/rng|dev)\.lua:')
 
 if [ -n "$hits$gens" ]; then
-    echo "Direct randomness outside core/rng.lua (draw from rng.sim, rng.look or rng.scape):"
+    echo "Direct randomness outside core/rng.lua (draw from rng.sim, rng.look, rng.scape or rng.sound):"
     [ -n "$hits" ] && echo "$hits"
     [ -n "$gens" ] && echo "$gens"
     exit 1
