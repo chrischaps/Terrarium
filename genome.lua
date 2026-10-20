@@ -41,6 +41,7 @@ end
 -- for good past about 27 segments, and spiders lose their footing below a
 -- reach of about 0.6, so those ends have some room; blob sizes are held by
 -- their nav buckets, which a wider range would make too coarse to jump with.
+-- A springtail's weakest spring still leaps from the root to the tor.
 Genome.worm = plan('worm', {
     {name = 'segments', int = {10, 24}},     -- length, and how many bunches crawl
     {name = 'stiffness', real = {0.2, 0.9}}, -- a stiff worm bridges, a loose one drapes
@@ -56,7 +57,14 @@ Genome.spider = plan('spider', {
     {name = 'reach', real = {0.7, 1.3}},     -- times the standard leg
 })
 
-Genome.order = {'worm', 'blob', 'spider'}
+-- (#76) A springtail's `spring` is how hard its furcula throws it, and so how
+-- far it hops and how high it leaps; `antennae` is how long they are.
+Genome.springtail = plan('springtail', {
+    {name = 'spring', real = {0.7, 1.3}},    -- times the standard spring
+    {name = 'antennae', real = {0.5, 1.5}},  -- times the standard antennae
+})
+
+Genome.order = {'worm', 'blob', 'spider', 'springtail'}
 
 for _, key in ipairs(Genome.order) do
     local p = Genome[key]

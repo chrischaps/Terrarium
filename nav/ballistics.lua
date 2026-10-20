@@ -22,9 +22,12 @@ local CLEARANCES = {14, 22, 34, 50, 72}
 -- Terrarium: given a level, the lowest arc a body of profile.radius flies
 -- clear of it, so a jump that would clip a corner low goes over it higher
 -- (the nav graph and the controller ask the same question, so they agree).
+-- Terrarium: and no lower than the profile's `loft` (#76): a springtail is
+-- thrown high, never skimmed along.
 function ballistics.solve_jump(x0, y0, x1, y1, profile, level)
     local g = ballistics.GRAVITY
     local max_rise = profile.jump_vy * profile.jump_vy / (2 * g)
+    local loft = profile.loft or 0
     for _, clearance in ipairs(CLEARANCES) do
         local apex = math.min(y0, y1) - clearance
         local rise = y0 - apex
@@ -34,7 +37,7 @@ function ballistics.solve_jump(x0, y0, x1, y1, profile, level)
         local t_down = sqrt(2 * (y1 - apex) / g)
         local t = t_up + t_down
         local vx = (x1 - x0) / t
-        if abs(vx) <= profile.jump_vx
+        if clearance >= loft and abs(vx) <= profile.jump_vx
            and (not level or ballistics.arc_clear(level, x0, y0, vx, vy, t, profile.radius, profile.min_radius)) then
             return vx, vy, t
         end

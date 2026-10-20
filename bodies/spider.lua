@@ -926,4 +926,7 @@ function Spider.heaviest(genome)
     return genome
 end
 
+-- How far either side of its anchor it lies, as a token (bodies/token.lua): its legs
+function Spider.half(t) return 30 * t.scale end
+
 return Spider

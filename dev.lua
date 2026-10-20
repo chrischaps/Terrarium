@@ -135,6 +135,31 @@ local TESTS = {}
 local CLASSIC = require('jar.world').CLASSIC
 local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
 
+-- (and these casts, which between them hold every kind the classic one
+-- doesn't: the gates a new kind has to pass run on them too, #76)
+local COVER = {{'worm', 'spider', 'springtail'}}
+
+-- A cast with `key` in it: the classic one if it has it, else the first in COVER
+local function cast_for(key)
+    for _, cast in ipairs({CLASSIC, unpack(COVER)}) do
+        for _, k in ipairs(cast) do
+            if k == key then return cast end
+        end
+    end
+end
+
+-- The jars a gate opens: the classic cast with each of `seeds`, then each
+-- cast in COVER with each of `cover_seeds` (or every cast with `j.seed`)
+local function jars(j, seeds, cover_seeds)
+    local out = {}
+    for _, cast in ipairs({CLASSIC, unpack(COVER)}) do
+        for _, seed in ipairs(j.seed and {j.seed} or (cast == CLASSIC and seeds or cover_seeds)) do
+            out[#out + 1] = {cast = cast, seed = seed, name = table.concat(cast, ',')}
+        end
+    end
+    return out
+end
+
 -- Terrarium: a plan's body module (#73). The tests ask it what they need to
 -- know of a body, and never which plan it is.
 local function class_of(World, key)
@@ -183,7 +208,9 @@ test('graphs', function(j, results)
     local Pathfinder = require('nav.pathfinder')
     local ballistics = require('nav.ballistics')
     rng.seed(1)
-    local world = World.new(level_data, {cast = CLASSIC, wander = false})
+    -- (every kind the room has a home for: the classic three draw their
+    -- genomes first, as they always have)
+    local world = World.new(level_data, {cast = World.kinds(level_data), wander = false})
     local checked = {}
     for i, c in ipairs(world.creatures) do -- Terrarium: every graph, once (a blob's is its size's)
         local g = world.graphs[i]
@@ -247,7 +274,7 @@ test('trips', function(j, results)
     local fails_by = {}
     for k, def in ipairs(World.CREATURES) do
         rng.seed(100 + k)
-        world = World.new(level_data, {cast = CLASSIC, wander = false})
+        world = World.new(level_data, {cast = cast_for(def.key), wander = false})
         local i = world:first(def.key) -- Terrarium: the first of each kind
         world:select(i)
         local c, ctrl, g = world.creatures[i], world.controllers[i], world.graphs[i]
@@ -587,11 +614,12 @@ test('court', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local DayCycle = require('jar.daycycle')
     local Genome = require('genome')
-    local SEEDS = j.seed and {j.seed} or {20261018, 1, 2, 3}
+    local JARS = jars(j, {20261018, 1, 2, 3}, {20261018, 1})
     local by_plan = {} -- every plan any of the jars has, and its courtships
-    for _, seed in ipairs(SEEDS) do
+    for _, jar in ipairs(JARS) do
+        local seed = jar.seed
         rng.seed(seed)
-        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = jar.cast, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         for _, c in ipairs(w.creatures) do by_plan[c.key] = by_plan[c.key] or 0 end
         local courts, apart, since = 0, 0, {}
         w.events:on(function(ev)
@@ -629,18 +657,18 @@ test('court', function(j, results)
                 end
             end
         end
-        check(results, courts >= 1, 'court: nobody courted in a day of seed %d', seed)
-        check(results, apart < 100, 'court: a pair courted %.0f apart (seed %d)', apart, seed)
-        log.info('selftest', 'court  seed %-9d %d courtships, widest pair %.0f apart', seed, courts, apart)
+        check(results, courts >= 1, 'court: nobody courted in a day of seed %d (%s)', seed, jar.name)
+        check(results, apart < 100, 'court: a pair courted %.0f apart (seed %d, %s)', apart, seed, jar.name)
+        log.info('selftest', 'court  seed %-9d %d courtships, widest pair %.0f apart (%s)', seed, courts, apart, jar.name)
     end
     local tally = {}
     for _, plan in ipairs(Genome.order) do
         if by_plan[plan] then
-            if not j.seed then check(results, by_plan[plan] >= 1, 'court: no %s courted in %d days', plan, #SEEDS) end
+            if not j.seed then check(results, by_plan[plan] >= 1, 'court: no %s courted in %d days', plan, #JARS) end
             tally[#tally + 1] = string.format('%ss %d', plan, by_plan[plan])
         end
     end
-    log.info('selftest', 'court        %s over %d days', table.concat(tally, ', '), #SEEDS)
+    log.info('selftest', 'court        %s over %d days', table.concat(tally, ', '), #JARS)
 end)
 
 -- Terrarium: 3c. Eggs (#23), the gate. In a jar of 900-second days from
@@ -657,15 +685,20 @@ test('eggs', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local DayCycle = require('jar.daycycle')
     local Genome = require('genome')
-    local SEEDS = j.seed and {j.seed} or {20261018, 2}
     local mixed, raised = 0, 0
-    for _, seed in ipairs(SEEDS) do
+    for _, jar in ipairs(jars(j, {20261018, 2}, {20261018})) do
+        local seed = jar.seed
         rng.seed(seed)
-        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = jar.cast, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        -- (in a cast with kinds the classic one lacks, the clutch watched is
+        -- the first of one of those)
+        local new, classic = {}, {}
+        for _, key in ipairs(CLASSIC) do classic[key] = true end
+        for _, key in ipairs(jar.cast) do new[key] = not classic[key] or nil end
         local clutch, hatched, laid_at = nil, {}, nil
         local moults, slept, settle = {}, {}, {}
         w.events:on(function(ev)
-            if ev.kind == 'laid' and not clutch then
+            if ev.kind == 'laid' and not clutch and (next(new) == nil or new[ev.who.key]) then
                 clutch, laid_at = ev.eggs, w.time
             elseif ev.kind == 'hatched' and clutch then
                 for _, egg in ipairs(clutch) do
@@ -713,7 +746,7 @@ test('eggs', function(j, results)
                 if grown and #settle == 0 then break end
             end
         end
-        check(results, clutch ~= nil, 'eggs: nobody laid in %d days of seed %d', EGGS_DAYS, seed)
+        check(results, clutch ~= nil, 'eggs: nobody laid in %d days of seed %d (%s)', EGGS_DAYS, seed, jar.name)
         if clutch then
             local s = w.level.by_id[clutch[1].solid]
             check(results, #clutch >= World.CLUTCH[1] and #clutch <= World.CLUTCH[2] and s.moss,
@@ -758,8 +791,8 @@ test('eggs', function(j, results)
                     raised = raised + 1
                 end
             end
-            log.info('selftest', 'eggs  seed %-9d %s clutch of %d laid at %.0f s, hatched %s, grown by %.0f s',
-                seed, clutch[1].key, #clutch, laid_at, #hatched == #clutch and 'all' or (#hatched .. ''), w.time)
+            log.info('selftest', 'eggs  seed %-9d %s clutch of %d laid at %.0f s, hatched %s, grown by %.0f s (%s)',
+                seed, clutch[1].key, #clutch, laid_at, #hatched == #clutch and 'all' or (#hatched .. ''), w.time, jar.name)
         end
     end
     -- And every plan's growing, wherever the seeds' clutches fell: a hatchling
@@ -813,7 +846,7 @@ test('death', function(j, results)
     local Moss = require('jar.moss')
     local Skin = require('bodies.skin')
     local statehash = require('core.statehash')
-    local SEEDS = j.seed and {j.seed} or {20261018, 5}
+    local JARS = jars(j, {20261018, 5}, {20261018})
 
     -- Every list the World keeps by creature index agrees with the others
     local function consistent(w, seed)
@@ -832,9 +865,9 @@ test('death', function(j, results)
     -- One run of `seed`. With `upto`, it stops at that step and returns the
     -- state hash; otherwise it checks everything, and returns the step and
     -- hash at the end of the step the first one went back to the moss.
-    local function run(seed, upto)
+    local function run(seed, cast, upto)
         rng.seed(seed)
-        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = cast, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         if not upto then
             for _, life in ipairs(w.lives) do
                 check(results, life.span >= World.LIFE[1] * DAY and life.span <= World.LIFE[2] * DAY
@@ -947,11 +980,11 @@ test('death', function(j, results)
         return first
     end
 
-    for k, seed in ipairs(SEEDS) do
-        local first = run(seed)
-        if k == 1 and first then
-            local again = run(seed, first.step)
-            check(results, again == first.hash, 'death: two runs of seed %d differ after a death', seed)
+    for k, jar in ipairs(JARS) do
+        local first = run(jar.seed, jar.cast)
+        if (k == 1 or jar.cast ~= CLASSIC) and first then
+            local again = run(jar.seed, jar.cast, first.step)
+            check(results, again == first.hash, 'death: two runs of seed %d (%s) differ after a death', jar.seed, jar.name)
         end
     end
 end)
@@ -1720,7 +1753,7 @@ test('colour', function(j, results)
             genomes[#genomes + 1] = g
         end
         rng.seed(15)
-        local w = j.World.new(j.level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = genomes})
+        local w = j.World.new(j.level_data, {cast = j.World.kinds(j.level_data), wander = false, selected = 0, genomes = genomes})
         for _ = 1, 60 do w:step(j.fixed_dt) end
         local before = statehash.of(w).total
         local ctx = {light_dir = w.light_dir, light = {glow = 1}}
@@ -2056,6 +2089,172 @@ test('spider', function(j, results)
     check(results, c.genome and #c.legs == c.genome.legs and c.profile == Spider.profile_for(c.genome.reach),
         "spider: a resident's body is not its genome's")
     log.info('selftest', 'spider       %s', table.concat(report, '; '))
+end)
+
+-- Terrarium: springtails (#76). A springtail gets about by leaping: on forty
+-- trips round the jar most of the ground it covers goes by in the air. Every
+-- hop along a span is one a timid mind takes, no edge of its graph costs less
+-- than its chord (so A* stays honest), and a strong spring hops farther along
+-- a span than a weak one. Each hop is a somersault, half a turn when it's
+-- thrown slowly and a whole one fast, turned in full on a hop that lands
+-- where it left, and it's upright again once it's down. Courting, a pair face
+-- each other and hop in place on the beat with their antennae out; asleep it
+-- sits low with its legs folded under it and its antennae laid back.
+local TIMID = 0.35 -- the least any mind dares (mind.lua's DARE)
+local HOPS = 0.6   -- of the ground a springtail covers, at least this much in the air
+test('springtail', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Pathfinder = require('nav.pathfinder')
+    local Springtail = class_of(World, 'springtail')
+    local cast = cast_for('springtail')
+    local function springtail(genome, seed)
+        rng.seed(seed or 76)
+        local w = World.new(level_data, {cast = cast, wander = false, selected = 0, genomes = genome and {genome}})
+        local i = w:first('springtail')
+        return w, i, w.creatures[i]
+    end
+    local report = {}
+
+    -- Its graphs, at both ends of the spring
+    local longest = {}
+    for _, spring in ipairs({0.7, 1.3}) do
+        local w, i = springtail(string.format('springtail spring=%.1f', spring))
+        local g = w.graphs[i]
+        local bold, cheap, far, hops = 0, 0, 0, 0
+        for _, n in ipairs(g.nodes) do
+            for _, e in ipairs(n.edges) do
+                local m = g.nodes[e.to]
+                if e.cost < math.sqrt((m.x - n.x) ^ 2 + (m.y - n.y) ^ 2) then cheap = cheap + 1 end
+                if e.kind == 'jump' and m.span == n.span then
+                    hops = hops + 1
+                    far = math.max(far, math.abs(m.x - n.x))
+                    if e.dare > TIMID then bold = bold + 1 end
+                end
+            end
+        end
+        check(results, hops > 0 and bold == 0, 'springtail: spring %.1f, %d of %d hops along a span dare more than %.2f',
+            spring, bold, hops, TIMID)
+        check(results, cheap == 0, 'springtail: spring %.1f, %d edges cost less than their chord', spring, cheap)
+        longest[spring] = far
+    end
+    report[#report + 1] = string.format('longest hop %.0f/%.0f at spring 0.7/1.3', longest[0.7], longest[1.3])
+    check(results, longest[1.3] > longest[0.7] + 20, 'springtail: the longest hop at spring 0.7 is %.0f, at 1.3 %.0f',
+        longest[0.7], longest[1.3])
+
+    -- Forty trips: how much of the ground goes by in the air, and its somersaults
+    local w, i, c = springtail(nil, 176)
+    w:select(i)
+    local ctrl, g = w.controllers[i], w.graphs[i]
+    local gen = love.math.newRandomGenerator(576)
+    local air, ground, ok, n_trips = 0, 0, 0, 0
+    local flight, short, turns, crooked, aloft = nil, 0, {}, 0, 0
+    w.events:on(function(ev)
+        if ev.who ~= c then return end
+        if ev.kind == 'jump' then
+            flight = {from = c.spin.from, turns = c.spin.turns, y = ev.y}
+            turns[c.spin.turns] = (turns[c.spin.turns] or 0) + 1
+        elseif ev.kind == 'land' and flight then
+            -- (on a hop that lands where it left, it turned all of its turn
+            -- in the air, but for the last step's worth)
+            local turned = aloft - flight.from
+            if math.abs(ev.y - flight.y) < 1 and turned < flight.turns * 2 * math.pi - 0.25 then short = short + 1 end
+            flight = nil
+        end
+    end)
+    for _ = 1, 40 do
+        local goal, start = g:random_node(gen, {top = true}), ctrl:start_node()
+        if goal and start and goal ~= start and Pathfinder.find(g, start, goal) then
+            n_trips = n_trips + 1
+            ctrl:go_to(goal)
+            local budget = TRIP_SLACK[1] + TRIP_SLACK[2] * ctrl:eta()
+            for _ = 1, math.floor(budget / dt) do
+                local x0 = c:anchor()
+                local was = c.mover.state
+                w:step(dt)
+                local d = math.abs(c:anchor() - x0)
+                if was == 'air' or c.mover.state == 'air' then air = air + d else ground = ground + d end
+                if c.mover.state == 'air' then aloft = c.angle end
+                if not ctrl:has_path() then break end
+            end
+            local x, y = c:anchor()
+            if not ctrl:has_path() and math.abs(x - goal.x) < 6 and math.abs(y - goal.y) < 6 then
+                ok = ok + 1
+                -- and once it's down it's upright
+                for _ = 1, math.floor(0.5 / dt) do w:step(dt) end
+                local _, _, nx, ny = c:frame()
+                if c.angle ~= 0 or ny > -0.95 then crooked = crooked + 1 end
+            else
+                results.fail[#results.fail + 1] = string.format('springtail: trip %d->%d stopped at (%.0f,%.0f), %s',
+                    start.id, goal.id, x, y, c.mover.state)
+                ctrl:clear()
+                c:reset(goal.x, goal.y)
+                c.mover.solid = goal.solid
+            end
+        end
+    end
+    local share = air / math.max(1, air + ground)
+    report[#report + 1] = string.format('%d/%d trips, %.0f%% of the way in the air, %d half and %d whole somersaults', ok,
+        n_trips, share * 100, turns[0.5] or 0, turns[1] or 0)
+    check(results, n_trips >= 30 and ok == n_trips, 'springtail: arrived on %d of %d trips', ok, n_trips)
+    check(results, share >= HOPS, 'springtail: only %.0f%% of the ground it covered went by in the air', share * 100)
+    check(results, (turns[0.5] or 0) > 0 and (turns[1] or 0) > 0, 'springtail: %d half and %d whole somersaults',
+        turns[0.5] or 0, turns[1] or 0)
+    check(results, short == 0, 'springtail: %d hops along a span landed before their somersault was done', short)
+    check(results, crooked == 0, 'springtail: %d times it was still tumbling half a second after it got there', crooked)
+    results.trips = (results.trips or 0) + n_trips
+
+    -- Two courting: facing each other, hopping in place, antennae out
+    w = springtail(nil, 22)
+    local a, b
+    for k, o in ipairs(w.creatures) do
+        if o.key == 'springtail' then if a then b = b or k else a = k end end
+    end
+    for _, pair in ipairs({{a, b}, {b, a}}) do
+        local m = w.minds[pair[1]]
+        m.doing, m.with, m.since = 'court', pair[2], w.time
+    end
+    local lift, tap, faced = 0, 0, true
+    for s = 1, math.floor(4 / dt) do
+        w:step(dt)
+        if s > 2 / dt then
+            for _, k in ipairs({a, b}) do
+                local me, other = w.creatures[k], w.creatures[k == a and b or a]
+                lift, tap = math.max(lift, me.lift), math.max(tap, me.tap)
+                faced = faced and (other:anchor() - me:anchor()) * me.mover.facing > 0
+            end
+        end
+    end
+    report[#report + 1] = string.format('courting hops %.1f high, antennae tap %.2f', lift, tap)
+    check(results, faced and lift > 2 and tap > 0.5, 'springtail: courting, faced %s, hopped %.1f, tapped %.2f',
+        tostring(faced), lift, tap)
+
+    -- Asleep: low, its legs under it and its antennae back
+    local w2, k, st = springtail(nil, 23)
+    local _, y0 = st:anchor()
+    local up = y0 - st.points[2].y
+    w2.minds[k].doing = 'rest'
+    for _ = 1, math.floor(4 / dt) do w2:step(dt) end
+    local low = y0 - st.points[2].y
+    local folded = 0
+    for _, leg in ipairs(st.legs) do
+        if leg.foot.y < y0 - 0.5 then folded = folded + 1 end
+    end
+    local tip = st:antenna_points(0, 0, false)
+    check(results, st.sleep > 0.9 and low < up * 0.8 and folded == #st.legs and tip[#tip - 1] < 0,
+        'springtail: asleep, it sits %.1f high (awake %.1f), %d legs folded, antennae tip at %.1f', low, up, folded,
+        tip[#tip - 1])
+
+    -- Its antennae are its genes', and a hatchling is small
+    local _, _, short_a = springtail('springtail antennae=0.5')
+    local _, _, long_a = springtail('springtail antennae=1.5')
+    local function reach(o) local p = o:antenna_points(0, 0, false) return math.sqrt(p[#p - 1] ^ 2 + p[#p] ^ 2) end
+    check(results, reach(long_a) > 2 * reach(short_a), 'springtail: antennae 0.5 reach %.1f, 1.5 reach %.1f',
+        reach(short_a), reach(long_a))
+    check(results, Springtail.new(100, 100, nil, nil, 1).s < Springtail.new(100, 100).s,
+        'springtail: a hatchling is as big as it will be grown')
+    check(results, Springtail.new(100, 100).profile == Springtail.profile,
+        'springtail: built without a genome, it is not the standard springtail')
+    log.info('selftest', 'springtail   %s', table.concat(report, '; '))
 end)
 
 -- Terrarium: graphs by size bucket, built a slice at a time (#16). A bucket's
@@ -2422,9 +2621,9 @@ test('audio', function(j, results)
     end
 
     local ok_audio, err = pcall(function()
-        -- Every event, played live and onto a tape
+        -- Every event from every kind, played live and onto a tape
         rng.seed(9)
-        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
+        local w = World.new(level_data, {cast = World.kinds(level_data), wander = true, selected = 0})
         for _, tape in ipairs({false, Tape.new()}) do
             local synth = Synth.new(tape or nil)
             local focus = w.creatures[1]
@@ -2446,10 +2645,10 @@ test('audio', function(j, results)
 
         -- Two of each kind courting, onto a tape, each sounding on every beat
         -- of its courtship (a worm sings at the top of each turn of its coil,
-        -- a blob hums on each swell, a spider taps): as many times as its
-        -- beat turns over in 6 s, and at least twice
+        -- a blob hums on each swell, a spider taps, a springtail pips as it
+        -- hops): as many times as its beat turns over in 6 s, and at least twice
         rng.seed(9)
-        w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
+        w = World.new(level_data, {cast = World.kinds(level_data), wander = true, selected = 0})
         local tape = Tape.new()
         local synth = Synth.new(tape)
         local pairs_of = {} -- plan -> its two, by index

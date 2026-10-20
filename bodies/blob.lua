@@ -621,4 +621,7 @@ function Blob.heaviest(genome)
     return genome
 end
 
+-- How far either side of its anchor it lies, as a token (bodies/token.lua): its radius
+function Blob.half(t) return t.R end
+
 return Blob

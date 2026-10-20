@@ -694,4 +694,7 @@ end
 -- settles a little shorter than its rest length)
 function Worm.length(genome) return genome.segments * 7.5 end
 
+-- How far either side of its anchor it lies, as a token (bodies/token.lua): half its length
+function Worm.half(t) return t.n * 8.5 / 2 end
+
 return Worm
