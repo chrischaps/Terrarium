@@ -237,10 +237,10 @@ local function drawNav()
     love.graphics.setLineWidth(1)
     for i = #World.CREATURES, 1, -1 do
         local key = World.CREATURES[i].key
-        local g, who = world.graph_of[key], world.creatures[world:first(key)]
-        if args.nav == true or args.nav == key then
+        local g, who = world.graph_of[key], world.creatures[world:first(key) or 0]
+        if g and who and (args.nav == true or args.nav == key) then
             local c = who.color_name or { 1, 1, 1 }
-            local off = args.nav == true and (i - 2) * 1.5 or 0
+            local off = args.nav == true and (i - (#World.CREATURES + 1) / 2) * 1.5 or 0
             for _, n in ipairs(g.nodes) do
                 for _, e in ipairs(n.edges) do
                     local m = g.nodes[e.to]

@@ -55,6 +55,7 @@ end
 Skin.families = {
     worm = {
         hue = {-12, 58}, -- rose, coral, apricot
+        shell = 'band',  -- an empty cocoon's colour (jar/eggs.lua): a skin colour's name, or a colour
         colours = function(h)
             return {
                 back    = rgb(0.62, 0.12, h),
@@ -70,6 +71,7 @@ Skin.families = {
     },
     blob = {
         hue = {150, 215}, -- mint, aqua, sky
+        shell = 'core',
         colours = function(h)
             return {
                 core    = rgb(0.88, 0.09, h, 0.86),
@@ -87,6 +89,7 @@ Skin.families = {
     },
     spider = {
         hue = {262, 318}, -- indigo, violet, plum
+        shell = {0.93, 0.91, 0.95, 1}, -- silk
         colours = function(h)
             return {
                 body    = rgb(0.34, 0.06, h),

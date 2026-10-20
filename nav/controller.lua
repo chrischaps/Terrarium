@@ -51,6 +51,34 @@ local function support(c)
     return c.mover.solid
 end
 
+-- Terrarium: how fast its body goes along a path, before its pace (#73)
+local function speed(c)
+    return climbs(c) and c.profile.crawl_speed or c.profile.walk_speed
+end
+
+-- Terrarium: progress may stall this long on the way to step `i` of its path
+-- before it repaths (#73): STALL, and the time that edge's length takes at its
+-- pace, so a slow body on a long edge isn't taken for a stuck one
+local STALL = 7
+function Controller:patience(i)
+    local from, to = self.path[i - 1], self.path[i]
+    if not (from and to) then return STALL end
+    local len = sqrt((to.node.x - from.node.x) ^ 2 + (to.node.y - from.node.y) ^ 2)
+    return STALL + len / (speed(self.creature) * self.pace)
+end
+
+-- Terrarium: about how long the rest of its path should take, at its pace:
+-- each edge's cost (its length, and more for a leap) over its body's speed.
+-- The self-test budgets its trips by it (#73).
+function Controller:eta()
+    local cost = 0
+    for k = self.i, #(self.path or {}) do
+        local e = self.path[k].edge
+        cost = cost + (e and e.cost or 0)
+    end
+    return cost / (speed(self.creature) * self.pace)
+end
+
 -- Public -----------------------------------------------------------------------
 
 function Controller:start_node()
@@ -130,7 +158,7 @@ function Controller:update(dt)
     end
 
     self.stall = self.stall + dt
-    if self.stall > 7 then
+    if self.stall > self:patience(self.i) then
         self.stall = 0
         self:repath('stalled')
         return

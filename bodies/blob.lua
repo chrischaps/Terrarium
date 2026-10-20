@@ -80,6 +80,7 @@ end
 -- can clip a lip the big one clears: `min_radius` has the graph check every
 -- radius in the stretch at once.
 Blob.BUCKETS = 8
+Blob.BUCKET_GENE = 'size' -- (#73: the gene the buckets divide, for the self-test)
 local navs = {}
 function Blob.nav_profile(genome)
     local k, lo, hi = Genome.bucket('blob', 'size', genome and genome.size or 1, Blob.BUCKETS)
@@ -88,6 +89,7 @@ function Blob.nav_profile(genome)
     local p = {}
     for key, v in pairs(small) do p[key] = v end
     p.size, p.sizes, p.bucket = nil, {lo, hi}, k
+    p.bucket_label = string.format('sizes %.3f-%.3f', lo, hi)
     p.radius, p.height = big.radius, big.height
     p.min_radius = small.radius
     navs[k] = p
@@ -577,6 +579,46 @@ function Blob:draw_debug()
     end
     love.graphics.setColor(1, 0.3, 0.3)
     love.graphics.circle('fill', self.mover.x, self.mover.y, 2.5)
+end
+
+--------------------------------------------------------------------------------
+-- Terrarium: what the self-test knows of a blob (#73); see Worm.LIMITS
+Blob.LIMITS = {
+    {measure = 'crushed', most = 0.5, says = 'lost %.0f%% of its area', scale = 100}, -- of its rest area
+    {measure = 'inverted', most = 0, says = 'turned inside out'}, -- 1 once its ring has crossed itself
+}
+
+local function crosses(a, b, c, d)
+    local function side(p, q, r) return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x) end
+    return side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
+end
+
+-- A ring that crosses itself is a blob turned inside out
+local function inside_out(pts)
+    local n = #pts
+    for a = 1, n do
+        for b = a + 2, n do
+            if not (a == 1 and b == n) and crosses(pts[a], pts[a % n + 1], pts[b], pts[b % n + 1]) then return true end
+        end
+    end
+    return false
+end
+
+-- Fold a look at blob `c` into `m`, the worst it has been: how much of its
+-- area has been squeezed out, and whether it has turned inside out
+function Blob.health(c, m, dt)
+    m.crushed = max(m.crushed or 0, 1 - c:area() / c.area0)
+    m.inverted = max(m.inverted or 0, inside_out(c.points) and 1 or 0)
+    return m
+end
+
+-- How big blob `c` is built now: its size
+function Blob.grown_size(c) return c.size end
+
+-- `genome` with the body the sim works hardest for: the biggest
+function Blob.heaviest(genome)
+    genome.size = Genome.blob.by_name.size.real[2]
+    return genome
 end
 
 return Blob

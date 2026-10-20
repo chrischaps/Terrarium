@@ -12,7 +12,7 @@
 --                                         --selftest, --replay and --navdump; --window undoes it)
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
 --                                         run <sec> of sim, save a screenshot
---                                         to the save dir (who: worm|blob|spider)
+--                                         to the save dir (who: a plan, e.g. worm)
 --        [--zoom cx cy z]                 magnify around a virtual point
 --        [--frames n every]               n shots, <every> sim seconds apart
 --        [--nolight] [--nopost]           skip the light map / post effects
@@ -25,7 +25,7 @@
 --   lovec . --seed <n>                    seed the simulation RNG
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
---   lovec . --follow <who>                Terrarium: hold the lantern up to worm|blob|spider
+--   lovec . --follow <who>                Terrarium: hold the lantern up to the first of a plan
 --   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
 --                                         this genome (repeat for the second)
@@ -59,7 +59,9 @@ function dev.parse(args)
             o.nav = true
             -- Terrarium: --nav <who> shows one creature's graph, jumps and all
             local who = args[i + 1]
-            if who == 'worm' or who == 'blob' or who == 'spider' then o.nav = who; i = i + 1 end
+            for _, key in ipairs(require('genome').order) do
+                if who == key then o.nav = who; i = i + 1; break end
+            end
         elseif a == '--zoom' then
             o.zoom = {x = tonumber(args[i + 1]), y = tonumber(args[i + 2]), z = tonumber(args[i + 3])}
             i = i + 3
@@ -123,6 +125,48 @@ local rng = require('core.rng')
 local TESTS = {}
 local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
 
+-- Terrarium: a plan's body module (#73). The tests ask it what they need to
+-- know of a body, and never which plan it is.
+local function class_of(World, key)
+    for _, def in ipairs(World.CREATURES) do
+        if def.key == key then return def.class end
+    end
+end
+
+-- What `m`, a body's health (its plan's `health`), says is past its plan's LIMITS
+local function faults(class, m)
+    local out = {}
+    for _, l in ipairs(class.LIMITS) do
+        local v = m[l.measure] or 0
+        if v > l.most then out[#out + 1] = string.format(l.says, v * (l.scale or 1)) end
+    end
+    return out
+end
+
+-- The plans jar `w` holds, in Genome.order
+local function kinds(w)
+    local here, out = {}, {}
+    for _, c in ipairs(w.creatures) do here[c.key] = true end
+    for _, key in ipairs(require('genome').order) do
+        if here[key] then out[#out + 1] = key end
+    end
+    return out
+end
+
+-- Each of `keys` with `fmt` applied to what `of(key)` returns, joined: "worms 3, blobs 2"
+local function each(keys, fmt, of)
+    local out = {}
+    for _, key in ipairs(keys) do out[#out + 1] = string.format(fmt, key, of(key)) end
+    return table.concat(out, ', ')
+end
+
+-- The first resident of each plan in the room, by plan
+local function homes(level_data)
+    local out = {}
+    for _, r in ipairs(level_data.residents) do out[r.key] = out[r.key] or r end
+    return out
+end
+
 -- 1. Graph integrity
 test('graphs', function(j, results)
     local World, level_data = j.World, j.level_data
@@ -182,7 +226,9 @@ test('graphs', function(j, results)
     end
 end)
 
--- 2. Arrival: chained trips between random reachable goals
+-- 2. Arrival: chained trips between random reachable goals, each in the time
+-- its path should take (Controller:eta) times TRIP_SLACK[2], plus TRIP_SLACK[1] s
+local TRIP_SLACK = {5, 3}
 test('trips', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local Pathfinder = require('nav.pathfinder')
@@ -196,7 +242,7 @@ test('trips', function(j, results)
         world:select(i)
         local c, ctrl, g = world.creatures[i], world.controllers[i], world.graphs[i]
         local gen = love.math.newRandomGenerator(500 + k)
-        local ok_count, n_trips = 0, 0
+        local ok_count, n_trips, slowest = 0, 0, 0
         local kinds = c.profile.climbs and nil or {top = true}
         for _ = 1, 40 do
             local goal = g:random_node(gen, kinds)
@@ -204,7 +250,11 @@ test('trips', function(j, results)
             if goal and start and goal ~= start and Pathfinder.find(g, start, goal) then
                 n_trips = n_trips + 1
                 ctrl:go_to(goal)
-                local arrived, took = drive(world, ctrl, 25, fixed_dt)
+                -- (its time: the path's cost over its speed, #73, with room for
+                -- the turns, squats and landings the cost doesn't count)
+                local eta = ctrl:eta()
+                local arrived, took = drive(world, ctrl, TRIP_SLACK[1] + TRIP_SLACK[2] * eta, fixed_dt)
+                if arrived then slowest = math.max(slowest, took / math.max(eta, 0.1)) end
                 local x, y = c:anchor()
                 local close = math.abs(x - goal.x) < 6 and math.abs(y - goal.y) < 6
                 if arrived and close then
@@ -226,7 +276,8 @@ test('trips', function(j, results)
         trips = trips + n_trips
         results.total = results.total + 1
         if ok_count == n_trips then results.pass = results.pass + 1 end
-        log.info('selftest', '%-6s trips  %d/%d arrived', def.key, ok_count, n_trips)
+        log.info('selftest', '%-6s trips  %d/%d arrived, the slowest in %.1fx its path\'s time', def.key, ok_count,
+            n_trips, slowest)
         fails_by[def.key] = n_trips - ok_count
     end
     results.trips = (results.trips or 0) + trips
@@ -235,10 +286,13 @@ end)
 -- 3. Frame-rate independence: same steps, different frame groupings
 test('framerate', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local Genome = require('genome')
+    -- (each plan sent to one of these, in turn)
+    local GOALS, goals = {{620, 300}, {120, 300}, {400, 40}}, {}
+    for p, key in ipairs(Genome.order) do goals[key] = GOALS[(p - 1) % #GOALS + 1] end
     local function run(frame_dt)
         rng.seed(42)
         local w = World.new(level_data, {wander = true})
-        local goals = {worm = {620, 300}, blob = {120, 300}, spider = {400, 40}}
         for i, c in ipairs(w.creatures) do
             w:select(i)
             w:click(goals[c.key][1], goals[c.key][2])
@@ -517,11 +571,13 @@ end)
 test('court', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     local DayCycle = require('jar.daycycle')
+    local Genome = require('genome')
     local SEEDS = j.seed and {j.seed} or {20261018, 1, 2, 3}
-    local by_plan = {worm = 0, blob = 0, spider = 0}
+    local by_plan = {} -- every plan any of the jars has, and its courtships
     for _, seed in ipairs(SEEDS) do
         rng.seed(seed)
         local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        for _, c in ipairs(w.creatures) do by_plan[c.key] = by_plan[c.key] or 0 end
         local courts, apart, since = 0, 0, {}
         w.events:on(function(ev)
             if ev.kind == 'court' then
@@ -562,13 +618,14 @@ test('court', function(j, results)
         check(results, apart < 100, 'court: a pair courted %.0f apart (seed %d)', apart, seed)
         log.info('selftest', 'court  seed %-9d %d courtships, widest pair %.0f apart', seed, courts, apart)
     end
-    if not j.seed then
-        for plan, n in pairs(by_plan) do
-            check(results, n >= 1, 'court: no %s courted in %d days', plan, #SEEDS)
+    local tally = {}
+    for _, plan in ipairs(Genome.order) do
+        if by_plan[plan] then
+            if not j.seed then check(results, by_plan[plan] >= 1, 'court: no %s courted in %d days', plan, #SEEDS) end
+            tally[#tally + 1] = string.format('%ss %d', plan, by_plan[plan])
         end
     end
-    log.info('selftest', 'court        worms %d, blobs %d, spiders %d over %d days', by_plan.worm, by_plan.blob,
-        by_plan.spider, #SEEDS)
+    log.info('selftest', 'court        %s over %d days', table.concat(tally, ', '), #SEEDS)
 end)
 
 -- Terrarium: 3c. Eggs (#23), the gate. In a jar of 900-second days from
@@ -623,24 +680,14 @@ test('eggs', function(j, results)
             end
         end)
         local steps, grown = math.floor(EGGS_DAYS * DAY / dt), false
-        -- Whole after growing: no segment stretched past twice its length, a
-        -- blob holding most of its area, a spider with its feet on something
+        -- Whole after growing: at a look, nothing past its plan's LIMITS (no
+        -- segment stretched past twice its length, a blob holding most of its
+        -- area, a spider's feet where its legs reach)
         local function whole(c)
             if not w:index_of(c) then return end
-            local ok, what = true, ''
-            if c.key == 'worm' then
-                for k = 2, #c.points do
-                    local a, b = c.points[k - 1], c.points[k]
-                    if (b.x - a.x) ^ 2 + (b.y - a.y) ^ 2 > (2 * 8.5) ^ 2 then ok, what = false, 'torn' end
-                end
-            elseif c.key == 'blob' then
-                ok, what = math.abs(c:area()) > 0.5 * c.area0, 'crushed'
-            else
-                local feet = 0
-                for _, leg in ipairs(c.legs) do feet = feet + (leg.grounded and 1 or 0) end
-                ok, what = feet >= #c.legs / 2, 'off its feet'
-            end
-            check(results, ok, 'eggs: a %s was %s after a moult (seed %d)', c.key, what, seed)
+            local class = class_of(World, c.key)
+            local f = faults(class, class.health(c, {}, 0))
+            check(results, #f == 0, 'eggs: a %s %s after a moult (seed %d)', c.key, table.concat(f, ', '), seed)
         end
         for _ = 1, steps do
             w:step(dt)
@@ -703,43 +750,33 @@ test('eggs', function(j, results)
     -- And every plan's growing, wherever the seeds' clutches fell: a hatchling
     -- of the biggest body each plan has, moulted in turn as if each were a
     -- night, settles whole into each new body and ends as its genome
-    for _, key in ipairs({'worm', 'blob', 'spider'}) do
+    local home = homes(level_data)
+    for _, key in ipairs(Genome.order) do
+        local class, r = class_of(World, key), home[key]
+        if not r then goto next_plan end -- (no home for it in this room)
         rng.seed(23)
         local w = World.new(level_data, {wander = false, selected = 0, hour = DayCycle.presets.night, day = DAY})
-        local g = Genome.random(key, rng.sim)
-        g.segments, g.size, g.reach = g.segments and 24, g.size and 1.4, g.reach and 1.3
-        local r
-        for _, res in ipairs(level_data.residents) do r = r or (res.key == key and res) end
+        local g = class.heaviest(Genome.random(key, rng.sim))
         local egg = w:lay(g, r.x + 30, r.solid, nil, {young = true})
         while #w.eggs > 0 do w:step(dt) end
         local i = egg.who
         w.young[i].born = -math.huge
+        local size = class.grown_size(w.creatures[i])
         for stage = 1, World.STAGES do
             w.minds[i].doing, w.minds[i].nights = 'rest', stage
             for _ = 1, 2 / dt do w:step(dt) end
             check(results, w.young[i] == nil or w.young[i].stage == stage, 'eggs: a %s didn\'t moult on night %d', key, stage)
             local c = w.creatures[i]
-            if key == 'worm' then
-                local most = 0
-                for k = 2, #c.points do
-                    local a, b = c.points[k - 1], c.points[k]
-                    most = math.max(most, math.sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2))
-                end
-                check(results, most < 2 * 8.5 and #c.points == c.n, 'eggs: a worm grown to %d segments is torn (%.1f)',
-                    c.n, most)
-            elseif key == 'blob' then
-                check(results, math.abs(c:area()) > 0.8 * c.area0, 'eggs: a blob grown to size %.2f hasn\'t filled out',
-                    c.size)
-            else
-                local feet = 0
-                for _, leg in ipairs(c.legs) do feet = feet + (leg.grounded and 1 or 0) end
-                check(results, feet == #c.legs, 'eggs: a spider grown to reach %.2f stands on %d of %d feet',
-                    c.scale, feet, #c.legs)
-            end
+            local now, f = class.grown_size(c), faults(class, class.health(c, {}, 0))
+            check(results, now > size, 'eggs: a %s didn\'t grow on night %d (%s, then %s)', key, stage, tostring(size),
+                tostring(now))
+            check(results, #f == 0, 'eggs: a %s grown to %s %s', key, tostring(now), table.concat(f, ', '))
+            size = now
         end
-        local c = w.creatures[i]
-        check(results, not w.young[i] and c.genome.segments == g.segments and c.genome.size == g.size
-            and c.genome.reach == g.reach and w.graphs[i] == w.navs[c.nav], 'eggs: a %s didn\'t grow into its genome', key)
+        local c, same = w.creatures[i], true
+        for _, gene in ipairs(Genome[key].own) do same = same and c.genome[gene.name] == g[gene.name] end
+        check(results, not w.young[i] and same and w.graphs[i] == w.navs[c.nav], 'eggs: a %s didn\'t grow into its genome', key)
+        ::next_plan::
     end
     check(results, mixed >= 1, 'eggs: no child mixed its parents\' genes')
     log.info('selftest', 'eggs         %d raised, %d with genes from both parents', raised, mixed)
@@ -792,13 +829,13 @@ test('death', function(j, results)
         end
         -- One of each plan with a fifth of a short life left, and a third of
         -- its kind beside it so the floor (#26) doesn't spare it
-        local old, count = {}, 0
-        for _, key in ipairs({'worm', 'blob', 'spider'}) do
+        local old, count, here = {}, 0, kinds(w)
+        for _, key in ipairs(here) do
             local i = w:first(key)
             local r = w.creatures[i].home
             w:lay(w.genomes[i], r.x + 40, r.solid)
         end
-        for _, key in ipairs({'worm', 'blob', 'spider'}) do
+        for _, key in ipairs(here) do
             local i = w:first(key)
             w.lives[i].span, w.lives[i].born = DAY, -0.8 * DAY
             old[w.creatures[i]] = {key = key, name = w.creatures[i].name, genome = w.genomes[i]}
@@ -916,7 +953,7 @@ test('floor', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local DayCycle = require('jar.daycycle')
     local SEEDS = j.seed and {j.seed} or {20261018, 3, 7}
-    local KEYS = {'worm', 'blob', 'spider'}
+    local KEYS -- (the kinds of the jar being watched)
 
     -- How many of each kind there are, counting eggs and not the dying, and
     -- how many are creatures
@@ -944,6 +981,7 @@ test('floor', function(j, results)
     for _, seed in ipairs(SEEDS) do
         rng.seed(seed)
         local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        KEYS = kinds(w)
         for _, life in ipairs(w.lives) do life.span, life.born = DAY, -0.99 * DAY end
         local residents = {}
         for i, c in ipairs(w.creatures) do residents[c] = i end
@@ -974,20 +1012,22 @@ test('floor', function(j, results)
                 check(results, (died[key] or 0) >= 1, 'floor: no %s elder died after its kind laid (seed %d)', key, seed)
             end
         end
-        log.info('selftest', 'floor seed %-9d laid at %.2f/%.2f/%.2f days (worm/blob/spider), %d/%d/%d elders gone',
-            seed, (laid.worm or -DAY) / DAY, (laid.blob or -DAY) / DAY, (laid.spider or -DAY) / DAY,
-            died.worm or 0, died.blob or 0, died.spider or 0)
+        log.info('selftest', 'floor seed %-9d laid at %s days; elders gone: %s', seed,
+            each(KEYS, '%s %.2f', function(key) return (laid[key] or -DAY) / DAY end),
+            each(KEYS, '%s %d', function(key) return died[key] or 0 end))
     end
 
     -- An ordinary jar for a few days
     local seed = SEEDS[1]
     rng.seed(seed)
     local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+    KEYS = kinds(w)
     local most, fewest, deaths, births = 0, math.huge, 0, 0
     w.events:on(function(ev)
         if ev.kind == 'returned' then deaths = deaths + 1 elseif ev.kind == 'hatched' then births = births + 1 end
     end)
-    local ok, every, by_key = true, math.floor(DAY / 4 / dt), {worm = {}, blob = {}, spider = {}}
+    local ok, every, by_key = true, math.floor(DAY / 4 / dt), {}
+    for _, key in ipairs(KEYS) do by_key[key] = {} end
     for s = 1, math.floor(FLOOR_DAYS * DAY / dt) do
         w:step(dt)
         local n, alive = counts(w)
@@ -1001,8 +1041,8 @@ test('floor', function(j, results)
     check(results, most <= World.CAPACITY, 'floor: the jar held %d', most)
     check(results, deaths >= 1, 'floor: nobody died in %d days', FLOOR_DAYS)
     local n = counts(w)
-    log.info('selftest', 'floor        %d days of seed %d: %d hatched, %d died, %d to %d in the jar, now %d/%d/%d',
-        FLOOR_DAYS, seed, births, deaths, fewest, most, n.worm, n.blob, n.spider)
+    log.info('selftest', 'floor        %d days of seed %d: %d hatched, %d died, %d to %d in the jar, now %s',
+        FLOOR_DAYS, seed, births, deaths, fewest, most, each(KEYS, '%ss %d', function(key) return n[key] end))
     -- (each kind, eggs and all, every quarter of a day)
     for _, key in ipairs(KEYS) do
         log.info('selftest', 'floor        %-7s %s', key .. 's', table.concat(by_key[key], ' '))
@@ -1033,7 +1073,7 @@ test('month', function(j, results)
     local statehash = require('core.statehash')
     local C = require('jar.config')
     local day, dt = j.day or C.DAY_SECONDS, World.COARSE
-    local KEYS = {'worm', 'blob', 'spider'}
+    local KEYS -- (the kinds of the jar being watched)
     local function open(seed, days)
         rng.seed(seed)
         return World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = days or day, coarse = true})
@@ -1041,7 +1081,8 @@ test('month', function(j, results)
 
     -- Each kind, counting its eggs and not its dying, and all of them
     local function counts(w)
-        local n, all = {worm = 0, blob = 0, spider = 0}, 0
+        local n, all = {}, 0
+        for _, key in ipairs(KEYS) do n[key] = 0 end
         for i, c in ipairs(w.creatures) do
             if not w.lives[i].dying then n[c.key], all = n[c.key] + 1, all + 1 end
         end
@@ -1073,10 +1114,12 @@ test('month', function(j, results)
     local t0 = love.timer.getTime()
     for _, seed in ipairs(seeds) do
         local w = open(seed)
+        KEYS = kinds(w)
         -- (each one's generation, the founders' 0 and a child's one more than
         -- its elder parent's, by matching each hatchling to its egg)
         local born, died, gen, founders, laid = 0, 0, {}, {}, {}
-        local deepest = {worm = 0, blob = 0, spider = 0}
+        local deepest, by_key = {}, {}
+        for _, key in ipairs(KEYS) do deepest[key], by_key[key] = 0, {} end
         for _, c in ipairs(w.creatures) do gen[c], founders[c] = 0, true end
         w.events:on(function(ev)
             if ev.kind == 'laid' then
@@ -1099,7 +1142,6 @@ test('month', function(j, results)
         end)
         local per = math.floor(day / dt + 0.5)
         local fewest, most, broke = math.huge, 0, nil
-        local by_key = {worm = {}, blob = {}, spider = {}}
         local csv = {'day,plan,gene,n,mean,sd'}
         local first, last
         for d = 0, MONTH_DAYS do
@@ -1108,10 +1150,11 @@ test('month', function(j, results)
                     w:step(dt)
                     local n, all = counts(w)
                     fewest, most = math.min(fewest, all), math.max(most, #w.creatures + #w.eggs)
-                    if not broke and (all < MONTH_FEWEST or #w.creatures + #w.eggs > World.CAPACITY
-                        or n.worm == 0 or n.blob == 0 or n.spider == 0) then
-                        broke = string.format('month: seed %d on day %.2f held %d (%d worms, %d blobs, %d spiders)',
-                            seed, w.time / day, all, n.worm, n.blob, n.spider)
+                    local gone = false
+                    for _, key in ipairs(KEYS) do gone = gone or n[key] == 0 end
+                    if not broke and (all < MONTH_FEWEST or #w.creatures + #w.eggs > World.CAPACITY or gone) then
+                        broke = string.format('month: seed %d on day %.2f held %d (%s)', seed, w.time / day, all,
+                            each(KEYS, '%d %ss', function(key) return n[key] end))
                     end
                 end
             end
@@ -1133,8 +1176,8 @@ test('month', function(j, results)
         end
         love.filesystem.write(string.format('month_%d.csv', seed), table.concat(csv, '\n') .. '\n')
         log.info('selftest', 'month  seed %-9d %d days: %d to %d in the jar, %d hatched, %d went back to the moss, '
-            .. 'generation %d/%d/%d (%.1fs)', seed, MONTH_DAYS, fewest, most, born, died,
-            deepest.worm, deepest.blob, deepest.spider, love.timer.getTime() - t0)
+            .. 'generations %s (%.1fs)', seed, MONTH_DAYS, fewest, most, born, died,
+            each(KEYS, '%s %d', function(key) return deepest[key] end), love.timer.getTime() - t0)
         for _, key in ipairs(KEYS) do
             log.info('selftest', 'month    %-8s %s', key .. 's', table.concat(by_key[key], ' '))
         end
@@ -1834,6 +1877,7 @@ end)
 -- graph must be honest for every body in the bucket, a sliced build must be
 -- the graph a whole one makes, and a clutch of sixteen hatching at once must
 -- never cost a frame.
+local CLUTCH = 16 -- eggs in the worst clutch: as many as the jar holds (World.CAPACITY)
 test('hatch', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local NavGraph = require('nav.navgraph')
@@ -1841,7 +1885,6 @@ test('hatch', function(j, results)
     local ballistics = require('nav.ballistics')
     local statehash = require('core.statehash')
     local Genome = require('genome')
-    local Worm, Blob, Spider = require('bodies.worm'), require('bodies.blob'), require('bodies.spider')
     local level = Level.new(level_data)
     local report = {}
 
@@ -1870,35 +1913,44 @@ test('hatch', function(j, results)
         check(results, #bad == 0, 'hatch: %s cannot travel its bucket graph (%s)', what, table.concat(bad, ', '))
         return g
     end
-    local blobs, spiders = {}, {}
-    for k = 0, Blob.BUCKETS - 1 do
-        local nav = Blob.nav_profile({size = 0.6 + (k + 0.5) * 0.8 / Blob.BUCKETS})
-        check(results, nav.bucket == k, 'hatch: blob bucket %d is filed as %s', k, tostring(nav.bucket))
-        for size = nav.sizes[1], nav.sizes[2] + 1e-9, 0.01 do
-            size = math.floor(size * 1000 + 0.5) / 1000
-            honest(nav, Blob.profile_for(size), 'blob size ' .. size)
+    -- Each plan whose graphs are bucketed by a gene (BUCKET_GENE), every bucket:
+    -- each body in it, every tenth of the bucket, can travel its graph
+    local buckets = {} -- {key, nav, value} for each bucket of each plan, in order
+    local ends = {}    -- each plan's graphs at the bottom and top of its range
+    for _, key in ipairs(Genome.order) do
+        local class = class_of(World, key)
+        local name, n = class.BUCKET_GENE, class.BUCKETS
+        if not name then
+            ends[#ends + 1] = class.nav_profile()
+        else
+            local r = Genome[key].by_name[name].real
+            local wide = (r[2] - r[1]) / n
+            local function nav_at(v) return class.nav_profile({[name] = v}) end
+            for k = 0, n - 1 do
+                local mid = r[1] + (k + 0.5) * wide
+                local nav = nav_at(mid)
+                check(results, nav.bucket == k, 'hatch: %s bucket %d is filed as %s', key, k, tostring(nav.bucket))
+                local _, lo, hi = Genome.bucket(key, name, mid, n)
+                for v = lo, hi + 1e-9, wide / 10 do
+                    v = math.floor(v * 1000 + 0.5) / 1000
+                    honest(nav, class.profile_for(v), string.format('%s %s %s', key, name, v))
+                end
+                buckets[#buckets + 1] = {key = key, nav = nav, value = mid}
+            end
+            -- Neighbours meet: the top of one bucket is the bottom of the next
+            local edge = math.floor((r[1] + wide) * 1000 + 0.5) / 1000
+            check(results, nav_at(r[1]).bucket == 0 and nav_at(r[2]).bucket == n - 1 and nav_at(edge).bucket == 1
+                and nav_at(edge - 0.001).bucket == 0, 'hatch: %s %ss are filed in the wrong buckets', key, name)
+            check(results, nav_at(r[1] + 2.3 * wide) == nav_at(r[1] + 2.7 * wide),
+                'hatch: two %ss of one bucket have different nav profiles', key)
+            ends[#ends + 1] = nav_at(r[1])
+            ends[#ends + 1] = nav_at(r[2])
         end
-        blobs[#blobs + 1] = nav
     end
-    for k = 0, Spider.BUCKETS - 1 do
-        local nav = Spider.nav_profile({reach = 0.7 + (k + 0.5) * 0.6 / Spider.BUCKETS})
-        check(results, nav.bucket == k, 'hatch: spider bucket %d is filed as %s', k, tostring(nav.bucket))
-        for reach = nav.reaches[1], nav.reaches[2] + 1e-9, 0.0075 do
-            reach = math.floor(reach * 1000 + 0.5) / 1000
-            honest(nav, Spider.profile_for(reach), 'spider reach ' .. reach)
-        end
-        spiders[#spiders + 1] = nav
-    end
-    -- Neighbours meet: the top of one bucket is the bottom of the next
-    check(results, Blob.nav_profile({size = 0.6}).bucket == 0 and Blob.nav_profile({size = 1.4}).bucket == 7
-        and Blob.nav_profile({size = 0.7}).bucket == 1 and Blob.nav_profile({size = 0.699}).bucket == 0,
-        'hatch: blob sizes are filed in the wrong buckets')
-    check(results, Blob.nav_profile({size = 0.83}) == Blob.nav_profile({size = 0.87}),
-        'hatch: two blobs of one bucket have different nav profiles')
 
     -- A sliced build is the whole build, whatever the slice
     local hash = function(g) return statehash.of({time = 0, level = level, creatures = {}, graphs = {g}}).total end
-    for _, nav in ipairs({Worm.nav_profile(), blobs[1], spiders[8]}) do
+    for _, nav in ipairs(ends) do
         local whole = hash(NavGraph.new(level, nav))
         for _, slice in ipairs({1000, World.BUILD_SLICE}) do
             local b, g = NavGraph.builder(level, nav, slice), nil
@@ -1909,19 +1961,22 @@ test('hatch', function(j, results)
     end
 
     -- The worst clutch: sixteen eggs laid in one step where each plan's
-    -- residents hatched, a blob in every size bucket and a spider in every
-    -- reach bucket (their other genes random), so every graph the residents
-    -- don't already have is built at once. Each egg waits for its bucket's.
+    -- residents hatched, one in each bucket of each bucketed plan in turn
+    -- (their other genes random), so every graph the residents don't already
+    -- have is built at once. Each egg waits for its bucket's.
+    local spots = homes(level_data)
+    local laid = {}
+    for k = 1, CLUTCH do
+        local b = buckets[(k - 1) % #buckets + 1]
+        if spots[b.key] then laid[#laid + 1] = b end
+    end
     local function clutch()
         rng.seed(16)
         local w = World.new(level_data, {wander = true, selected = 0})
-        local spots = {}
-        for _, r in ipairs(level_data.residents) do spots[r.key] = spots[r.key] or r end
-        for k = 1, 16 do
-            local key = k <= 8 and 'blob' or 'spider'
-            local g, b = Genome.random(key, rng.sim), (k - 1) % 8 + 0.5
-            if key == 'blob' then g.size = 0.6 + b * 0.1 else g.reach = 0.7 + b * 0.075 end
-            local r = spots[key]
+        for k, b in ipairs(laid) do
+            local g = Genome.random(b.key, rng.sim)
+            g[class_of(World, b.key).BUCKET_GENE] = b.value
+            local r = spots[b.key]
             w:lay(g, r.x + (k % 5 - 2) * 6, r.solid, 'egg ' .. k)
         end
         local residents, builds = #w.creatures, #w.building
@@ -1944,13 +1999,15 @@ test('hatch', function(j, results)
             typical = frames[math.floor(#frames / 2) + 1] or 0, settled = frames[#frames] or 0}
     end
     local w, s = clutch()
-    check(results, s.hatched_at and #w.creatures == s.residents + 16, 'hatch: %d of 16 eggs hatched in 20 s',
-        #w.creatures - s.residents)
-    local residents_have = {}
-    for i = 1, s.residents do residents_have[w.creatures[i].nav] = true end
+    check(results, s.hatched_at and #w.creatures == s.residents + #laid, 'hatch: %d of %d eggs hatched in 20 s',
+        #w.creatures - s.residents, #laid)
+    local have = {}
+    for i = 1, s.residents do have[w.creatures[i].nav] = true end
     local need = 0
-    for _, nav in ipairs(blobs) do need = need + (residents_have[nav] and 0 or 1) end
-    for _, nav in ipairs(spiders) do need = need + (residents_have[nav] and 0 or 1) end
+    for _, b in ipairs(laid) do
+        need = need + (have[b.nav] and 0 or 1)
+        have[b.nav] = true
+    end
     check(results, s.builds == need, 'hatch: a clutch needing %d graphs queued %d builds', need, s.builds)
     local wrong = 0
     for i, c in ipairs(w.creatures) do
@@ -1967,14 +2024,14 @@ test('hatch', function(j, results)
     if worst >= 1 / 60 then worst = math.min(worst, select(2, clutch()).worst) end
     s.worst = worst
     check(results, worst < 1 / 60, 'hatch: a frame of the clutch took %.1f ms', worst * 1000)
-    report[#report + 1] = string.format('%d builds, all 16 out after %.2f s; frames while hatching at most %.2f ms '
-        .. '(after: typically %.2f, at most %.2f)', s.builds, s.hatched_at * dt, s.worst * 1000, s.typical * 1000,
+    report[#report + 1] = string.format('%d builds, all %d out after %.2f s; frames while hatching at most %.2f ms '
+        .. '(after: typically %.2f, at most %.2f)', s.builds, #laid, s.hatched_at * dt, s.worst * 1000, s.typical * 1000,
         s.settled * 1000)
     log.info('selftest', 'hatch        %s', table.concat(report, '; '))
 end)
 
--- Terrarium: a full jar (#18). Sixteen of the heaviest bodies (the longest
--- worms, the biggest blobs, eight-legged spiders) live on full soft bodies, so
+-- Terrarium: a full jar (#18). Sixteen of the heaviest bodies (each plan's
+-- `heaviest`: the longest worms, the biggest blobs, spiders on eight long legs) live on full soft bodies, so
 -- the sim must leave most of a 60 fps frame for drawing them. `--crowd 16
 -- --bench <sec>` measures the drawn frame. Eggs hatch between a frame's
 -- snapshot and its draw, so this draws between steps the way main.lua does.
@@ -1987,8 +2044,7 @@ test('crowd', function(j, results)
         local w = World.new(level_data, {wander = true, selected = 0})
         for k = #w.creatures + 1, CROWD do
             local r = level_data.residents[(k - 1) % #level_data.residents + 1]
-            local g = Genome.random(r.key, rng.sim)
-            g.segments, g.size, g.legs = g.segments and 24, g.size and 1.4, g.legs and 8
+            local g = class_of(World, r.key).heaviest(Genome.random(r.key, rng.sim))
             w:lay(g, r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
         end
         local frames, steps, ok, err = {}, 0, true, nil
@@ -2019,18 +2075,15 @@ end)
 -- jar of its own, hatched where its plan's first resident lives. Each tours a
 -- mossy top, the shelf and home again, and is watched every tenth of a second
 -- for the ways a body goes wrong: it stalls, leaves the jar, sinks into the
--- scenery or comes apart (a worm torn or knotted, a blob crushed or turned
--- inside out, a spider standing on feet its legs don't reach). A genome that
--- fails is reported with its body genes and which quarter of each range they
--- fell in; the fix is to mend the body, or shrink that range in genome.lua.
+-- scenery, or comes apart past its plan's LIMITS (a worm torn or knotted, a
+-- blob crushed or turned inside out, a spider standing on feet its legs don't
+-- reach: each plan's `health` says, #73). A leg of the tour may take
+-- RANGES_SLACK times what its path should (Controller:eta), plus 10 s. A genome
+-- that fails is reported with its body genes and which quarter of each range
+-- they fell in; the fix is to mend the body, or shrink that range in genome.lua.
 local RANGES = 200
-local LIMITS = {
-    sunk = 4,       -- px any point may be inside the scenery (a foot rests on its surface)
-    torn = 2,       -- a worm segment's length over its rest length
-    knot = 2,       -- s a worm may stay knotted (three sharp bends): a dropped tail shakes out
-    crushed = 0.5,  -- of a blob's rest area lost
-    slip = 0.02,    -- of a spider's planted feet its legs don't reach
-}
+local SUNK = 4 -- px any point may be inside the scenery (a foot rests on its surface)
+local RANGES_SLACK = 4
 test('ranges', function(j, results)
     local World, level_data, dt = j.World, j.level_data, j.fixed_dt
     local Genome = require('genome')
@@ -2040,8 +2093,7 @@ test('ranges', function(j, results)
     for _, s in ipairs(level.solids) do
         if s.moss and s ~= shelf and s.id ~= 'soil' then tops[#tops + 1] = s end
     end
-    local home = {}
-    for _, r in ipairs(level_data.residents) do home[r.key] = home[r.key] or r end
+    local home = homes(level_data)
     local every = math.floor(0.1 / dt + 0.5)
     local W, H = level_data.width, level_data.height
 
@@ -2051,52 +2103,10 @@ test('ranges', function(j, results)
         if not s then return 0 end
         return math.min(x - s.x, s.x + s.w - x, y - s.y, s.y + s.h - y)
     end
-    local function crosses(a, b, c, d)
-        local function side(p, q, r) return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x) end
-        return side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
-    end
-    -- A ring that crosses itself is a blob turned inside out
-    local function inside_out(pts)
-        local n = #pts
-        for a = 1, n do
-            for b = a + 2, n do
-                if not (a == 1 and b == n) and crosses(pts[a], pts[a % n + 1], pts[b], pts[b % n + 1]) then return true end
-            end
-        end
-        return false
-    end
-    -- A worm's longest segment over its rest length, and how many joints bend
-    -- back on themselves (a hairpin turn has one or two, a knot three or more)
-    local function worm_shape(pts)
-        local most, sharp = 0, 0
-        for k = 2, #pts do
-            local a, b, q = pts[k - 1], pts[k], pts[k + 1]
-            local ux, uy = b.x - a.x, b.y - a.y
-            most = math.max(most, math.sqrt(ux * ux + uy * uy))
-            if q then
-                local vx, vy = q.x - b.x, q.y - b.y
-                local d = math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
-                if d > 0 and (ux * vx + uy * vy) / d < -0.17 then sharp = sharp + 1 end
-            end
-        end
-        return most / 8.5, sharp
-    end
-    -- A spider's planted feet that its legs don't reach or that stand on nothing
-    local function slipped(c)
-        if c.mode ~= 'attached' then return 0, 0 end
-        local bad, planted = 0, 0
-        for _, leg in ipairs(c.legs) do
-            if not leg.stepping and not (c.tap and c.legs[c.tap.leg] == leg) then
-                planted = planted + 1
-                local tip = leg.chain.joints[#leg.chain.joints]
-                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 4 or not leg.grounded then bad = bad + 1 end
-            end
-        end
-        return bad, planted
-    end
 
     -- One genome's tour: its worst measures, and what went wrong
     local function tour(genome, top)
+        local class = class_of(World, genome.plan)
         local r = home[genome.plan]
         local solo = setmetatable({residents = {{key = r.key, name = r.name, solid = r.solid, x = r.x, genome = genome}}},
             {__index = level_data})
@@ -2104,13 +2114,13 @@ test('ranges', function(j, results)
         local w = World.new(solo, {wander = false, selected = 1})
         local c, ctrl, g = w.creatures[1], w.controllers[1], w.graphs[1]
         local stops = {{top.x + top.w / 2, top}, {shelf.x + shelf.w / 2, shelf}, {r.x, w.level.by_id[r.solid]}}
-        local m = {sunk = 0, torn = 0, knot = 0, crushed = 0, slips = 0, planted = 0, faults = {}}
-        local knotted = 0
+        local m = {sunk = 0, faults = {}}
         for _, stop in ipairs(stops) do
             local goal = g:node_near(stop[1], stop[2].y, stop[2], 0, -1)
             local going = goal and ctrl:go_to(goal)
+            local budget = going and (10 + RANGES_SLACK * ctrl:eta()) / dt or 0
             local steps = 0
-            while going and ctrl:has_path() and steps < 60 / dt do
+            while going and ctrl:has_path() and steps < budget do
                 w:step(dt)
                 steps = steps + 1
                 if steps % every == 0 then
@@ -2121,17 +2131,7 @@ test('ranges', function(j, results)
                             m.sunk = math.max(m.sunk, depth(p.x, p.y))
                         end
                     end
-                    if c.key == 'worm' then
-                        local stretch, sharp = worm_shape(c.points)
-                        knotted = sharp >= 3 and knotted + every * dt or 0
-                        m.torn, m.knot = math.max(m.torn, stretch), math.max(m.knot, knotted)
-                    elseif c.key == 'blob' then
-                        m.crushed = math.max(m.crushed, 1 - c:area() / c.area0)
-                        m.inverted = m.inverted or inside_out(c.points)
-                    else
-                        local bad, planted = slipped(c)
-                        m.slips, m.planted = m.slips + bad, m.planted + planted
-                    end
+                    class.health(c, m, every * dt)
                 end
             end
             local x, y = c:anchor()
@@ -2144,32 +2144,26 @@ test('ranges', function(j, results)
                 if c.profile.climbs then c.solid = stop[2]; c:plant_all() end
             end
         end
-        m.slip = m.slips / math.max(1, m.planted)
         local f = m.faults
         if m.out then f[#f + 1] = m.out end
-        if m.sunk > LIMITS.sunk then f[#f + 1] = string.format('sank %.1fpx into the scenery', m.sunk) end
-        if m.torn > LIMITS.torn then f[#f + 1] = string.format('tore a segment to %.1fx its length', m.torn) end
-        if m.knot >= LIMITS.knot then f[#f + 1] = string.format('stayed knotted %.1fs', m.knot) end
-        if m.crushed > LIMITS.crushed then
-            f[#f + 1] = string.format('was crushed to %.0f%% of its area', 100 * (1 - m.crushed))
-        end
-        if m.inverted then f[#f + 1] = 'turned inside out' end
-        if m.slip > LIMITS.slip then
-            f[#f + 1] = string.format("stood on feet it can't reach %.1f%% of the time", 100 * m.slip)
-        end
+        if m.sunk > SUNK then f[#f + 1] = string.format('sank %.1fpx into the scenery', m.sunk) end
+        for _, fault in ipairs(faults(class, m)) do f[#f + 1] = fault end
         return m
     end
 
     local t0 = love.timer.getTime()
     for p, key in ipairs(Genome.order) do
+        local class = class_of(World, key)
+        if not home[key] then goto next_plan end -- (no home for it in this room)
         local gen = love.math.newRandomGenerator(1700 + p)
         local own = Genome[key].own
-        local failed, worst, by_quarter = {}, {}, {}
+        local failed, worst, by_quarter = {}, {sunk = 0}, {}
+        for _, l in ipairs(class.LIMITS) do worst[l.measure] = 0 end
         for _, gene in ipairs(own) do by_quarter[gene.name] = {0, 0, 0, 0} end
         for n = 1, RANGES do
             local genome = Genome.random(key, gen)
             local m = tour(genome, tops[(n - 1) % #tops + 1])
-            for _, k in ipairs({'sunk', 'torn', 'knot', 'crushed', 'slip'}) do worst[k] = math.max(worst[k] or 0, m[k]) end
+            for k in pairs(worst) do worst[k] = math.max(worst[k], m[k] or 0) end
             if #m.faults > 0 then
                 local body = {key}
                 for _, gene in ipairs(own) do
@@ -2189,14 +2183,14 @@ test('ranges', function(j, results)
             log.info('selftest', 'ranges       %s %s failures by quarter of its range, low to high: %d %d %d %d', key,
                 gene.name, q[1], q[2], q[3], q[4])
         end
-        local measures = {
-            worm = string.format('segments at most %.2fx, knots at most %.1fs', worst.torn, worst.knot),
-            blob = string.format('at most %.0f%% of its area squeezed out', 100 * worst.crushed),
-            spider = string.format('feet slipped at most %.1f%% of the time', 100 * worst.slip),
-        }
+        local measures = {}
+        for _, l in ipairs(class.LIMITS) do
+            measures[#measures + 1] = string.format('%s at most %.3g (limit %.3g)', l.measure, worst[l.measure], l.most)
+        end
         log.info('selftest', 'ranges       %-6s %d/%d toured the moss and the shelf; sank at most %.1fpx, %s', key,
-            RANGES - #failed, RANGES, worst.sunk, measures[key])
+            RANGES - #failed, RANGES, worst.sunk, table.concat(measures, ', '))
         results.trips = (results.trips or 0) + 3 * RANGES
+        ::next_plan::
     end
     log.info('selftest', 'ranges       %d genomes per plan in %.0fs', RANGES, love.timer.getTime() - t0)
 end)
@@ -2214,9 +2208,10 @@ test('audio', function(j, results)
     -- A bigger body is lower (about an octave over the gene's range), a
     -- hatchling is higher than it will be grown and an elder lower, and each
     -- of the give's variants is spoken by some part of its range
-    local SIZE = {worm = 'segments', blob = 'size', spider = 'reach'}
-    local GIVE = {worm = 'stiffness', blob = 'pressure', spider = 'legs'}
     for _, key in ipairs(Genome.order) do
+        local sounds = Synth.SOUNDS[key]
+        if not sounds then goto silent end -- (a plan with no sounds is heard as nothing)
+        local size, give = sounds.size, sounds.give
         local function ends(name)
             local g = Genome[key].by_name[name]
             local r = g.real or g.int or {g.pick[1], g.pick[#g.pick]}
@@ -2225,18 +2220,19 @@ test('audio', function(j, results)
         local function voice(genome, old) return Synth.voice({key = key, genome = genome}, old) end
         local g = Genome.random(key, rng.sim)
         local small, big = Genome.copy(g), Genome.copy(g)
-        small[SIZE[key]], big[SIZE[key]] = ends(SIZE[key])
+        small[size], big[size] = ends(size)
         check(results, voice(small).pitch > 1.6 * voice(big).pitch, 'audio: a big %s sounds no lower than a small one', key)
         check(results, voice(Genome.young(big, 0)).pitch > voice(big).pitch, 'audio: a %s hatchling sounds no higher than it will grown', key)
         check(results, voice(g, 1).pitch < voice(g).pitch, 'audio: a %s elder sounds no lower than it did', key)
-        local lo, hi = ends(GIVE[key])
-        local kinds = {}
+        local lo, hi = ends(give)
+        local variants = {}
         for _, t in ipairs({0, 0.5, 1}) do
             local v = Genome.copy(g)
-            v[GIVE[key]] = lo + (hi - lo) * t
-            kinds[voice(v).kind] = true
+            v[give] = lo + (hi - lo) * t
+            variants[voice(v).kind] = true
         end
-        check(results, kinds[1] and kinds[2] and kinds[3], "audio: a %s's %s doesn't reach all three voices", key, GIVE[key])
+        check(results, variants[1] and variants[2] and variants[3], "audio: a %s's %s doesn't reach all three voices", key, give)
+        ::silent::
     end
 
     local ok_audio, err = pcall(function()
@@ -2262,31 +2258,49 @@ test('audio', function(j, results)
             love.audio.stop()
         end
 
-        -- Two of each kind courting, onto a tape: a worm sings at the top of
-        -- each turn of its coil, a blob hums on each swell, a spider taps
+        -- Two of each kind courting, onto a tape, each sounding on every beat
+        -- of its courtship (a worm sings at the top of each turn of its coil,
+        -- a blob hums on each swell, a spider taps): as many times as its
+        -- beat turns over in 6 s, and at least twice
         rng.seed(9)
         w = World.new(level_data, {wander = true, selected = 0})
         local tape = Tape.new()
         local synth = Synth.new(tape)
-        for _, key in ipairs(Genome.order) do
+        local pairs_of = {} -- plan -> its two, by index
+        for _, key in ipairs(kinds(w)) do
             local a = w:first(key)
             local b
             for i, c in ipairs(w.creatures) do
                 if c.key == key and i ~= a then b = i end
             end
-            w.minds[a].doing, w.minds[a].with, w.creatures[a].ardour = 'court', b, 1
-            w.minds[b].doing, w.minds[b].with, w.creatures[b].ardour = 'court', a, 1
+            if b and Synth.SOUNDS[key] and Synth.SOUNDS[key].court then
+                w.minds[a].doing, w.minds[a].with, w.creatures[a].ardour = 'court', b, 1
+                w.minds[b].doing, w.minds[b].with, w.creatures[b].ardour = 'court', a, 1
+                pairs_of[#pairs_of + 1] = {key = key, a, b}
+            end
         end
+        local beats, last = {}, {}
         for _ = 1, math.floor(6 / fixed_dt) do
             w.time = w.time + fixed_dt -- (only the clock: the minds aren't asked)
             synth:update(fixed_dt, w)
+            for _, pair in ipairs(pairs_of) do
+                local court = Synth.SOUNDS[pair.key].court
+                for side = 1, 2 do
+                    local i = pair[side]
+                    local beat = court.beat(w.creatures[i], w.time, i, pair[3 - side])
+                    if last[i] and beat ~= last[i] then beats[pair.key] = (beats[pair.key] or 0) + 1 end
+                    last[i] = beat
+                end
+            end
         end
         local heard = {}
         for _, s in ipairs(tape.shots) do heard[s.data] = (heard[s.data] or 0) + 1 end
-        local D = synth.data
-        check(results, (heard[D.trill] or 0) >= 2 and (heard[D.hum] or 0) >= 6 and (heard[D.tap] or 0) >= 20,
-            'audio: courting pairs sang %d, hummed %d and tapped %d times in 6 s', heard[D.trill] or 0,
-            heard[D.hum] or 0, heard[D.tap] or 0)
+        for _, pair in ipairs(pairs_of) do
+            local court = Synth.SOUNDS[pair.key].court
+            local n, want = heard[synth.data[court.sound]] or 0, beats[pair.key] or 0
+            check(results, n == want and n >= 2, 'audio: two courting %ss sounded %d times in 6 s, on %d beats',
+                pair.key, n, want)
+        end
         local cues = tape:bounce({{title = 'courting', from = 0, to = 1}}, 'audio_test.wav', 0.2)
         check(results, #cues == 1 and love.filesystem.getInfo('audio_test.wav'), 'audio: the tape bounced nothing')
         love.filesystem.remove('audio_test.wav')
@@ -2302,7 +2316,7 @@ test('audio', function(j, results)
         local synth = heard and Synth.new(tape)
         if synth then w.events:on(function(ev) synth:on_event(ev, w) end) end
         for s = 1, math.floor(30 / fixed_dt) do
-            if s == 120 then w:pinch(w.creatures[w:first('blob')]:anchor()) end
+            if s == 120 then w:pinch(w.creatures[1]:anchor()) end
             w:step(fixed_dt)
             if synth then synth:update(fixed_dt, w) end
         end
