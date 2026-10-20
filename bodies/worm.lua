@@ -65,6 +65,7 @@ local function bunches(n) return 1 + (n - 10) / 7 end
 local COURT_GAP = 9       -- its half of the gap between it and a partner
 local COIL = 0.12        -- the ring its head makes, in radius per unit of its length
 local COIL_SPIN = 1.6     -- radians a second round it
+Worm.COIL_SPIN = COIL_SPIN -- (its song keeps the turn, core/synth.lua, #28)
 
 -- Terrarium: the body's own colours come from its skin (Skin.of); these are
 -- the lamp's light on it and its eyes

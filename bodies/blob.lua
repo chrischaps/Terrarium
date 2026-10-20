@@ -46,6 +46,7 @@ Blob.profile = {
 
 local N = 18
 local PULSE = 1.3 -- Terrarium: seconds between a courting blob's swells (#22)
+Blob.PULSE = PULSE -- (it hums on each, core/synth.lua, #28)
 local R = 21 -- Terrarium: the ring's radius at size 1 (Character's blob)
 
 -- Terrarium: the profile of a blob `size` times the standard one. A bigger

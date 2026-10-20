@@ -26,6 +26,7 @@
 --   lovec . --hour <h|name>               Terrarium: start the jar at this hour
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to worm|blob|spider
+--   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
 --                                         this genome (repeat for the second)
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
@@ -76,6 +77,7 @@ function dev.parse(args)
         elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
+        elseif a == '--mute' then o.mute = true
         -- Terrarium: a body to look at, e.g. --genome "worm segments=24 stiffness=0.9"
         elseif a == '--genome' then
             o.genomes = o.genomes or {}
@@ -2199,28 +2201,124 @@ test('ranges', function(j, results)
     log.info('selftest', 'ranges       %d genomes per plan in %.0fs', RANGES, love.timer.getTime() - t0)
 end)
 
--- 4. Audio: every event path runs without error (not a listening test)
+-- 4. Audio (#28): every event path runs, a voice follows its genes, a pair
+-- courting is heard on its beat, and a jar heard is the same jar as one
+-- unheard. (Not a listening test: scripts/listen.lua makes one of those.)
 test('audio', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
-    local ok_audio, err = pcall(function()
-        local Synth = require('core.synth')
-        local synth = Synth.new()
-        rng.seed(9)
-        local w = World.new(level_data, {wander = true})
-        for _, c in ipairs(w.creatures) do
-            for _, kind in ipairs({'jump', 'land', 'step', 'arrived'}) do
-                synth:on_event({kind = kind, who = c, x = 300, y = 300, vx = 100, vy = -400, impact = 500, near = true},
-                    w:selected_creature())
-            end
+    local Synth = require('core.synth')
+    local Tape = require('core.tape')
+    local Genome = require('genome')
+    local statehash = require('core.statehash')
+
+    -- A bigger body is lower (about an octave over the gene's range), a
+    -- hatchling is higher than it will be grown and an elder lower, and each
+    -- of the give's variants is spoken by some part of its range
+    local SIZE = {worm = 'segments', blob = 'size', spider = 'reach'}
+    local GIVE = {worm = 'stiffness', blob = 'pressure', spider = 'legs'}
+    for _, key in ipairs(Genome.order) do
+        local function ends(name)
+            local g = Genome[key].by_name[name]
+            local r = g.real or g.int or {g.pick[1], g.pick[#g.pick]}
+            return r[1], r[2]
         end
-        synth:on_event({kind = 'splash', x = 100, y = 100, speed = 300}, w:selected_creature())
-        synth:on_event({kind = 'spores', x = 100, y = 100}, w:selected_creature())
-        synth:chime(2, 400)
-        synth:nope(400)
-        for _ = 1, 30 do w:step(fixed_dt); synth:update(fixed_dt, w) end
-        love.audio.stop()
+        local function voice(genome, old) return Synth.voice({key = key, genome = genome}, old) end
+        local g = Genome.random(key, rng.sim)
+        local small, big = Genome.copy(g), Genome.copy(g)
+        small[SIZE[key]], big[SIZE[key]] = ends(SIZE[key])
+        check(results, voice(small).pitch > 1.6 * voice(big).pitch, 'audio: a big %s sounds no lower than a small one', key)
+        check(results, voice(Genome.young(big, 0)).pitch > voice(big).pitch, 'audio: a %s hatchling sounds no higher than it will grown', key)
+        check(results, voice(g, 1).pitch < voice(g).pitch, 'audio: a %s elder sounds no lower than it did', key)
+        local lo, hi = ends(GIVE[key])
+        local kinds = {}
+        for _, t in ipairs({0, 0.5, 1}) do
+            local v = Genome.copy(g)
+            v[GIVE[key]] = lo + (hi - lo) * t
+            kinds[voice(v).kind] = true
+        end
+        check(results, kinds[1] and kinds[2] and kinds[3], "audio: a %s's %s doesn't reach all three voices", key, GIVE[key])
+    end
+
+    local ok_audio, err = pcall(function()
+        -- Every event, played live and onto a tape
+        rng.seed(9)
+        local w = World.new(level_data, {wander = true, selected = 0})
+        for _, tape in ipairs({false, Tape.new()}) do
+            local synth = Synth.new(tape or nil)
+            local focus = w.creatures[1]
+            for i, c in ipairs(w.creatures) do
+                local o = w.creatures[i % #w.creatures + 1]
+                for _, kind in ipairs({'jump', 'land', 'step', 'hatched', 'moulted', 'dying', 'nibbled'}) do
+                    synth:on_event({kind = kind, who = c, x = 300, y = 300, vx = 100, vy = -400, impact = 500, near = true},
+                        w, focus)
+                end
+                synth:on_event({kind = 'courted', who = c, with = o, x = 300, y = 300}, w, focus)
+                synth:on_event({kind = 'laid', who = c, with = o, eggs = {{x = 300}, {x = 316}}, x = 300, y = 300}, w, focus)
+                synth:on_event({kind = 'returned', who = c, index = i, x = 300, y = 300}, w, focus)
+            end
+            synth:on_event({kind = 'pinch', x = 400, crumbs = 6}, w, focus)
+            synth:chime(400)
+            for _ = 1, 30 do w:step(fixed_dt); synth:update(fixed_dt, w, focus) end
+            love.audio.stop()
+        end
+
+        -- Two of each kind courting, onto a tape: a worm sings at the top of
+        -- each turn of its coil, a blob hums on each swell, a spider taps
+        rng.seed(9)
+        w = World.new(level_data, {wander = true, selected = 0})
+        local tape = Tape.new()
+        local synth = Synth.new(tape)
+        for _, key in ipairs(Genome.order) do
+            local a = w:first(key)
+            local b
+            for i, c in ipairs(w.creatures) do
+                if c.key == key and i ~= a then b = i end
+            end
+            w.minds[a].doing, w.minds[a].with, w.creatures[a].ardour = 'court', b, 1
+            w.minds[b].doing, w.minds[b].with, w.creatures[b].ardour = 'court', a, 1
+        end
+        for _ = 1, math.floor(6 / fixed_dt) do
+            w.time = w.time + fixed_dt -- (only the clock: the minds aren't asked)
+            synth:update(fixed_dt, w)
+        end
+        local heard = {}
+        for _, s in ipairs(tape.shots) do heard[s.data] = (heard[s.data] or 0) + 1 end
+        local D = synth.data
+        check(results, (heard[D.trill] or 0) >= 2 and (heard[D.hum] or 0) >= 6 and (heard[D.tap] or 0) >= 20,
+            'audio: courting pairs sang %d, hummed %d and tapped %d times in 6 s', heard[D.trill] or 0,
+            heard[D.hum] or 0, heard[D.tap] or 0)
+        local cues = tape:bounce({{title = 'courting', from = 0, to = 1}}, 'audio_test.wav', 0.2)
+        check(results, #cues == 1 and love.filesystem.getInfo('audio_test.wav'), 'audio: the tape bounced nothing')
+        love.filesystem.remove('audio_test.wav')
     end)
     check(results, ok_audio, 'audio: %s', tostring(err))
+
+    -- A jar heard is the same jar unheard: the same state, and the sim and
+    -- look streams where they'd be, after half a minute with a pinch in it
+    local function run(heard)
+        rng.seed(11)
+        local w = World.new(level_data, {wander = true, selected = 0})
+        local tape = Tape.new()
+        local synth = heard and Synth.new(tape)
+        if synth then w.events:on(function(ev) synth:on_event(ev, w) end) end
+        for s = 1, math.floor(30 / fixed_dt) do
+            if s == 120 then w:pinch(w.creatures[w:first('blob')]:anchor()) end
+            w:step(fixed_dt)
+            if synth then synth:update(fixed_dt, w) end
+        end
+        local pats = 0
+        for _, sh in ipairs(tape.shots) do pats = pats + (sh.data == synth.data.pat and 1 or 0) end
+        return statehash.of(w).total, rng.sim:getState(), rng.look:getState(), #tape.shots, pats
+    end
+    local h1, s1, l1 = run(false)
+    local ok_heard, h2, s2, l2, shots, pats = pcall(run, true)
+    check(results, ok_heard, 'audio: %s', tostring(h2))
+    if ok_heard then
+        check(results, h1 == h2 and s1 == s2 and l1 == l2, 'audio: a jar heard went another way than one unheard')
+        check(results, pats >= 3, 'audio: only %d crumbs were heard landing', pats)
+        log.info('selftest', 'audio        %d sounds in a heard half minute, %d of them crumbs landing; the same jar unheard',
+            shots, pats)
+    end
 end)
 
 function dev.tests()

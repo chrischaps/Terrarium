@@ -9,10 +9,12 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   right-click              drop a pinch of food into the jar there (a few a day)
+--   m                        hush the jar, or listen again (--mute opens it hushed)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
 --   love . --script scripts/lineup.lua   run a capture script: offscreen, frame-exact stills
+--   lovec . --headless --script scripts/listen.lua   a jar's scenes as a WAV, to hear with your eyes closed
 --   sh tests/ci.sh           what CI runs; test modes have no window (core/headless.lua)
 
 -- Same require style as Character, so ported files can require('LoveLibs.physics.verlet') unchanged
@@ -43,6 +45,7 @@ local Condensation = require('jar.condensation')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
+local Synth = require('core.synth')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history
@@ -53,6 +56,7 @@ local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
 local lantern = Lantern.new() -- you watch with it; the World never knows it's there
+local synth -- the jar heard through its glass (#28), only while you watch it live
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
 local scriptApi -- defined below love.load; forward-declared so load can see it
@@ -138,6 +142,12 @@ function love.load()
 
     world = openJar(args.seed or SEED, startHour, daySeconds)
     furnish()
+    if not (args.snap or args.script) then
+        -- it hears what the World says happened, after each step
+        synth = Synth.new()
+        synth:mute(args.mute)
+        world.events:on(function(ev) synth:on_event(ev, world, lantern:following(world)) end)
+    end
 
     if args.snap then
         for _ = 1, math.floor((args.snap.seconds or 1) / STEP) do step() end
@@ -209,6 +219,7 @@ function love.update(dt)
         accumulator = accumulator - STEP
     end
     lantern:update(dt, world)
+    if synth then synth:update(dt, world, lantern:following(world)) end
 
     -- A hand over anyone you could follow
     if love.mouse.isCursorSupported() then
@@ -489,7 +500,7 @@ function love.mousepressed(x, y, button)
     if not world or capture then return end
     local lx, ly = Tank.toLevel(x, y)
     if button == 1 then
-        lantern:pick(world, lx, ly)
+        if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
     elseif button == 2 and lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B then
         world:pinch(lx)
     end
@@ -497,4 +508,5 @@ end
 
 function love.keypressed(key)
     if key == "escape" then love.event.quit() end
+    if key == "m" and synth then synth:mute(not synth.muted) end
 end

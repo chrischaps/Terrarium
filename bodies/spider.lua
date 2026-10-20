@@ -82,6 +82,7 @@ end
 
 local RIDE = 12
 local TAP_BEAT = 0.42 -- Terrarium: seconds a courting tap takes (#22)
+Spider.TAP_BEAT = TAP_BEAT -- (each tap is heard, core/synth.lua, #28)
 local BONES = {14, 15, 11}
 local STEP_DIST = 13
 local STEP_TIME = 0.1
