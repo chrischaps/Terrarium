@@ -1,9 +1,9 @@
 -- From chrischaps/Character @ 925c35b (world/world.lua)
 -- World: everything that lives in the cave, stepped at a fixed rate.
 --
--- Terrarium: six creatures share the jar, two of each kind (the room's
--- residents). Each has a mind (mind.lua) whose needs and temperament choose
--- among grazing, wandering, following, courting and resting by the jar's
+-- Terrarium: six creatures share the jar, two of each of its cast's three
+-- kinds (#74), drawn from its seed, in the room's homes for them. Each has a
+-- mind (mind.lua) whose needs and temperament choose among grazing, wandering, following, courting and resting by the jar's
 -- hour, and a courting body is told its partner and their beat. In dev a
 -- selected one follows clicks instead. Each body gets
 -- the nav graph of its nav profile (its size bucket's); bodies with the same
@@ -40,17 +40,119 @@ local Skin = require('bodies.skin')
 local C = require('jar.config')
 local rng = require('core.rng')
 local log = require('core.log')
+local bit = require('bit')
 
 local World = {}
 World.__index = World
 
+-- (`grazes`: it feeds on the soil's moss, so a cast can't leave that unkept, #74)
 World.CREATURES = {
-    {key = 'worm',   class = require('bodies.worm')},
-    {key = 'blob',   class = require('bodies.blob')},
-    {key = 'spider', class = require('bodies.spider')},
+    {key = 'worm',   class = require('bodies.worm'),   grazes = true},
+    {key = 'blob',   class = require('bodies.blob'),   grazes = true},
+    {key = 'spider', class = require('bodies.spider'), grazes = true},
 }
-local CLASS = {}
-for _, def in ipairs(World.CREATURES) do CLASS[def.key] = def.class end
+local CLASS, GRAZES = {}, {}
+for _, def in ipairs(World.CREATURES) do CLASS[def.key], GRAZES[def.key] = def.class, def.grazes end
+
+-- Terrarium: a jar's cast (#74). The room has homes for a pair of every kind,
+-- and each jar is home to CAST of them, drawn from its seed. CAST is the
+-- six-resident jar M3 was tuned on, so CAPACITY, FLOOR and RESERVE still add
+-- up, and CLASSIC is that jar's cast. The draw is a hash of the seed and each
+-- kind's name, not a stream, so casting moves no stream: a jar whose cast is
+-- the classic one opens exactly as it did before there were casts.
+World.CAST = 3
+World.CLASSIC = {'worm', 'blob', 'spider'}
+
+-- a * b, wrapped to 32 bits without losing any (b below 2^32)
+local function mul32(a, b)
+    return bit.tobit(bit.band(a, 0xffff) * b + bit.lshift(bit.rshift(a, 16) * b, 16))
+end
+
+-- A 32-bit hash of a string: FNV-1a, as core/statehash.lua folds it, then
+-- MurmurHash3's finish, so the last few characters reach every bit
+local function hash(s)
+    local h = -2128831035
+    for i = 1, #s do h = mul32(bit.bxor(h, s:byte(i)), 16777619) end
+    h = mul32(bit.bxor(h, bit.rshift(h, 16)), 0x85ebca6b)
+    h = mul32(bit.bxor(h, bit.rshift(h, 13)), 0xc2b2ae35)
+    return bit.bxor(h, bit.rshift(h, 16))
+end
+
+-- The kinds a jar in `level_data` can hold: each with a body and a home, in Genome.order
+function World.kinds(level_data)
+    local homed, out = {}, {}
+    for _, r in ipairs(level_data.homes) do homed[r.key] = true end
+    for _, key in ipairs(Genome.order) do
+        if CLASS[key] and homed[key] then out[#out + 1] = key end
+    end
+    return out
+end
+
+-- `seed`'s cast of CAST kinds from `pool`, in pool order. Each kind draws a
+-- lot (a hash of the seed and its name) and the lowest lots are cast; if none
+-- of them is one that `grazes(key)`, the lowest grazer takes the last place.
+function World.draw_cast(seed, pool, grazes)
+    local lot = {}
+    for _, key in ipairs(pool) do lot[key] = hash(tostring(seed) .. ':' .. key) end
+    local order = {}
+    for i, key in ipairs(pool) do order[i] = key end
+    table.sort(order, function(a, b)
+        if lot[a] ~= lot[b] then return lot[a] < lot[b] end
+        return a < b
+    end)
+    local cast, fed = {}, false
+    for k = 1, math.min(World.CAST, #order) do
+        cast[order[k]] = true
+        fed = fed or grazes(order[k])
+    end
+    if not fed then
+        for k = World.CAST + 1, #order do
+            if grazes(order[k]) then
+                cast[order[World.CAST]], cast[order[k]] = nil, true
+                break
+            end
+        end
+    end
+    local out = {}
+    for _, key in ipairs(pool) do
+        if cast[key] then out[#out + 1] = key end
+    end
+    return out
+end
+
+-- The cast a jar from `seed` in `level_data` is home to
+function World.cast_of(level_data, seed)
+    return World.draw_cast(seed, World.kinds(level_data), function(key) return GRAZES[key] end)
+end
+
+-- `cast` (a list of kinds, in any order) in Genome.order, once each, or nil
+-- and why it can't be a cast in `level_data`
+function World.check_cast(level_data, cast)
+    local can, want, out = {}, {}, {}
+    for _, key in ipairs(World.kinds(level_data)) do can[key] = true end
+    for _, key in ipairs(cast) do
+        if not can[key] then
+            return nil, string.format('no %s can live in this jar (there are: %s)', tostring(key),
+                table.concat(World.kinds(level_data), ', '))
+        end
+        want[key] = true
+    end
+    for _, key in ipairs(Genome.order) do
+        if want[key] then out[#out + 1] = key end
+    end
+    if #out == 0 then return nil, 'a cast needs at least one kind' end
+    return out
+end
+
+-- The homes in `level_data` that `cast`'s pairs move into, in the room's order
+function World.residents(level_data, cast)
+    local in_cast, out = {}, {}
+    for _, key in ipairs(cast) do in_cast[key] = true end
+    for _, r in ipairs(level_data.homes) do
+        if in_cast[r.key] then out[#out + 1] = r end
+    end
+    return out
+end
 
 -- Tiny event bus: emit during a step, flush to listeners after it
 local Bus = {}
@@ -80,6 +182,13 @@ function World.new(level_data, opts)
     self.selected = opts.selected or 1 -- 0: nobody is guided and everyone wanders
     self.wander = opts.wander ~= false
     self.coarse = opts.coarse -- Terrarium: tokens, not bodies (#27)
+    -- Terrarium: who lives here (#74): opts.cast, or the jar seed's (opts.seed,
+    -- or the seed the streams were last seeded from)
+    self.cast = assert(World.check_cast(level_data, opts.cast or World.cast_of(level_data, opts.seed or rng.jar)))
+    local residents = World.residents(level_data, self.cast)
+    for _, r in ipairs(residents) do
+        assert(r.x and not r.under, 'world: no ' .. r.key .. ' can start on a wall or under a ledge yet')
+    end
     self.creatures, self.graphs, self.controllers = {}, {}, {}
     self.minds = {}
     self.graph_of = {} -- the first resident's graph, per kind
@@ -101,7 +210,7 @@ function World.new(level_data, opts)
         table.insert(given[g.plan], g)
     end
     self.genomes = {}
-    for i, r in ipairs(level_data.residents) do
+    for i, r in ipairs(residents) do
         local mine = given[r.key] and table.remove(given[r.key], 1)
         self.genomes[i] = Genome.clamp(mine or (r.genome and Genome.copy(r.genome)) or Genome.random(r.key, rng.sim))
     end
@@ -121,7 +230,7 @@ function World.new(level_data, opts)
     self.events:on(function(ev)
         if ev.kind == 'courted' then self:clutch(ev.who, ev.with) end
     end)
-    for i, r in ipairs(level_data.residents) do
+    for i, r in ipairs(residents) do
         local nav = CLASS[r.key].nav_profile(self.genomes[i])
         if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
         self:place(r.key, self.genomes[i], r.x, r.solid, r.name)
@@ -246,14 +355,16 @@ World.HELD = 1 -- jar days spared before it'll take any leap to reach its own ki
 -- Terrarium: the coarse step, in seconds (#27)
 World.COARSE = 1
 
--- Which kinds are scarce, into `self.scarce` and each mind's `scarce`
+-- Which kinds are scarce, into `self.scarce` and each mind's `scarce`. Only
+-- the cast's kinds are counted (#74), and any other that has been laid here:
+-- a kind the jar never held isn't scarce, and leaves no room for itself.
 function World:census()
     local n = {}
-    for key in pairs(CLASS) do n[key] = 0 end
+    for _, key in ipairs(self.cast) do n[key] = 0 end
     for i, c in ipairs(self.creatures) do
-        if not self.lives[i].dying then n[c.key] = n[c.key] + 1 end
+        if not self.lives[i].dying then n[c.key] = (n[c.key] or 0) + 1 end
     end
-    for _, egg in ipairs(self.eggs) do n[egg.key] = n[egg.key] + 1 end
+    for _, egg in ipairs(self.eggs) do n[egg.key] = (n[egg.key] or 0) + 1 end
     self.scarce = {}
     for key, k in pairs(n) do self.scarce[key] = k <= World.FLOOR or nil end
     for i, c in ipairs(self.creatures) do self.minds[i].scarce = self.scarce[c.key] end

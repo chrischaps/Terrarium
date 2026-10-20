@@ -6,7 +6,7 @@
 --   lovec . --script scripts/pinch.lua
 
 return {run = function(api)
-    local w = api.open(20261018, 'midday')
+    local w = api.open(20261018, 'midday', nil, nil, api.World.CLASSIC) -- (it has blobs, #74)
     api.step(5)
     local x = 960
     for i, c in ipairs(w.creatures) do

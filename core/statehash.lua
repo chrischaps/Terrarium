@@ -22,6 +22,8 @@ local SKIP = {
     skin = true, color_name = true, -- a body's colours (#15), read only by drawing
     marks = true, local_marks = true, mark_frame = true, glow_mesh = true, -- what it drew, for its glow
     bucket_label = true,       -- a nav profile's name in the log (#73)
+    cast = true,               -- the World's kinds (#74), an input like the seed: who it brought is hashed
+    homes = true,              -- where the room puts each kind's pair (#74): who moved in is hashed
 }
 
 local FNV_OFFSET = -2128831035 -- 2166136261 as a signed 32-bit int

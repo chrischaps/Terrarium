@@ -77,12 +77,14 @@ end
 -- rng.look. The replay check in dev.lua opens jars the same way (at midday,
 -- with a full-length day). The hour and day length are inputs like the seed:
 -- minds sleep and wake by them. `level` is the jar's room unless a capture
--- script brings its own.
-local function openJar(seed, hour, day, level)
+-- script brings its own. Who lives in it is the seed's cast (#74), or `cast`,
+-- or --cast's.
+local function openJar(seed, hour, day, level, cast)
     rng.seed(seed)
     Scape.init(rng.scape)
     Glass.init(rng.scape)
-    local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day, genomes = args.genomes })
+    local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day,
+        genomes = args.genomes, cast = cast or args.cast, seed = seed })
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
@@ -99,8 +101,9 @@ local function openJar(seed, hour, day, level)
     end)
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
+    local homes = World.residents(level or room, w.cast)
     for k = #w.creatures + 1, args.crowd or 0 do
-        local r = room.residents[(k - 1) % #room.residents + 1]
+        local r = homes[(k - 1) % #homes + 1]
         w:lay(Genome.random(r.key, rng.sim), r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
     end
     return w
@@ -116,8 +119,18 @@ end
 
 function love.load()
     rng.seed(args.seed or SEED)
+    if args.cast then
+        -- --cast worm,blob,spider: these kinds move in, whatever the seed's cast (#74)
+        local cast, err = World.check_cast(room, args.cast)
+        if not cast then
+            print('[cast] ' .. err)
+            love.event.quit(2)
+            return
+        end
+        args.cast = cast
+    end
     if args.selftest then
-        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day)
+        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast)
         if err then print('[selftest] ' .. err) end
         love.event.quit(ok and 0 or (err and 2 or 1))
         return
@@ -368,7 +381,7 @@ end
 -- only moves when the script steps it and frames render offscreen, so a
 -- capture is exact: the same script gives the same jar on any machine.
 function scriptApi()
-    local api = { STEP = STEP, Genome = Genome, room = room, args = args }
+    local api = { STEP = STEP, Genome = Genome, World = World, room = room, args = args }
     local canvases = {}
     local function canvas(name, w, h, hdr)
         local key = name .. w .. 'x' .. h
@@ -378,11 +391,12 @@ function scriptApi()
 
     -- Open a jar from `seed` at `hour` (a number or a preset name such as
     -- 'midday'), in the jar's room or in `level`. Its composition is the seed's.
-    -- Terrarium: `day` compresses its day to that many seconds, as --day does.
-    function api.open(seed, hour, level, day)
+    -- Terrarium: `day` compresses its day to that many seconds, as --day does,
+    -- and `cast` is who lives there (#74), if not the seed's.
+    function api.open(seed, hour, level, day, cast)
         startHour = DayCycle.parseHour(hour) or DayCycle.presets.midday
         daySeconds = day or C.DAY_SECONDS
-        world = openJar(seed, startHour, daySeconds, level)
+        world = openJar(seed, startHour, daySeconds, level, cast)
         furnish()
         accumulator = 0
         return world

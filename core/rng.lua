@@ -11,6 +11,7 @@ local rng = {}
 
 function rng.seed(seed)
     seed = seed or 7
+    rng.jar = seed -- Terrarium: the jar's cast is drawn from it by a hash, not a stream (#74)
     rng.sim = love.math.newRandomGenerator(seed)
     rng.look = love.math.newRandomGenerator(seed * 31 + 11)
     rng.scape = love.math.newRandomGenerator(seed * 131 + 7) -- Terrarium: the scape seed

@@ -27,6 +27,8 @@
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to the first of a plan
 --   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
+--   lovec . --cast <kind>,<kind>,...      Terrarium: these kinds live in the jar, not the
+--                                         seed's cast (the self-tests hold the classic one)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
 --                                         this genome (repeat for the second)
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
@@ -80,6 +82,11 @@ function dev.parse(args)
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
         elseif a == '--mute' then o.mute = true
+        -- Terrarium: who lives in the jar, e.g. --cast worm,snail,moth (#74)
+        elseif a == '--cast' then
+            o.cast = {}
+            for key in (args[i + 1] or ''):gmatch('[^,]+') do o.cast[#o.cast + 1] = key end
+            i = i + 1
         -- Terrarium: a body to look at, e.g. --genome "worm segments=24 stiffness=0.9"
         elseif a == '--genome' then
             o.genomes = o.genomes or {}
@@ -123,6 +130,9 @@ end
 -- Each takes the jar's parts in `j` and records into `results`.
 local rng = require('core.rng')
 local TESTS = {}
+-- (every test's jar holds the classic cast, the worms, blobs and spiders M3 was
+-- tuned on, whatever its seed would draw; `day` and `cast` take a seed's, #74)
+local CLASSIC = require('jar.world').CLASSIC
 local function test(name, fn) TESTS[#TESTS + 1] = {name = name, fn = fn} end
 
 -- Terrarium: a plan's body module (#73). The tests ask it what they need to
@@ -160,10 +170,10 @@ local function each(keys, fmt, of)
     return table.concat(out, ', ')
 end
 
--- The first resident of each plan in the room, by plan
+-- The first home of each plan in the room, by plan
 local function homes(level_data)
     local out = {}
-    for _, r in ipairs(level_data.residents) do out[r.key] = out[r.key] or r end
+    for _, r in ipairs(level_data.homes) do out[r.key] = out[r.key] or r end
     return out
 end
 
@@ -173,7 +183,7 @@ test('graphs', function(j, results)
     local Pathfinder = require('nav.pathfinder')
     local ballistics = require('nav.ballistics')
     rng.seed(1)
-    local world = World.new(level_data, {wander = false})
+    local world = World.new(level_data, {cast = CLASSIC, wander = false})
     local checked = {}
     for i, c in ipairs(world.creatures) do -- Terrarium: every graph, once (a blob's is its size's)
         local g = world.graphs[i]
@@ -237,7 +247,7 @@ test('trips', function(j, results)
     local fails_by = {}
     for k, def in ipairs(World.CREATURES) do
         rng.seed(100 + k)
-        world = World.new(level_data, {wander = false})
+        world = World.new(level_data, {cast = CLASSIC, wander = false})
         local i = world:first(def.key) -- Terrarium: the first of each kind
         world:select(i)
         local c, ctrl, g = world.creatures[i], world.controllers[i], world.graphs[i]
@@ -292,7 +302,7 @@ test('framerate', function(j, results)
     for p, key in ipairs(Genome.order) do goals[key] = GOALS[(p - 1) % #GOALS + 1] end
     local function run(frame_dt)
         rng.seed(42)
-        local w = World.new(level_data, {wander = true})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true})
         for i, c in ipairs(w.creatures) do
             w:select(i)
             w:click(goals[c.key][1], goals[c.key][2])
@@ -327,7 +337,7 @@ test('lantern', function(j, results)
     local Lantern = require('jar.lantern')
     local function watched(follow)
         rng.seed(42)
-        local w = World.new(level_data, {wander = true, selected = 0})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
         local lantern = Lantern.new()
         for s = 1, 2400 do
             if follow and s % 600 == 1 then
@@ -357,15 +367,19 @@ end)
 -- through its own day, rests through its own night and lies still once it
 -- gets there, and is up and about again by noon, or (a night owl, #21) asleep
 -- at noon both times, having slept twice. Nobody leaves the jar, comes apart
--- into NaNs or ends up sunk in the scenery.
+-- into NaNs or ends up sunk in the scenery. A seed given by --seed brings
+-- its own cast (#74), unless --cast says who.
 local DAY = 900
 test('day', function(j, results)
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
     rng.seed(j.seed or 20261018)
-    local w = World.new(level_data, {wander = true, selected = 0, hour = 13, day = DAY})
+    local cast = j.cast or (not j.seed and CLASSIC) or nil
+    local w = World.new(level_data, {cast = cast, wander = true, selected = 0, hour = 13, day = DAY})
+    log.info('selftest', 'day   seed %d is home to %s', j.seed or 20261018, table.concat(w.cast, ', '))
     local level = w.level
     local owl = {} -- asleep at noon
     for i, m in ipairs(w.minds) do owl[i] = not m:awake(w:hour()) end
+    local residents = #w.creatures -- (a clutch can hatch by the day's end; it's only judged on its first day)
     local lost, still_for, moved_at_rest = {}, {}, {}
     local last = {}
     local steps = math.floor(DAY / fixed_dt + 0.5)
@@ -388,7 +402,8 @@ test('day', function(j, results)
             end
         end
     end
-    for i, c in ipairs(w.creatures) do
+    for i = 1, residents do
+        local c = w.creatures[i]
         local m, who = w.minds[i], string.format('%s the %s', c.name, c.key)
         local sunk, n = 0, 0
         for _, p in ipairs(c:interp_points()) do
@@ -423,7 +438,7 @@ test('moss', function(j, results)
     local DayCycle = require('jar.daycycle')
     local Moss = require('jar.moss')
     rng.seed(j.seed or 20261018)
-    local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.morning})
+    local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.morning})
     local m = w.moss
     check(results, m.count > 300, 'moss: only %d cells over the mossy tops', m.count)
     for _ = 1, math.floor(MOSS_WATCH / fixed_dt + 0.5) do w:step(fixed_dt) end
@@ -484,7 +499,7 @@ test('temperament', function(j, results)
     -- One minute of the jar at `hour`, with `genomes`, calling `watch(w)` every half second
     local function minute(seed, hour, genomes, watch)
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, hour = hour, genomes = genomes})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = hour, genomes = genomes})
         for s = 1, math.floor(60 / fixed_dt + 0.5) do
             w:step(fixed_dt)
             if s % 60 == 0 then watch(w) end
@@ -576,7 +591,7 @@ test('court', function(j, results)
     local by_plan = {} -- every plan any of the jars has, and its courtships
     for _, seed in ipairs(SEEDS) do
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         for _, c in ipairs(w.creatures) do by_plan[c.key] = by_plan[c.key] or 0 end
         local courts, apart, since = 0, 0, {}
         w.events:on(function(ev)
@@ -646,7 +661,7 @@ test('eggs', function(j, results)
     local mixed, raised = 0, 0
     for _, seed in ipairs(SEEDS) do
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         local clutch, hatched, laid_at = nil, {}, nil
         local moults, slept, settle = {}, {}, {}
         w.events:on(function(ev)
@@ -755,7 +770,7 @@ test('eggs', function(j, results)
         local class, r = class_of(World, key), home[key]
         if not r then goto next_plan end -- (no home for it in this room)
         rng.seed(23)
-        local w = World.new(level_data, {wander = false, selected = 0, hour = DayCycle.presets.night, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = false, selected = 0, hour = DayCycle.presets.night, day = DAY})
         local g = class.heaviest(Genome.random(key, rng.sim))
         local egg = w:lay(g, r.x + 30, r.solid, nil, {young = true})
         while #w.eggs > 0 do w:step(dt) end
@@ -819,7 +834,7 @@ test('death', function(j, results)
     -- hash at the end of the step the first one went back to the moss.
     local function run(seed, upto)
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         if not upto then
             for _, life in ipairs(w.lives) do
                 check(results, life.span >= World.LIFE[1] * DAY and life.span <= World.LIFE[2] * DAY
@@ -980,7 +995,7 @@ test('floor', function(j, results)
 
     for _, seed in ipairs(SEEDS) do
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
         KEYS = kinds(w)
         for _, life in ipairs(w.lives) do life.span, life.born = DAY, -0.99 * DAY end
         local residents = {}
@@ -1020,7 +1035,7 @@ test('floor', function(j, results)
     -- An ordinary jar for a few days
     local seed = SEEDS[1]
     rng.seed(seed)
-    local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+    local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
     KEYS = kinds(w)
     local most, fewest, deaths, births = 0, math.huge, 0, 0
     w.events:on(function(ev)
@@ -1076,7 +1091,7 @@ test('month', function(j, results)
     local KEYS -- (the kinds of the jar being watched)
     local function open(seed, days)
         rng.seed(seed)
-        return World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = days or day, coarse = true})
+        return World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = days or day, coarse = true})
     end
 
     -- Each kind, counting its eggs and not its dying, and all of them
@@ -1220,7 +1235,7 @@ test('food', function(j, results)
 
     local function run(seed)
         rng.seed(seed)
-        local w = World.new(level_data, {wander = true, selected = 0, day = DAY})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, day = DAY})
         seconds(w, 5)
         -- Beside the first one up and about on the soil
         local x
@@ -1300,7 +1315,7 @@ test('food', function(j, results)
 
     -- A pinch is history: the same pinch at the same moment is the same jar
     rng.seed(first.seed)
-    local w = World.new(level_data, {wander = true, selected = 0, day = DAY})
+    local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, day = DAY})
     seconds(w, 5)
     w:pinch(first.x)
     seconds(w, 90)
@@ -1327,6 +1342,130 @@ end)
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
+end)
+
+-- Terrarium: 3d'. Casts (#74). A seed's cast is the same every time it's
+-- drawn: CAST kinds that each have a body and a home, one of them a grazer
+-- of the soil's moss. Drawn from six kinds, the seeds spread over the casts
+-- and every kind gets cast. A jar holds two of each of its cast and nobody
+-- else, and its census neither counts nor keeps room for a kind it never
+-- held. A cast given in any order opens the same jar as that cast drawn,
+-- so --cast worm,blob,spider opens the classic jar. (That a cast hashes the
+-- same windowed as headless is tests/ci.sh's window check: the cast is drawn
+-- from no stream, before anything is put on screen.)
+local CAST_SEEDS = 400
+test('cast', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local statehash = require('core.statehash')
+    local kinds = World.kinds(level_data)
+    local can, grazes = {}, {}
+    for _, key in ipairs(kinds) do can[key] = true end
+    for _, def in ipairs(World.CREATURES) do grazes[def.key] = def.grazes end
+
+    -- The right size, from `pool`, none twice, and one that's `fed`
+    local function valid(cast, pool, size, fed)
+        local seen, any_fed = {}, false
+        for _, key in ipairs(cast) do
+            if seen[key] or not pool[key] then return false end
+            seen[key] = true
+            any_fed = any_fed or fed(key)
+        end
+        return #cast == math.min(World.CAST, size) and any_fed
+    end
+    local bad, unstable = 0, 0
+    local seeds = {j.seed or 20261018}
+    for s = 1, CAST_SEEDS do seeds[#seeds + 1] = s end
+    for _, seed in ipairs(seeds) do
+        local a, b = World.cast_of(level_data, seed), World.cast_of(level_data, seed)
+        if table.concat(a, ',') ~= table.concat(b, ',') then unstable = unstable + 1 end
+        if not valid(a, can, #kinds, function(key) return grazes[key] end) then bad = bad + 1 end
+    end
+    check(results, unstable == 0, 'cast: %d seeds drew a different cast the second time', unstable)
+    check(results, bad == 0, 'cast: %d seeds drew a cast that is the wrong size, repeats a kind or has no grazer', bad)
+
+    -- Six kinds, two of them grazers: how the draw spreads once there are
+    -- more kinds than places
+    local six = {'a', 'b', 'c', 'd', 'e', 'f'}
+    local in_six = {}
+    for _, key in ipairs(six) do in_six[key] = true end
+    local function fed(key) return key == 'a' or key == 'b' end
+    local casts, cast_count, bad6, starved, times = {}, 0, 0, 0, {}
+    for seed = 1, CAST_SEEDS do
+        local cast = World.draw_cast(seed, six, fed)
+        if not valid(cast, in_six, #six, fed) then bad6 = bad6 + 1 end
+        local name = table.concat(cast)
+        if not casts[name] then casts[name], cast_count = true, cast_count + 1 end
+        for _, key in ipairs(cast) do times[key] = (times[key] or 0) + 1 end
+    end
+    for _, key in ipairs(six) do
+        if (times[key] or 0) < CAST_SEEDS / 10 then starved = starved + 1 end
+    end
+    -- (of the 20 casts of three from six, the 4 with neither grazer can't be drawn)
+    check(results, bad6 == 0, 'cast: %d six-kind draws were the wrong size, repeated a kind or had no grazer', bad6)
+    check(results, cast_count >= 14, 'cast: %d seeds drew only %d different casts of six kinds', CAST_SEEDS, cast_count)
+    check(results, starved == 0, 'cast: %d of six kinds were cast in under a tenth of the jars', starved)
+    log.info('selftest', 'cast  %d seeds, six kinds: %d casts, cast %s times', CAST_SEEDS, cast_count,
+        each(six, '%s %d', function(key) return times[key] or 0 end))
+
+    -- A jar holds two of each of its cast, and nobody else
+    local seed = j.seed or 20261018
+    local drawn = World.cast_of(level_data, seed)
+    rng.seed(seed)
+    local w = World.new(level_data, {wander = false, selected = 0})
+    check(results, table.concat(w.cast, ',') == table.concat(drawn, ','), 'cast: seed %d opened with %s, not its cast %s',
+        seed, table.concat(w.cast, ','), table.concat(drawn, ','))
+    local count = {}
+    for _, c in ipairs(w.creatures) do count[c.key] = (count[c.key] or 0) + 1 end
+    local held = 0
+    for _, key in ipairs(w.cast) do held = held + (count[key] == 2 and 2 or 0) end
+    check(results, held == #w.creatures and held == 2 * #w.cast, 'cast: seed %d holds %s, not two each of %s',
+        seed, each(kinds, '%s %d', function(key) return count[key] or 0 end), table.concat(w.cast, ', '))
+    log.info('selftest', 'cast  seed %d is home to %s', seed, table.concat(w.cast, ', '))
+
+    -- A jar of two kinds: the third is neither scarce nor kept room for
+    if #kinds >= 3 then
+        rng.seed(seed)
+        local two = {kinds[1], kinds[2]}
+        local w2 = World.new(level_data, {cast = two, wander = false, selected = 0})
+        local strays = {}
+        for key in pairs(w2.scarce) do
+            if key ~= two[1] and key ~= two[2] then strays[#strays + 1] = key end
+        end
+        table.sort(strays)
+        check(results, #strays == 0, 'cast: a jar of %s counts %s as scarce', table.concat(two, ' and '),
+            table.concat(strays, ', '))
+        -- (the first kind has eggs enough that it isn't scarce and the jar is
+        -- nearly full: its clutches keep RESERVE for the second kind, which is
+        -- down to two, and none for the absent one)
+        local a, partner = w2.creatures[1], w2.creatures[2]
+        local waiting = World.CAPACITY - #w2.creatures - World.RESERVE - 2
+        for _ = 1, waiting do w2.eggs[#w2.eggs + 1] = {key = a.key, navs = {}, due = math.huge} end
+        local most = 0
+        for _ = 1, 20 do
+            local eggs = w2:clutch(a, partner)
+            most = math.max(most, #eggs)
+            for k = #w2.eggs, waiting + 1, -1 do w2.eggs[k] = nil end
+        end
+        check(results, most == 2, 'cast: a nearly full jar of %s lays clutches of up to %d, not 2',
+            table.concat(two, ' and '), most)
+    end
+
+    -- The cast given, in any order, opens the jar its draw does
+    local function hash_of(cast)
+        rng.seed(seed)
+        local jar = World.new(level_data, {cast = cast, wander = true, selected = 0, hour = 13, day = DAY})
+        for _ = 1, math.floor(60 / fixed_dt + 0.5) do jar:step(fixed_dt) end
+        return statehash.of(jar).total
+    end
+    local backwards = {}
+    for k = #drawn, 1, -1 do backwards[#backwards + 1] = drawn[k] end
+    local h_drawn, h_given, h_back = hash_of(nil), hash_of(drawn), hash_of(backwards)
+    check(results, h_drawn == h_given and h_given == h_back, 'cast: seed %d drawn %s, given %s, given backwards %s',
+        seed, h_drawn, h_given, h_back)
+    log.info('selftest', 'cast  seed %d drawn, given, and given backwards all hash %s', seed, h_drawn)
+
+    local none, err = World.check_cast(level_data, {'unicorn'})
+    check(results, not none and err, 'cast: a jar took in a unicorn')
 end)
 
 -- Terrarium: 3e. Genomes (#10). Random ones come back in range and survive a
@@ -1535,7 +1674,7 @@ test('colour', function(j, results)
             genomes[#genomes + 1] = g
         end
         rng.seed(15)
-        local w = j.World.new(j.level_data, {wander = false, selected = 0, genomes = genomes})
+        local w = j.World.new(j.level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = genomes})
         for _ = 1, 60 do w:step(j.fixed_dt) end
         local before = statehash.of(w).total
         local ctx = {light_dir = w.light_dir, light = {glow = 1}}
@@ -1556,7 +1695,7 @@ test('worm', function(j, results)
     local SEG_LEN = 8.5
     local function worm(genome)
         rng.seed(12)
-        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local w = World.new(level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = {genome}})
         local i = w:first('worm')
         return w, i, w.creatures[i]
     end
@@ -1636,7 +1775,7 @@ test('blob', function(j, results)
     local Pathfinder = require('nav.pathfinder')
     local function blob(genome)
         rng.seed(13)
-        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local w = World.new(level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = {genome}})
         local i = w:first('blob')
         return w, i, w.creatures[i]
     end
@@ -1762,7 +1901,7 @@ test('spider', function(j, results)
     local Spider = require('bodies.spider')
     local function spider(genome)
         rng.seed(14)
-        local w = World.new(level_data, {wander = false, selected = 0, genomes = {genome}})
+        local w = World.new(level_data, {cast = CLASSIC, wander = false, selected = 0, genomes = {genome}})
         local i = w:first('spider')
         return w, i, w.creatures[i]
     end
@@ -1972,7 +2111,7 @@ test('hatch', function(j, results)
     end
     local function clutch()
         rng.seed(16)
-        local w = World.new(level_data, {wander = true, selected = 0})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
         for k, b in ipairs(laid) do
             local g = Genome.random(b.key, rng.sim)
             g[class_of(World, b.key).BUCKET_GENE] = b.value
@@ -2041,9 +2180,10 @@ test('crowd', function(j, results)
     local Genome = require('genome')
     local function crowd()
         rng.seed(18)
-        local w = World.new(level_data, {wander = true, selected = 0})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
+        local homes = World.residents(level_data, w.cast)
         for k = #w.creatures + 1, CROWD do
-            local r = level_data.residents[(k - 1) % #level_data.residents + 1]
+            local r = homes[(k - 1) % #homes + 1]
             local g = class_of(World, r.key).heaviest(Genome.random(r.key, rng.sim))
             w:lay(g, r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
         end
@@ -2108,10 +2248,10 @@ test('ranges', function(j, results)
     local function tour(genome, top)
         local class = class_of(World, genome.plan)
         local r = home[genome.plan]
-        local solo = setmetatable({residents = {{key = r.key, name = r.name, solid = r.solid, x = r.x, genome = genome}}},
+        local solo = setmetatable({homes = {{key = r.key, name = r.name, solid = r.solid, x = r.x, genome = genome}}},
             {__index = level_data})
         rng.seed(17)
-        local w = World.new(solo, {wander = false, selected = 1})
+        local w = World.new(solo, {wander = false, selected = 1, cast = {genome.plan}})
         local c, ctrl, g = w.creatures[1], w.controllers[1], w.graphs[1]
         local stops = {{top.x + top.w / 2, top}, {shelf.x + shelf.w / 2, shelf}, {r.x, w.level.by_id[r.solid]}}
         local m = {sunk = 0, faults = {}}
@@ -2238,7 +2378,7 @@ test('audio', function(j, results)
     local ok_audio, err = pcall(function()
         -- Every event, played live and onto a tape
         rng.seed(9)
-        local w = World.new(level_data, {wander = true, selected = 0})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
         for _, tape in ipairs({false, Tape.new()}) do
             local synth = Synth.new(tape or nil)
             local focus = w.creatures[1]
@@ -2263,7 +2403,7 @@ test('audio', function(j, results)
         -- a blob hums on each swell, a spider taps): as many times as its
         -- beat turns over in 6 s, and at least twice
         rng.seed(9)
-        w = World.new(level_data, {wander = true, selected = 0})
+        w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
         local tape = Tape.new()
         local synth = Synth.new(tape)
         local pairs_of = {} -- plan -> its two, by index
@@ -2311,7 +2451,7 @@ test('audio', function(j, results)
     -- look streams where they'd be, after half a minute with a pinch in it
     local function run(heard)
         rng.seed(11)
-        local w = World.new(level_data, {wander = true, selected = 0})
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
         local tape = Tape.new()
         local synth = heard and Synth.new(tape)
         if synth then w.events:on(function(ev) synth:on_event(ev, w) end) end
@@ -2344,9 +2484,11 @@ end
 -- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
 -- Returns true when every check passed, or nil and a message for a name it
 -- doesn't know.
-function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day)
-    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_jar, step = step, seed = seed,
-        day = day}
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day, cast)
+    -- (the jars it opens the way the game does hold the classic cast too)
+    local function open_classic(s, hour, d, level) return open_jar(s, hour, d, level, CLASSIC) end
+    local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_classic, step = step, seed = seed,
+        day = day, cast = cast}
     -- Terrarium: the names in a comma list, or nil and a message for one it doesn't know
     local function names(list)
         local out = {}
@@ -2391,6 +2533,7 @@ function dev.replay(open_jar, seed, seconds, fixed_dt, step)
         local w = open_jar(seed)
         for _ = 1, steps do step(w) end
         local h = statehash.of(w, Plants.all())
+        log.info('dev', 'replay  seed %d  cast %s', seed, table.concat(w.cast, ','))
         log.info('dev', 'replay  seed %d  %d steps (%.0fs of jar)  hash %s  in %.1fs', seed, steps, seconds, h.total,
             love.timer.getTime() - t0)
         return h
@@ -2410,7 +2553,7 @@ end
 
 -- Print every node on one solid with its edges, for a creature's graph
 function dev.navdump(World, level_data, who, solid_id, genomes)
-    local world = World.new(level_data, {wander = false, genomes = genomes})
+    local world = World.new(level_data, {cast = CLASSIC, wander = false, genomes = genomes, cast = World.kinds(level_data)})
     local g = world.graph_of[who]
     if not g then return end
     for _, n in ipairs(g.nodes) do
