@@ -14,6 +14,12 @@
 -- The bodies read it from Mind:courting, and the beat is the jar's clock, so a
 -- pair keeps time. Each courts at most once between one sleep and the next.
 --
+-- A pinch of food (#25, jar/food.lua) is a treat. Crumbs that land within
+-- notice of one that's up and about, and not courting or on its way to bed,
+-- bring it over to nibble them, from the moss it's grazing or the one it's
+-- following. A bold one notices them from farther off. A crumb is a small
+-- mouthful beside the moss, and the jar keeps only a few pinches a day.
+--
 -- Its temperament is three genes, and they change when and where it does
 -- those things, never what it can do:
 --   boldness     how far from home it wanders, and how big a leap it will take
@@ -69,27 +75,37 @@ local REACH = 30              -- seconds it gives the walk over
 local BESIDE = 90             -- this near on arrival, they court
 local FREE = {idle = true, wander = true, follow = true} -- what a partner leaves off to court
 
+-- Treats
+local NOTICE = {240, 560}     -- how far off it notices crumbs, timid to bold
+local TREAT = 0.3             -- hunger a crumb takes away
+local NIBBLE = {1.5, 3}       -- seconds it takes over one
+local AT = 30                 -- a crumb this much farther than its mouth from a place can't be reached from it
+local CROWD = 120             -- a crumb another is already after counts this much farther
+local CURIOUS = {idle = true, wander = true, follow = true, to_graze = true, graze = true} -- what it leaves off for one
+
 local function lerp(r, t) return r[1] + (r[2] - r[1]) * t end
 
 -- A mind for a body grown from `genome` (any gene it lacks reads as the middle)
 function Mind.new(genome)
     genome = genome or {}
     local self = setmetatable({
-        doing = 'idle',          -- idle, wander, follow, to_graze, graze, to_rest, rest, to_court, await, court
+        doing = 'idle',          -- idle, wander, follow, to_graze, graze, to_rest, rest, to_court, await, court, to_treat, nibble
         timer = rng.range(rng.sim, 2, 6),
         hunger = rng.range(rng.sim, 0, 0.6),
         late = rng.range(rng.sim, 0, LATE),
         met = {},                -- creature index -> times they've met
         near = {},               -- creature index -> true while they're together
         wooed = false,           -- it has courted since it last slept
+        passed = {},             -- crumb id -> true, for crumbs it can't get to
         -- (the World sets `last` when its time has come, and `dying` as it fades, #24)
-        wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, -- what it's done, for the self-tests
+        wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, treats = 0, -- what it's done, for the self-tests
     }, Mind)
     self.boldness = genome.boldness or 0.5
     self.sociability = genome.sociability or 0.5
     self.chronotype = genome.chronotype or 0.5
     self.range = lerp(RANGE, self.boldness)
     self.dare = lerp(DARE, self.boldness)
+    self.notice = lerp(NOTICE, self.boldness)
     self.shift = lerp(SHIFT, self.chronotype ^ 3) + self.late
     return self
 end
@@ -388,6 +404,77 @@ function Mind:courting(world, me)
     return {x = x, y = y, t = world.time - self.since, beat = world.time, side = me < self.with and 1 or -1}
 end
 
+-- Crumbs it might go for: each one down within notice that it hasn't given up
+-- on, nearest first, counting those another is already after as farther off
+local function crumbs(world, me, self)
+    local x, y = world.creatures[me]:anchor()
+    local food = world.food
+    for id in pairs(self.passed) do
+        if not food:get(id) then self.passed[id] = nil end
+    end
+    local out = {}
+    for _, f in ipairs(food.crumbs) do
+        if f.down and not self.passed[f.id] then
+            local d = math.sqrt((f.x - x) ^ 2 + (f.y - y) ^ 2)
+            if d <= self.notice then
+                for j, m in ipairs(world.minds) do
+                    if j ~= me and m.treat == f.id then d = d + CROWD end
+                end
+                out[#out + 1] = {f = f, d = d}
+            end
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.d ~= b.d then return a.d < b.d end
+        return a.f.id < b.f.id
+    end)
+    return out
+end
+
+-- Where on `graph` to stand to eat crumb `f`: a place on the surface it lies
+-- on, its own half-width away (the gap it keeps to court, #22) so its mouth
+-- is at the crumb, on the side it comes from, and not where another is going
+local function at_crumb(graph, world, me, f)
+    local c = world.creatures[me]
+    local x, mouth = c:anchor(), c.court_gap
+    local reach = mouth + AT
+    local taken = {}
+    for j, ctrl in ipairs(world.controllers) do
+        if j ~= me and ctrl.goal then taken[#taken + 1] = ctrl.goal end
+    end
+    local best, best_d
+    for _, n in ipairs(graph.nodes) do
+        local dx, dy = n.x - f.x, n.y - f.y
+        if n.solid == f.solid and n.ny < -0.5 and dx * dx + dy * dy <= reach * reach then
+            local d = math.abs(math.sqrt(dx * dx + dy * dy) - mouth)
+            if dx * (x - f.x) < 0 then d = d + mouth end
+            for _, g in ipairs(taken) do
+                if (g.x - n.x) ^ 2 + (g.y - n.y) ^ 2 < mouth * mouth then d = d + 4 * reach end
+            end
+            if not best_d or d < best_d then best, best_d = n, d end
+        end
+    end
+    return best
+end
+
+-- A crumb has landed near: leave off what it's doing and go over to it, if
+-- there's one it can get to. A crumb it can't reach it gives up on.
+function Mind:tempted(ctrl, graph, world, me)
+    local food = world.food
+    if not food or #food.crumbs == 0 then return false end
+    for _, o in ipairs(crumbs(world, me, self)) do
+        local f = o.f
+        local n = at_crumb(graph, world, me, f)
+        if n and ctrl:go_to(n, self:daring()) then
+            self.with, self.treat = nil, f.id
+            self:set('to_treat')
+            return true
+        end
+        self.passed[f.id] = true
+    end
+    return false
+end
+
 -- One fixed step for creature `me` of `world`, at the jar's `hour`
 function Mind:update(dt, hour, world, me)
     local c, ctrl, graph, moss = world.creatures[me], world.controllers[me], world.graphs[me], world.moss
@@ -395,7 +482,7 @@ function Mind:update(dt, hour, world, me)
     local arrived = not ctrl:has_path()
 
     if not self:awake(hour) then
-        self.with, self.lead = nil, nil
+        self.with, self.lead, self.treat = nil, nil, nil
         self.wooed = false
         if doing == 'rest' then return end
         if doing == 'to_rest' then
@@ -403,7 +490,7 @@ function Mind:update(dt, hour, world, me)
                 self:set('rest')
                 self.nights = self.nights + 1
             end
-        elseif arrived or doing == 'follow' or doing == 'to_court' then
+        elseif arrived or doing == 'follow' or doing == 'to_court' or doing == 'to_treat' then
             -- Finish whatever trip it's on, then go to bed (or sleep where it is)
             local beds = self:choose(self:near_home(rest_spots(graph, c.profile.climbs, self.last), c.home), others(world, me, true))
             self:set(self:head(ctrl, beds, true) and 'to_rest' or 'rest')
@@ -413,6 +500,7 @@ function Mind:update(dt, hour, world, me)
     end
 
     self.hunger = self.hunger + dt / HUNGRY_AFTER
+    if CURIOUS[doing] and self:tempted(ctrl, graph, world, me) then return end
     if doing == 'rest' or doing == 'to_rest' then
         if arrived then self:set('idle', rng.range(rng.sim, 1, 4)) end
     elseif doing == 'wander' then
@@ -433,6 +521,26 @@ function Mind:update(dt, hour, world, me)
         end
     elseif doing == 'to_court' or doing == 'await' or doing == 'court' then
         self:woo(dt, world, me, arrived)
+    elseif doing == 'to_treat' or doing == 'nibble' then
+        -- Over to the crumb and nibble it, unless another gets there first
+        local f = world.food:get(self.treat)
+        if not f then
+            ctrl:clear()
+            self.treat = nil
+            self:set('idle', rng.range(rng.sim, 1, 3))
+        elseif doing == 'to_treat' then
+            if arrived then self:set('nibble', rng.range(rng.sim, NIBBLE[1], NIBBLE[2])) end
+        else
+            self.timer = self.timer - dt
+            if self.timer <= 0 then
+                world.food:eat(f.id)
+                self.hunger = math.max(0, self.hunger - TREAT)
+                self.treats, self.treat = self.treats + 1, nil
+                local x, y = c:anchor()
+                world.events:emit('nibbled', {who = c, x = x, y = y})
+                self:set('idle', rng.range(rng.sim, 1, 3))
+            end
+        end
     elseif doing == 'to_graze' then
         if arrived then
             self:set('graze', rng.range(rng.sim, GRAZE[1], GRAZE[2]))
@@ -461,13 +569,15 @@ function Mind:update(dt, hour, world, me)
     end
 end
 
--- Grazing heads look down at the moss, a follower watches who it follows, and
--- a courting one its partner
+-- Grazing heads look down at the moss, a nibbling one at its crumb, a
+-- follower watches who it follows, and a courting one its partner
 function Mind:look(c, world)
     if self.doing == 'graze' then
         local x, y = c:anchor()
         return {x = x, y = y + 14}
     end
+    local f = self.doing == 'nibble' and world.food:get(self.treat)
+    if f then return {x = f.x, y = f.y} end
     if self.with then
         local x, y = world.creatures[self.with]:anchor()
         return {x = x, y = y - 10}

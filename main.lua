@@ -8,6 +8,7 @@
 --   lovec . --day <sec>      a time-compressed day, e.g. --day 120 to watch one pass
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
+--   right-click              drop a pinch of food into the jar there (a few a day)
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
@@ -37,6 +38,7 @@ local Scenery = require('jar.scenery')
 local Moss = require('jar.moss')
 local Eggs = require('jar.eggs')
 local Remains = require('jar.remains')
+local Food = require('jar.food')
 local Condensation = require('jar.condensation')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
@@ -257,6 +259,7 @@ local function drawCreatures(alpha, light)
         if c.draw_trail then c:draw_trail() end
     end
     Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
+    Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
     for i, c in ipairs(world.creatures) do
         Remains.through(world, i, 'draw', ctx)
@@ -264,6 +267,7 @@ local function drawCreatures(alpha, light)
     love.graphics.setShader()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
+    Food.draw_emissive(world.food, light, world.time, alpha)
     for i, c in ipairs(world.creatures) do
         if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
@@ -479,10 +483,16 @@ function love.draw()
     end
 end
 
--- Click a creature to follow it with the lantern; click anywhere else to let go
+-- Click a creature to follow it with the lantern; click anywhere else to let
+-- go. Right-click in the jar to drop in a pinch of food there (#25).
 function love.mousepressed(x, y, button)
-    if not world or button ~= 1 then return end
-    lantern:pick(world, Tank.toLevel(x, y))
+    if not world or capture then return end
+    local lx, ly = Tank.toLevel(x, y)
+    if button == 1 then
+        lantern:pick(world, lx, ly)
+    elseif button == 2 and lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B then
+        world:pinch(lx)
+    end
 end
 
 function love.keypressed(key)

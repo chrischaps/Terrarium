@@ -13,7 +13,8 @@
 -- body that grows into its genome in three moults, one a sleep. Each lives
 -- three to five jar days (#24): an elder slows and its colours deepen, and at
 -- the end it dies in its sleep, fades into the moss where it lay, and leaves
--- that patch to grow back greener. The moss grid (jar/moss.lua) grows under
+-- that patch to grow back greener. A pinch of food dropped in (#25) falls
+-- and settles here, and whoever is near comes over to it. The moss grid (jar/moss.lua) grows under
 -- the lamp and is grazed and trodden here. Visual systems (flora, ambience,
 -- particles) step here too so that what you see is always in sync with the
 -- physics.
@@ -23,6 +24,7 @@ local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
 local Mind = require('mind')
 local Moss = require('jar.moss')
+local Food = require('jar.food')
 local DayCycle = require('jar.daycycle')
 local Genome = require('genome')
 local Skin = require('bodies.skin')
@@ -60,6 +62,7 @@ function World.new(level_data, opts)
     local self = setmetatable({}, World)
     self.level = Level.new(level_data)
     self.moss = Moss.new(self.level) -- Terrarium: over every mossy top (#20)
+    self.food = Food.new(self.level) -- Terrarium: crumbs you've dropped in (#25)
     self.events = Bus.new()
     self.time = 0
     -- Terrarium: the hour the jar opened at and how long its day is (inputs, like the seed)
@@ -418,6 +421,15 @@ function World:remove(i)
     if self.selected == i then self.selected = 0 elseif self.selected > i then self.selected = self.selected - 1 end
 end
 
+-- Terrarium: drop a pinch of food from under the lid at x (#25), if the jar
+-- has one left today. A pinch is an input, like the seed: it lands on the
+-- step it's given, and the food keeps when and where. Returns its crumbs.
+function World:pinch(x)
+    local crumbs = self.food:pinch(x, self.time)
+    if crumbs then self.events:emit('pinch', {x = x, crumbs = #crumbs}) end
+    return crumbs
+end
+
 -- Terrarium: the jar's hour now
 function World:hour()
     return DayCycle.hourAt(self.start_hour, self.time, self.day_seconds)
@@ -528,6 +540,7 @@ function World:step(dt)
     self.time = self.time + dt
     local hour = self:hour()
     self:hatch()
+    self.food:update(dt, self.time, self:day_length()) -- Terrarium: crumbs fall and settle (#25)
 
     for i, c in ipairs(self.creatures) do
         local ctrl, mind = self.controllers[i], self.minds[i]

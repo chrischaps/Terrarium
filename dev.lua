@@ -891,6 +891,129 @@ test('death', function(j, results)
     end
 end)
 
+-- Terrarium: 3c. A pinch of food (#25), the gate. In a jar at midday, a pinch
+-- dropped beside one that's up and about falls from under the lid and settles
+-- on what's below it, never in it, and the awake ones near enough come over
+-- and nibble it; one beyond its notice carries on. The jar keeps only
+-- Food.PINCHES pinches, and one comes back each 1/PINCHES of a day. Two runs
+-- with the same pinch are the same jar.
+test('food', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local Food = require('jar.food')
+    local statehash = require('core.statehash')
+    local SEEDS = j.seed and {j.seed} or {20261018, 1, 2}
+    local function seconds(w, sec, each)
+        for _ = 1, math.floor(sec / fixed_dt + 0.5) do
+            w:step(fixed_dt)
+            if each then each() end
+        end
+    end
+
+    local function run(seed)
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, day = DAY})
+        seconds(w, 5)
+        -- Beside the first one up and about on the soil
+        local x
+        for i, c in ipairs(w.creatures) do
+            local m = w.minds[i]
+            if not x and (m.doing == 'idle' or m.doing == 'wander' or m.doing == 'graze') then
+                local cx, cy = c:anchor()
+                if cy > 540 then x = cx + (cx < 1000 and 90 or -90) end
+            end
+        end
+        x = x or 960
+        w:pinch(x)
+        local crumbs = #w.food.crumbs
+        -- Everyone up and free, and how near it is, when the crumbs are down
+        local near, came, soon, nibbled = {}, {}, {}, {}
+        local landed
+        w.events:on(function(ev)
+            if ev.kind == 'nibbled' then nibbled[ev.who] = (nibbled[ev.who] or 0) + 1 end
+        end)
+        local down = false
+        seconds(w, 90, function()
+            if not down then
+                down = true
+                for _, f in ipairs(w.food.crumbs) do down = down and f.down end
+                if down then
+                    landed = w.time
+                    for _, f in ipairs(w.food.crumbs) do
+                        check(results, f.solid and math.abs(f.y - f.solid.y) < 1e-6 and not w.level:solid_at(f.x, f.y - 1),
+                            'food: a crumb settled at (%.0f, %.0f), not on a top (seed %d)', f.x, f.y, seed)
+                    end
+                    for i, c in ipairs(w.creatures) do
+                        local m = w.minds[i]
+                        local cx, cy = c:anchor()
+                        local d = math.sqrt((cx - x) ^ 2 + (cy - w.food.crumbs[1].y) ^ 2)
+                        if m:awake(w:hour()) and (m.doing ~= 'to_rest' and m.doing ~= 'rest') then
+                            near[c] = {d = d, m = m}
+                        end
+                    end
+                end
+            end
+            for i, m in ipairs(w.minds) do
+                if m.doing == 'to_treat' or m.doing == 'nibble' then
+                    came[w.creatures[i]] = true
+                    if landed and w.time - landed < 2 then soon[w.creatures[i]] = true end
+                end
+            end
+        end)
+        check(results, down, 'food: the crumbs were still falling after 90 s (seed %d)', seed)
+        local eaters, close, stayed, who = 0, 0, 0, {}
+        for _, c in ipairs(w.creatures) do
+            if nibbled[c] then who[#who + 1] = c.name or c.key end
+        end
+        for c, o in pairs(near) do
+            if nibbled[c] then eaters = eaters + 1 end
+            if o.d < 200 and not (o.m.doing == 'court' or o.m.doing == 'await' or o.m.doing == 'to_court') then
+                close = close + 1
+                check(results, came[c], 'food: %s, %.0f from the pinch, never came over (seed %d)', c.name or c.key, o.d, seed)
+            end
+            if o.d > o.m.notice + 80 then
+                stayed = stayed + 1
+                check(results, not soon[c], 'food: %s came for crumbs %.0f off, past its notice (seed %d)',
+                    c.name or c.key, o.d, seed)
+            end
+        end
+        local left = #w.food.crumbs
+        check(results, eaters >= 1 and left < crumbs, 'food: nobody ate any of the pinch (seed %d)', seed)
+        log.info('selftest', 'food   seed %-9d %d crumbs at %4.0f, %d eaten by %s (%d were close), %d too far to notice',
+            seed, crumbs, x, crumbs - left, table.concat(who, ', '), close, stayed)
+        return w, x
+    end
+
+    local first
+    for k, seed in ipairs(SEEDS) do
+        local w, x = run(seed)
+        if k == 1 then first = {seed = seed, x = x, hash = statehash.of(w).total} end
+    end
+
+    -- A pinch is history: the same pinch at the same moment is the same jar
+    rng.seed(first.seed)
+    local w = World.new(level_data, {wander = true, selected = 0, day = DAY})
+    seconds(w, 5)
+    w:pinch(first.x)
+    seconds(w, 90)
+    check(results, statehash.of(w).total == first.hash, 'food: two runs with the same pinch differ (seed %d)', first.seed)
+
+    -- A small treat: the jar keeps a few pinches, and they come back over the day
+    local given = 1
+    while w:pinch(500) do given = given + 1 end
+    check(results, given == Food.PINCHES, 'food: %d pinches in a row, wanted %d', given, Food.PINCHES)
+    local wait = DAY / Food.PINCHES
+    local due = (1 - w.food.pantry) * wait -- (the one given first is partly back already)
+    seconds(w, due - 3)
+    check(results, not w:pinch(500), 'food: a pinch came back after %.0f s, sooner than 1/%d of a day', due - 3, Food.PINCHES)
+    seconds(w, 4)
+    check(results, w:pinch(500) ~= nil, 'food: no pinch came back after %.0f s', due + 1)
+    check(results, #w.food.given == given + 1, 'food: the jar kept %d pinches, given %d', #w.food.given, given + 1)
+    -- and what nobody eats is gone into the moss before long
+    seconds(w, Food.KEEP + 30)
+    check(results, #w.food.crumbs == 0, 'food: %d crumbs still lying after %d s', #w.food.crumbs, Food.KEEP + 30)
+    log.info('selftest', 'food         %d pinches a day, one back every %.0f s of a %d s day', Food.PINCHES, wait, DAY)
+end)
+
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
