@@ -2,8 +2,9 @@
 -- World: everything that lives in the cave, stepped at a fixed rate.
 --
 -- Terrarium: six creatures share the jar, two of each kind (the room's
--- residents). Each has a mind (mind.lua) that wanders, grazes and rests by the
--- jar's hour. In dev a selected one follows clicks instead. Each body gets
+-- residents). Each has a mind (mind.lua) whose needs and temperament choose
+-- among grazing, wandering, following and resting by the jar's hour. In dev a
+-- selected one follows clicks instead. Each body gets
 -- the nav graph of its nav profile (its size bucket's); bodies with the same
 -- one share it. Eggs laid in the jar hatch once their graph is built, a slice
 -- per step. The moss grid (jar/moss.lua) grows under the lamp and is grazed
@@ -128,7 +129,7 @@ function World:place(key, genome, x, solid_id, name)
     self.graph_of[key] = self.graph_of[key] or graph
     self.graphs[i] = graph
     self.controllers[i] = Controller.new(c, graph)
-    self.minds[i] = Mind.new()
+    self.minds[i] = Mind.new(genome)
     return i
 end
 
@@ -216,7 +217,7 @@ function World:reset()
         c.mover.solid = solid
         if c.profile.climbs then c.solid = solid; c:plant_all() end
         self.controllers[i]:clear()
-        self.minds[i] = Mind.new()
+        self.minds[i] = Mind.new(self.genomes[i])
     end
 end
 
@@ -282,14 +283,14 @@ function World:step(dt)
 
         -- Terrarium: everyone but a dev-selected creature lives by its mind
         if self.wander and i ~= self.selected then
-            mind:update(dt, hour, c, ctrl, self.graphs[i], self.moss)
+            mind:update(dt, hour, self, i)
         end
 
         ctrl:update(dt)
         local look = ctrl.path and ctrl:current_node() or nil
         c:update(dt, self.level, {
             events = self.events,
-            look_at = look and {x = look.x, y = look.y - 10} or mind:look(c),
+            look_at = look and {x = look.x, y = look.y - 10} or mind:look(c, self),
             light_dir = self.light_dir,
         })
         -- Terrarium: feet on the way somewhere wear the moss they cross
