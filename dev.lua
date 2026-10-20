@@ -504,6 +504,66 @@ test('temperament', function(j, results)
         mean(roam[1]), mean(roam[0]), mean(apart[1]), mean(apart[0]), up, #SEEDS)
 end)
 
+-- Terrarium: 3c. Courtship (#22). Nobody is told to court. Over a day of the
+-- jar from the lamp coming on, pairs that keep meeting court of their own
+-- accord: in every seed's day somebody does, and over the seeds every plan
+-- does. A pair is always of one plan, both fed, and side by side all the
+-- while; and nobody courts twice between one sleep and the next.
+test('court', function(j, results)
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+    local DayCycle = require('jar.daycycle')
+    local SEEDS = j.seed and {j.seed} or {20261018, 1, 2, 3}
+    local by_plan = {worm = 0, blob = 0, spider = 0}
+    for _, seed in ipairs(SEEDS) do
+        rng.seed(seed)
+        local w = World.new(level_data, {wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY})
+        local courts, apart, since = 0, 0, {}
+        w.events:on(function(ev)
+            if ev.kind == 'court' then
+                local a, b = ev.who, ev.with
+                check(results, a.key == b.key, 'court: a %s courted a %s (seed %d)', a.key, b.key, seed)
+            elseif ev.kind == 'courted' then
+                courts = courts + 1
+                by_plan[ev.who.key] = by_plan[ev.who.key] + 1
+            end
+        end)
+        local twice = {}
+        for s = 1, math.floor(DAY / fixed_dt + 0.5) do
+            w:step(fixed_dt)
+            for i, m in ipairs(w.minds) do
+                if m.doing == 'court' then
+                    if not since[i] then
+                        since[i] = m.courts
+                        check(results, m.hunger < 0.6, 'court: %s courted hungry (%.2f, seed %d)',
+                            w.creatures[i].name, m.hunger, seed)
+                    end
+                    local x, y = w.creatures[i]:anchor()
+                    local ox, oy = w.creatures[m.with]:anchor()
+                    apart = math.max(apart, math.sqrt((ox - x) ^ 2 + (oy - y) ^ 2))
+                else
+                    since[i] = nil
+                end
+                -- (courtships counted since it last slept)
+                if m.doing == 'rest' or not twice[i] then twice[i] = m.courts end
+                if m.courts - twice[i] > 1 then
+                    check(results, false, 'court: %s courted twice between sleeps (seed %d)', w.creatures[i].name, seed)
+                    twice[i] = m.courts
+                end
+            end
+        end
+        check(results, courts >= 1, 'court: nobody courted in a day of seed %d', seed)
+        check(results, apart < 100, 'court: a pair courted %.0f apart (seed %d)', apart, seed)
+        log.info('selftest', 'court  seed %-9d %d courtships, widest pair %.0f apart', seed, courts, apart)
+    end
+    if not j.seed then
+        for plan, n in pairs(by_plan) do
+            check(results, n >= 1, 'court: no %s courted in %d days', plan, #SEEDS)
+        end
+    end
+    log.info('selftest', 'court        worms %d, blobs %d, spiders %d over %d days', by_plan.worm, by_plan.blob,
+        by_plan.spider, #SEEDS)
+end)
+
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)

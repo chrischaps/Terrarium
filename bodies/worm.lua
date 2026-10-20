@@ -20,6 +20,11 @@
 --
 -- Terrarium: coloured from its genes (#15, bodies/skin.lua): rose to apricot,
 -- with its markings in the skin's mark colour, glowing at night.
+--
+-- Terrarium: courting (#22), two worms coil together. Each one's head loops
+-- round the point between them, half a turn from its partner's, so the two
+-- bodies follow their heads up and over each other and twine; and the
+-- markings flush with every turn.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
@@ -52,6 +57,11 @@ local STIFF = 0.55
 
 -- Terrarium: bunches along a worm of n segments while it crawls (10 -> 1, 24 -> 3)
 local function bunches(n) return 1 + (n - 10) / 7 end
+
+-- Terrarium: courting (#22)
+local COURT_GAP = 9       -- its half of the gap between it and a partner
+local COIL = 0.12        -- the ring its head makes, in radius per unit of its length
+local COIL_SPIN = 1.6     -- radians a second round it
 
 -- Terrarium: the body's own colours come from its skin (Skin.of); these are
 -- the lamp's light on it and its eyes
@@ -101,6 +111,8 @@ function Worm.new(x, y, world, genome)
     self.coil = 0
     self.squash = 0
     self.look_x, self.look_y = 1, 0
+    self.court_gap = COURT_GAP -- Terrarium: its half of the gap to a partner (#22)
+    self.ardour, self.flush = 0, 0
     self.mesh = nil
     return self
 end
@@ -218,6 +230,23 @@ function Worm:update(dt, level, ctx)
     local hr = self.radii[1]
     local hx, hy = m.x, m.y - hr + 1 - self.head_lift
     if m.state == 'air' then hy = m.y - hr end
+    -- Terrarium: courting, the head loops round the point between the two,
+    -- half a turn from its partner's (#22)
+    local court = ctx.court
+    if court then self.court = court end
+    self.ardour = self.ardour + ((court and 1 or 0) - self.ardour) * min(1, dt * 1.2)
+    if self.ardour < 0.005 then self.ardour, self.court = 0, nil end
+    self.flush = 0
+    if self.court and m.state == 'ground' then
+        local c, k = self.court, self.ardour
+        if court and abs(c.x - m.x) > 1 then m.facing = c.x > m.x and 1 or -1 end
+        local a = c.beat * COIL_SPIN + (c.side > 0 and 0 or math.pi)
+        local r = COIL * self.n * SEG_LEN
+        local cx, cy = (m.x + c.x) * 0.5, m.y - hr - r
+        hx = hx + (cx + r * cos(a) - hx) * k
+        hy = hy + (cy - r * sin(a) - hy) * k
+        self.flush = k * (0.5 + 0.5 * sin(a))
+    end
     head.px, head.py = head.x, head.y
     head.x, head.y = hx, hy
 
@@ -550,7 +579,7 @@ end
 
 -- Terrarium: the markings, shining as the lamp dims (#15)
 function Worm:draw_emissive(ctx)
-    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light))
+    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light, self.flush))
 end
 
 -- X-ray: the body as the simulation sees it (drawn additively, after lighting)

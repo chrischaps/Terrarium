@@ -3,7 +3,8 @@
 --
 -- Terrarium: six creatures share the jar, two of each kind (the room's
 -- residents). Each has a mind (mind.lua) whose needs and temperament choose
--- among grazing, wandering, following and resting by the jar's hour. In dev a
+-- among grazing, wandering, following, courting and resting by the jar's
+-- hour, and a courting body is told its partner and their beat. In dev a
 -- selected one follows clicks instead. Each body gets
 -- the nav graph of its nav profile (its size bucket's); bodies with the same
 -- one share it. Eggs laid in the jar hatch once their graph is built, a slice
@@ -292,6 +293,7 @@ function World:step(dt)
             events = self.events,
             look_at = look and {x = look.x, y = look.y - 10} or mind:look(c, self),
             light_dir = self.light_dir,
+            court = mind:courting(self, i), -- Terrarium: its partner and their beat (#22)
         })
         -- Terrarium: feet on the way somewhere wear the moss they cross
         if ctrl:has_path() then
@@ -305,6 +307,7 @@ function World:step(dt)
         end
     end
 
+    Mind.meet(self) -- Terrarium: who has met whom, for courting (#22)
     self.moss:update(dt, DayCycle.lampAt(hour))
     if self.flora then self.flora:update(dt, self:influencers(), self.time) end
     if self.ambience then self.ambience:update(dt, self) end

@@ -2,9 +2,17 @@
 --
 -- Needs and temperament choose goals (#21). Two needs drive the day: hunger,
 -- which rises while it's awake and falls only on what it crops from the moss
--- (jar/moss.lua), and rest, which its own clock calls for. (The urge to court
--- comes with #22.) From them it picks one of five goals: graze, wander, rest,
--- follow another creature for a while, or (later) court.
+-- (jar/moss.lua), and rest, which its own clock calls for. From them it picks
+-- one of five goals: graze, wander, rest, follow another creature for a
+-- while, or court.
+--
+-- Courting (#22) comes of meeting. Each time two awake creatures of the same
+-- plan come near each other after time apart, both count it (Mind.meet, once a
+-- step). When a fed one has met another of its kind often enough, and that
+-- one is fed and free too, it walks over while the other waits, and the two
+-- court for a while: worms coil together, blobs pulse in time, spiders tap.
+-- The bodies read it from Mind:courting, and the beat is the jar's clock, so a
+-- pair keeps time. Each courts at most once between one sleep and the next.
 --
 -- Its temperament is three genes, and they change when and where it does
 -- those things, never what it can do:
@@ -20,7 +28,8 @@
 --
 -- A mind only picks goals. The controller walks the path and the body moves,
 -- so it can only ask for places its graph holds (the body never lies). It
--- reads nothing of a body but its anchor and whether it climbs, and keeps
+-- reads nothing of a body but its anchor, whether it climbs, and (to stand
+-- beside a partner) the surface it's on and its `court_gap`, and keeps
 -- only numbers (another creature is an index), so it runs the same over the
 -- anchors-only coarse step of catch-up (#31) as over the live one.
 
@@ -50,17 +59,30 @@ local CLOSE = 40              -- nearer than this to another is as close as it g
 local FAR = 800               -- and farther than this is as far
 local CHOICES = 6             -- places weighed for each wander or bed
 
+-- Courting
+local MEET = 70               -- two of a kind this near have met
+local PART = 140              -- and must be this far apart before they can meet again
+local MET = 3                 -- meetings before a pair will court
+local FED = 0.5               -- hunger below this is fed enough to court
+local COURT = {12, 18}        -- seconds a courtship lasts
+local REACH = 30              -- seconds it gives the walk over
+local BESIDE = 90             -- this near on arrival, they court
+local FREE = {idle = true, wander = true, follow = true} -- what a partner leaves off to court
+
 local function lerp(r, t) return r[1] + (r[2] - r[1]) * t end
 
 -- A mind for a body grown from `genome` (any gene it lacks reads as the middle)
 function Mind.new(genome)
     genome = genome or {}
     local self = setmetatable({
-        doing = 'idle',          -- idle, wander, follow, to_graze, graze, to_rest, rest
+        doing = 'idle',          -- idle, wander, follow, to_graze, graze, to_rest, rest, to_court, await, court
         timer = rng.range(rng.sim, 2, 6),
         hunger = rng.range(rng.sim, 0, 0.6),
         late = rng.range(rng.sim, 0, LATE),
-        wanders = 0, grazes = 0, nights = 0, follows = 0, -- what it's done, for the self-tests
+        met = {},                -- creature index -> times they've met
+        near = {},               -- creature index -> true while they're together
+        wooed = false,           -- it has courted since it last slept
+        wanders = 0, grazes = 0, nights = 0, follows = 0, courts = 0, -- what it's done, for the self-tests
     }, Mind)
     self.boldness = genome.boldness or 0.5
     self.sociability = genome.sociability or 0.5
@@ -229,6 +251,140 @@ function Mind:choose_errand(c, ctrl, graph, world, me)
     end
 end
 
+-- Count meetings, once a step: two of a plan, both up, coming near after time
+-- apart have met once more
+function Mind.meet(world)
+    local cs, ms = world.creatures, world.minds
+    for i = 1, #cs do
+        local a, ma = cs[i], ms[i]
+        if ma.doing ~= 'rest' then
+            local ax, ay = a:anchor()
+            for j = i + 1, #cs do
+                local b, mb = cs[j], ms[j]
+                if b.key == a.key and mb.doing ~= 'rest' then
+                    local bx, by = b:anchor()
+                    local d2 = (bx - ax) ^ 2 + (by - ay) ^ 2
+                    if not ma.near[j] and d2 < MEET * MEET then
+                        ma.near[j], mb.near[i] = true, true
+                        ma.met[j], mb.met[i] = (ma.met[j] or 0) + 1, (mb.met[i] or 0) + 1
+                    elseif ma.near[j] and d2 > PART * PART then
+                        ma.near[j], mb.near[i] = nil, nil
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Fed, and it hasn't courted since it last slept
+function Mind:ready()
+    return self.hunger < FED and not self.wooed
+end
+
+-- Whom it would court now: one of its kind it's met often, ready and free
+-- (the one it's met most, and of those the first)
+local function suitor(world, me)
+    local best, most = nil, MET - 1
+    for j = 1, #world.minds do
+        local n, o = world.minds[me].met[j] or 0, world.minds[j]
+        if n > most and j ~= world.selected and o:ready() and FREE[o.doing] then best, most = j, n end
+    end
+    return best
+end
+
+-- Where on `graph` creature `c` goes to court `p`: the place on the surface
+-- `p` stands on that's nearest the two bodies' court gaps away from it, on
+-- the side `c` comes from if there's room
+local function beside(graph, c, p)
+    local x, y = p:anchor()
+    local cx, cy = c:anchor()
+    local on, gap = p.solid or p.mover.solid, c.court_gap + p.court_gap
+    local best, best_d
+    for _, n in ipairs(graph.nodes) do
+        if n.solid == on and (not p.nx or n.nx * p.nx + n.ny * p.ny > 0.5) then
+            local dx, dy = n.x - x, n.y - y
+            local d = math.abs(math.sqrt(dx * dx + dy * dy) - gap)
+            if dx * (cx - x) + dy * (cy - y) < 0 then d = d + gap end
+            if not best_d or d < best_d then best, best_d = n, d end
+        end
+    end
+    return best
+end
+
+-- Go courting, if it's ready and there's one to court: it walks over, and the
+-- other stops and waits for it
+function Mind:court(ctrl, graph, world, me)
+    if not self:ready() then return false end
+    local j = suitor(world, me)
+    if not j then return false end
+    local spot = beside(graph, world.creatures[me], world.creatures[j])
+    if not spot or not ctrl:go_to(spot, self:daring()) then return false end
+    local o = world.minds[j]
+    world.controllers[j]:clear()
+    self.with, o.with, self.lead = j, me, true
+    self:set('to_court', REACH)
+    o:set('await', REACH)
+    return true
+end
+
+-- Both leave off courting; `done`, they've courted
+function Mind:part(world, me, done)
+    for _, k in ipairs({me, self.with}) do
+        local m = world.minds[k]
+        if done then
+            m.wooed, m.courts = true, m.courts + 1
+            m.met[m.with] = 0
+        end
+        world.controllers[k]:clear()
+        m.with, m.lead = nil, nil
+        m:set('idle', rng.range(rng.sim, 2, 5))
+    end
+end
+
+-- A step of courting: walking over, waiting, or the courtship itself. The one
+-- that walked over says when it's over; the other waits on it, and gives up
+-- if it goes off.
+function Mind:woo(dt, world, me, arrived)
+    local o = world.minds[self.with]
+    if not o or o.with ~= me then
+        self.with, self.lead = nil, nil
+        self:set('idle', rng.range(rng.sim, 2, 5))
+        return
+    end
+    self.timer = self.timer - dt
+    if not self.lead then
+        -- (its time runs with the other's, so this is only if that one stalls)
+        if self.timer < -1 then self:part(world, me) end
+        return
+    end
+    local c, p = world.creatures[me], world.creatures[self.with]
+    if self.doing == 'to_court' then
+        local x, y = c:anchor()
+        local ox, oy = p:anchor()
+        if self.timer <= 0 or (arrived and (ox - x) ^ 2 + (oy - y) ^ 2 > BESIDE * BESIDE) then
+            self:part(world, me)
+        elseif arrived then
+            self:set('court', rng.range(rng.sim, COURT[1], COURT[2]))
+            o:set('court', self.timer)
+            self.since, o.since = world.time, world.time
+            world.events:emit('court', {who = c, with = p, x = x, y = y})
+        end
+    elseif self.timer <= 0 then
+        local x, y = c:anchor()
+        world.events:emit('courted', {who = c, with = p, x = x, y = y})
+        self:part(world, me, true)
+    end
+end
+
+-- What a courting body is told: where its partner is, how long they've been
+-- at it, and the beat they keep (the jar's clock, so the two share it). `side`
+-- tells the two apart.
+function Mind:courting(world, me)
+    if self.doing ~= 'court' then return nil end
+    local x, y = world.creatures[self.with]:anchor()
+    return {x = x, y = y, t = world.time - self.since, beat = world.time, side = me < self.with and 1 or -1}
+end
+
 -- One fixed step for creature `me` of `world`, at the jar's `hour`
 function Mind:update(dt, hour, world, me)
     local c, ctrl, graph, moss = world.creatures[me], world.controllers[me], world.graphs[me], world.moss
@@ -236,14 +392,15 @@ function Mind:update(dt, hour, world, me)
     local arrived = not ctrl:has_path()
 
     if not self:awake(hour) then
-        self.with = nil
+        self.with, self.lead = nil, nil
+        self.wooed = false
         if doing == 'rest' then return end
         if doing == 'to_rest' then
             if arrived then
                 self:set('rest')
                 self.nights = self.nights + 1
             end
-        elseif arrived or doing == 'follow' then
+        elseif arrived or doing == 'follow' or doing == 'to_court' then
             -- Finish whatever trip it's on, then go to bed (or sleep where it is)
             local beds = self:choose(self:near_home(rest_spots(graph, c.profile.climbs), c.home), others(world, me, true))
             self:set(self:head(ctrl, beds, true) and 'to_rest' or 'rest')
@@ -271,6 +428,8 @@ function Mind:update(dt, hour, world, me)
             local ox, oy = world.creatures[self.with]:anchor()
             if (ox - x) ^ 2 + (oy - y) ^ 2 > CLOSE * CLOSE * 4 then self:after(ctrl, graph, world) end
         end
+    elseif doing == 'to_court' or doing == 'await' or doing == 'court' then
+        self:woo(dt, world, me, arrived)
     elseif doing == 'to_graze' then
         if arrived then
             self:set('graze', rng.range(rng.sim, GRAZE[1], GRAZE[2]))
@@ -292,20 +451,21 @@ function Mind:update(dt, hour, world, me)
             local spots = moss_spots(graph, moss)
             if self.hunger >= 1 and self:head(ctrl, {pick(self:near_home(spots, c.home)), pick(spots)}, self.hunger >= DESPERATE) then
                 self:set('to_graze')
-            else
+            elseif not self:court(ctrl, graph, world, me) then
                 self:choose_errand(c, ctrl, graph, world, me)
             end
         end
     end
 end
 
--- Grazing heads look down at the moss, and a follower watches who it follows
+-- Grazing heads look down at the moss, a follower watches who it follows, and
+-- a courting one its partner
 function Mind:look(c, world)
     if self.doing == 'graze' then
         local x, y = c:anchor()
         return {x = x, y = y + 14}
     end
-    if self.doing == 'follow' and self.with then
+    if self.with then
         local x, y = world.creatures[self.with]:anchor()
         return {x = x, y = y - 10}
     end

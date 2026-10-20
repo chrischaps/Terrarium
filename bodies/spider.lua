@@ -17,6 +17,11 @@
 --
 -- Terrarium: coloured from its genes (#15, bodies/skin.lua): indigo to plum,
 -- and dark, with pale markings that glow at night.
+--
+-- Terrarium: courting (#22), two spiders face each other and tap: a front
+-- foot lifts and reaches toward the other, then the other front foot, on a
+-- beat they share (the jar's clock), and the body bobs and the markings
+-- flush in time.
 
 local Base = require('bodies.base')
 local Skin = require('bodies.skin')
@@ -73,6 +78,7 @@ function Spider.nav_profile(genome)
 end
 
 local RIDE = 12
+local TAP_BEAT = 0.42 -- Terrarium: seconds a courting tap takes (#22)
 local BONES = {14, 15, 11}
 local STEP_DIST = 13
 local STEP_TIME = 0.1
@@ -151,6 +157,8 @@ function Spider.new(x, y, world, genome)
     self.bob = 0
     self.tap = nil
     self.next_tap = rng.range(rng.look, 3, 7)
+    self.court_gap = 17 * scale + 4 -- Terrarium: its half of the gap to a partner (#22)
+    self.ardour, self.flush = 0, 0
     self.legs = {}
     for i, def in ipairs(self.layout) do
         local hx, hy = self:hip(def)
@@ -415,7 +423,9 @@ function Spider:update(dt, level, ctx)
             self.bob = self.bob + (-4 - self.bob) * min(1, dt * 18)
         end
     else
-        self.bob = self.bob + ((0.8 * sin(self.clock * 2.2)) - self.bob) * min(1, dt * 6)
+        local bob = 0.8 * sin(self.clock * 2.2)
+        if self.court then bob = bob + self.ardour * 1.6 * sin(self.court.beat / TAP_BEAT * pi) end -- Terrarium
+        self.bob = self.bob + (bob - self.bob) * min(1, dt * 6)
     end
 
     -- Smooth the normal
@@ -429,7 +439,7 @@ function Spider:update(dt, level, ctx)
     local moving = self.speed > 10
 
     -- Idle tap: a front leg lifts and taps
-    if self.mode == 'attached' and not moving then
+    if self.mode == 'attached' and not moving and not self.court then
         self.next_tap = self.next_tap - dt
         if self.next_tap <= 0 and not self.tap then
             -- Terrarium: the front leg of a side, whichever leg that is since it turned
@@ -444,6 +454,30 @@ function Spider:update(dt, level, ctx)
     if self.tap then
         self.tap.t = self.tap.t + dt
         if self.tap.t > 0.7 or moving or self.mode ~= 'attached' then self.tap = nil end
+    end
+
+    -- Terrarium: courting, it faces its partner, and a front foot taps toward
+    -- it on each beat, the near one and then the far (#22)
+    local court = ctx.court
+    if court then self.court = court end
+    self.ardour = self.ardour + ((court and 1 or 0) - self.ardour) * min(1, dt * 1.5)
+    if self.ardour < 0.005 then self.ardour, self.court = 0, nil end
+    self.court_tap, self.flush = nil, 0
+    if self.court and self.mode == 'attached' then
+        local c, k = self.court, self.ardour
+        if court then
+            self.tap = nil
+            local tx, ty = self:frame()
+            if (c.x - self.a.x) * tx + (c.y - self.a.y) * ty < -1 then self.facing = -self.facing end
+        end
+        local b = c.beat / TAP_BEAT
+        local near, front, best = math.floor(b) % 2 == 0, nil, -math.huge
+        for i, leg in ipairs(self.legs) do
+            if leg.def.near == near and leg.def.reach > best then front, best = i, leg.def.reach end
+        end
+        local up = sin((b % 1) * pi)
+        self.court_tap = {leg = front, lift = up * 9 * self.scale * k}
+        self.flush = k * up
     end
 
     -- Legs
@@ -565,6 +599,11 @@ function Spider:update(dt, level, ctx)
                 local t = self.tap.t
                 local lift = max(0, sin(t / 0.7 * pi * 2)) * 6
                 fx, fy = fx + fnx * lift, fy + fny * lift
+            end
+            -- Terrarium: and so does a courting one, up and toward its partner
+            if self.court_tap and self.court_tap.leg == i then
+                local lift = self.court_tap.lift
+                fx, fy = fx + fnx * lift + ftx * lift * 0.6, fy + fny * lift + fty * lift * 0.6
             end
         end
 
@@ -755,7 +794,7 @@ end
 -- Emissive bits drawn after lighting so they stay bright.
 -- Terrarium: and the markings, shining as the lamp dims (#15)
 function Spider:draw_emissive(ctx)
-    local k = Skin.shine(self.skin, ctx and ctx.light)
+    local k = Skin.shine(self.skin, ctx and ctx.light, self.flush)
     local f = self.mark_frame
     if k > 0.01 and f then
         Skin.paint_glow(self.marks, self.skin, k)

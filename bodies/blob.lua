@@ -17,6 +17,10 @@
 -- Terrarium: coloured from its genes (#15, bodies/skin.lua): mint to sky, and
 -- glassy. Its markings ride the ring as it rolls, except a cap, which hangs
 -- on top like a jelly's bell.
+--
+-- Terrarium: courting (#22), two blobs pulse in time. Each swells on the same
+-- beat, the jar's clock, and leans in toward the other, and its markings
+-- flush as it swells.
 
 local Base = require('bodies.base')
 local Genome = require('genome')
@@ -38,6 +42,7 @@ Blob.profile = {
 }
 
 local N = 18
+local PULSE = 1.3 -- Terrarium: seconds between a courting blob's swells (#22)
 local R = 21 -- Terrarium: the ring's radius at size 1 (Character's blob)
 
 -- Terrarium: the profile of a blob `size` times the standard one. A bigger
@@ -119,6 +124,8 @@ function Blob.new(x, y, world, genome)
     self.rest_edge = 2 * self.R * sin(pi / N)
     self.area0 = 0.5 * N * self.R * self.R * sin(2 * pi / N)
     self.pressure = 1
+    self.court_gap = self.R + 3 -- Terrarium: its half of the gap to a partner (#22)
+    self.ardour, self.flush = 0, 0
     self.rot = 0
     self.trail = {}
     self.trail_dist = 0
@@ -228,6 +235,22 @@ function Blob:update(dt, level, ctx)
     -- Squat while anticipating a jump
     local squat = m.state == 'anticipate' and 1 or 0
     local target_pressure = 1 - 0.2 * squat
+    -- Terrarium: courting, it swells on the beat its partner keeps, and leans
+    -- in (#22)
+    local court = ctx.court
+    if court then self.court = court end
+    self.ardour = self.ardour + ((court and 1 or 0) - self.ardour) * min(1, dt * 1.2)
+    if self.ardour < 0.005 then self.ardour, self.court = 0, nil end
+    local lean = 0
+    self.flush = 0
+    if self.court then
+        local c, k = self.court, self.ardour
+        if court and abs(c.x - m.x) > 1 then m.facing = c.x > m.x and 1 or -1 end
+        local beat = (0.5 - 0.5 * cos(c.beat * 2 * pi / PULSE)) ^ 2
+        target_pressure = target_pressure + k * (0.2 * beat - 0.05)
+        lean = k * (c.x > m.x and 1 or -1) * R * 0.12
+        self.flush = k * beat
+    end
     self.pressure = self.pressure + (target_pressure - self.pressure) * min(1, dt * self.recover)
 
     -- Jiggle: integrate relative motion with a little sag
@@ -240,7 +263,7 @@ function Blob:update(dt, level, ctx)
 
     -- Soft tether of the centre to where the anchor says it should be
     cx, cy = self:centroid()
-    local tx, ty = m.x, m.y - R * (self.sit - 0.22 * squat)
+    local tx, ty = m.x + lean, m.y - R * (self.sit - 0.22 * squat)
     local k = 0.16
     local ox, oy = (tx - cx) * k, (ty - cy) * k
     for _, p in ipairs(self.points) do
@@ -488,7 +511,7 @@ end
 
 -- Terrarium: the markings, shining as the lamp dims (#15)
 function Blob:draw_emissive(ctx)
-    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light))
+    Skin.paint_glow(self.marks, self.skin, Skin.shine(self.skin, ctx and ctx.light, self.flush))
 end
 
 -- X-ray: the ring, its edge constraints and the pressure pushing outward
