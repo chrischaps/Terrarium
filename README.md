@@ -26,6 +26,8 @@ Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrariu
 
 Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it.
 
+A jar you leave keeps living. `love . --away 2d` opens one that was left two days ago: while the glass is fogged, the days it missed go by as light and are counted in the mist, and then it clears on the jar as it is now. A week is the most it lives through.
+
 On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
 
 ## Milestones

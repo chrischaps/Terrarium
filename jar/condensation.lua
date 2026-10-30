@@ -178,9 +178,14 @@ local function drawDry(state)
     love.graphics.setBlendMode("alpha")
 end
 
---- Draw the condensation over the jar, under the front glass's dust and glare
-function Condensation.draw(light)
-    local damp = light.damp or 0
+--- Draw the condensation over the jar, under the front glass's dust and glare.
+-- Terrarium: `over` (optional, #31) fogs it more than the hour does: `veil`
+-- (0 to 1) as damp as a jar left shut, the mist that much heavier, and
+-- `wipe(x0, y0, x1, y1)` drawing whatever a finger has wiped into the dry
+-- layer, in the glass's frame.
+function Condensation.draw(light, over)
+    local veil = over and over.veil or 0
+    local damp = math.max(light.damp or 0, veil)
     local night = (light.hour - NIGHT0) % 24
     local state = {}
     local running = false
@@ -203,6 +208,14 @@ function Condensation.draw(light)
     end
 
     drawDry(state)
+    if over and over.wipe then
+        love.graphics.setBlendMode("add")
+        love.graphics.push()
+        love.graphics.scale(0.5)
+        over.wipe(x0, y0, x1, y1)
+        love.graphics.pop()
+        love.graphics.setBlendMode("alpha")
+    end
     love.graphics.setCanvas(canvas)
 
     -- The mist scatters whatever light is on the glass: the room's, the
@@ -221,8 +234,12 @@ function Condensation.draw(light)
         sh:send("soft", SOFT)
         sh:send("tint", tint)
         love.graphics.setShader(sh)
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(mist)
+        -- (a veil lays the mist on thicker)
+        local layers = 1 + 2.5 * veil
+        for k = 1, math.ceil(layers) do
+            love.graphics.setColor(1, 1, 1, math.min(1, layers - (k - 1)))
+            love.graphics.draw(mist)
+        end
         love.graphics.setShader()
     end
 
