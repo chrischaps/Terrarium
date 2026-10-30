@@ -22,7 +22,7 @@ Install [LÖVE 11.5](https://love2d.org), then from the repo root:
 love .
 ```
 
-Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. Its `SHA256SUMS` says what the download should hash to.
+Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. On Windows, a release's `terrarium-win64.zip` needs no LÖVE: unzip it and run `Terrarium/Terrarium.exe`. Its `SHA256SUMS` says what each download should hash to, and [CHANGELOG.md](CHANGELOG.md) says what's in it.
 
 Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it.
 

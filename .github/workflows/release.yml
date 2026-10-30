@@ -1,9 +1,12 @@
-# A release on each v* tag (#91): the jar packed as terrarium.love with
-# SHA256SUMS beside it (scripts/package.sh), checked on Linux and Windows by
-# everything selftest.yml checks, run against the packed file itself rather
-# than the checkout, then drafted as a release with both attached. Publishing
-# by hand stays the gate. A tag with a hyphen (v0.1.0-frame.1) drafts a
-# prerelease, so the frame can follow the jar before v0.1.0.
+# A release on each v* tag (#91): the jar packed as terrarium.love, and fused
+# onto LÖVE 11.5's love.exe as terrarium-win64.zip (#34), with SHA256SUMS
+# beside them (scripts/package.sh). It's checked on Linux and Windows by
+# everything selftest.yml checks and a week in one jar (scripts/week.lua),
+# run against the packed file itself rather than the checkout, and the
+# Windows game must replay the same jar as the .love. Then it's drafted as a
+# release with all three attached and the tag's notes from CHANGELOG.md.
+# Publishing by hand stays the gate. A tag with a hyphen (v0.1.0-frame.1)
+# drafts a prerelease, so the frame can follow the jar before v0.1.0.
 name: release
 
 on:
@@ -16,6 +19,7 @@ on:
   pull_request:
     paths:
       - scripts/package.sh
+      - scripts/week.lua
       - tests/ci.sh
       - .github/workflows/release.yml
 
@@ -24,12 +28,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch LÖVE 11.5 for Windows, to fuse the game onto
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o love.zip https://github.com/love2d/love/releases/download/11.5/love-11.5-win64.zip
+          unzip -q love.zip
       - run: sh scripts/package.sh
+        env:
+          LOVE_WIN: ${{ runner.temp }}/love-11.5-win64
       - uses: actions/upload-artifact@v4
         with:
           name: terrarium
           path: |
             dist/terrarium.love
+            dist/terrarium-win64.zip
             dist/SHA256SUMS
           if-no-files-found: error
 
@@ -80,6 +92,22 @@ jobs:
       - name: Self-test the packed game
         run: sh tests/ci.sh
 
+      # Seven jar days on the live step, the one you watch (#34): nothing
+      # leaves the jar, no kind is lost, steps stay quick, memory stays flat
+      - name: A week in one jar
+        run: '"$LOVE" "$GAME" --headless --script scripts/week.lua'
+
+      # Terrarium.exe is the .love on love.exe, so it must open the same jar:
+      # a replay of it hashes the same as one of the .love
+      - name: Replay the Windows game against the .love
+        if: runner.os == 'Windows'
+        run: |
+          unzip -q dist/terrarium-win64.zip -d "$RUNNER_TEMP/win"
+          fused=$("$RUNNER_TEMP/win/Terrarium/Terrarium.exe" --replay 60 | sed -n 's/^hash //p' | tr -d '\r')
+          packed=$("$LOVE" "$GAME" --replay 60 | sed -n 's/^hash //p' | tr -d '\r')
+          echo "Terrarium.exe $fused, terrarium.love $packed"
+          [ -n "$fused" ] && [ "$fused" = "$packed" ]
+
   draft:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: check
@@ -87,17 +115,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4 # for CHANGELOG.md
       - uses: actions/download-artifact@v4
         with:
           name: terrarium
           path: dist
 
-      - name: Draft the release (notes are written by hand before publishing)
+      # The notes are the tag's section of CHANGELOG.md ("## v0.1.0 ..." up to
+      # the next "## "), when it has one, and are read over before publishing
+      - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          cd dist && sha256sum -c SHA256SUMS
+          (cd dist && sha256sum -c SHA256SUMS)
+          awk -v tag="$TAG" '/^## / { on = ($2 == tag); next } on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Draft: notes to follow." > notes.md
           case "$TAG" in *-*) pre=--prerelease ;; *) pre= ;; esac
-          gh release create "$TAG" terrarium.love SHA256SUMS --repo "$GITHUB_REPOSITORY" \
-            --verify-tag --draft $pre --title "Terrarium ${TAG#v}" --notes "Draft: notes to follow."
+          gh release create "$TAG" dist/terrarium.love dist/terrarium-win64.zip dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft $pre --title "Terrarium ${TAG#v}" --notes-file notes.md
