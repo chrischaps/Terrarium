@@ -24,6 +24,8 @@ love .
 
 Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it.
 
+On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
+
 ## Milestones
 
 | Milestone | Done when |

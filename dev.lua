@@ -82,6 +82,8 @@ function dev.parse(args)
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
         elseif a == '--mute' then o.mute = true
+        -- Terrarium: the Pi frame's mode (#90): fullscreen, no cursor, no keys
+        elseif a == '--frame' then o.frame = true
         -- Terrarium: who lives in the jar, e.g. --cast worm,snail,moth (#74)
         elseif a == '--cast' then
             o.cast = {}
@@ -387,6 +389,65 @@ test('lantern', function(j, results)
     check(results, held ~= nil, 'lantern: clicking a creature did not pick it')
     check(results, plain == followed, 'lantern changed the jar: %s vs %s', plain, followed)
     log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
+end)
+
+-- Terrarium: the Pi frame (#90). The 1280 x 800 view fits a 1280 x 720 screen
+-- by losing 40 px from its top and bottom, with the lamp's lit rim, the soil
+-- line and the jar's base all still on it; a screen further from 16:10 than
+-- the crop allows gets bars. A finger's tap is a click, holding it still is a
+-- pinch, and one that slides off or a second finger is neither.
+test('frame', function(_, results)
+    local C, Screen, Touch = require('jar.config'), require('core.screen'), require('core.touch')
+    local Tank, Scape = require('jar.tank'), require('jar.scape')
+    local function fits(w, h, k, x, y)
+        local f = Screen.fit(w, h, C.W, C.H)
+        check(results, math.abs(f.k - k) < 1e-9 and f.x == x and f.y == y,
+            'frame: %dx%d fits at %.4f from (%d, %d), not %.4f from (%d, %d)', w, h, f.k, f.x, f.y, k, x, y)
+        return f
+    end
+    fits(1280, 800, 1, 0, 0)
+    fits(640, 360, 0.5, 0, -20) -- Easel's card
+    fits(1920, 1080, 1.5, 0, -60)
+    fits(720, 1280, 0.625, -40, 390) -- the panel as it comes, in portrait: bars above and below
+    local f = fits(1280, 720, 1, 0, -40)
+    local MARGIN = 16
+    for _, p in ipairs({ { 'the lamp', Scape.lampHang() + Scape.LAMP_RIM }, { 'the soil line', Tank.wy(C.SOIL_Y) },
+        { "the jar's base", Tank.wy(C.GLASS_B) } }) do
+        local y = p[2] * f.k + f.y
+        check(results, y >= MARGIN and y <= 720 - MARGIN, 'frame: %s is at %.0f on a 1280x720 screen', p[1], y)
+    end
+    local sx, sy = Screen.toView(f, 640, 0)
+    check(results, sx == 640 and sy == 40, 'frame: the screen top is (%s, %s) in the view, not (640, 40)', sx, sy)
+
+    local function run(events)
+        local t, said = Touch.new(), {}
+        for _, e in ipairs(events) do
+            local got
+            if e[1] == 'wait' then
+                for _ = 1, math.floor(e[2] * 60 + 0.5) do got = t:update(1 / 60) or got end
+            else
+                got = t[e[1]](t, e[2], e[3], e[4])
+            end
+            if got then said[#said + 1] = got end
+        end
+        return table.concat(said, ' ')
+    end
+    local cases = {
+        { 'a tap', 'tap', { { 'press', 1, 400, 300 }, { 'wait', 0.2 }, { 'release', 1, 401, 300 } } },
+        { 'a long press', 'hold', { { 'press', 1, 400, 300 }, { 'wait', 1.5 }, { 'release', 1, 400, 300 } } },
+        { 'a slide', '', { { 'press', 1, 400, 300 }, { 'move', 1, 440, 300 }, { 'wait', 1 }, { 'release', 1, 440, 300 } } },
+        { 'a jittery hold', 'hold', { { 'press', 1, 400, 300 }, { 'move', 1, 410, 306 }, { 'wait', 1 },
+            { 'release', 1, 410, 306 } } },
+        -- (a second finger is ignored while the first holds, and taps once it's up)
+        { 'a second finger', 'hold tap', { { 'press', 1, 400, 300 }, { 'press', 2, 900, 300 }, { 'wait', 1 },
+            { 'release', 2, 900, 300 }, { 'release', 1, 400, 300 }, { 'press', 2, 900, 300 },
+            { 'release', 2, 900, 300 } } },
+    }
+    for _, c in ipairs(cases) do
+        local said = run(c[3])
+        check(results, said == c[2], 'frame: %s said "%s", not "%s"', c[1], said, c[2])
+    end
+    log.info('selftest', 'frame        1280x720 crops (0, %d); taps, holds and slides read', f.y)
 end)
 
 -- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole

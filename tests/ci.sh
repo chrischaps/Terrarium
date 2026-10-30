@@ -15,6 +15,9 @@
 #    order, a table address, the wall clock.
 # 5. With $WINDOW set, a jar opened in a real window against one opened with
 #    none. They must hash the same, because rendering never touches the sim.
+#    And the Pi frame's mode (#90), started and stopped the way its launcher
+#    does: --frame, then SIGTERM, which must quit through love.quit and leave
+#    the launcher's thumb in $EASEL_DATA.
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
@@ -64,6 +67,26 @@ if [ -n "${WINDOW:-}" ]; then
         echo "window: FAIL rendering changed the jar ('$w' windowed vs '$h' headless)"
         failed=1
     fi
+
+    echo "== the frame, ended as Easel ends it (#90)"
+    easel=$(mktemp -d) || exit 1
+    EASEL_DATA="$easel" $WINDOW sh -c '
+        "$1" . --frame > "$2/log" 2>&1 &
+        pid=$!
+        i=0
+        until grep -q "^\[frame\] [0-9]" "$2/log" || [ $i -ge 240 ]; do sleep 0.5; i=$((i + 1)); done
+        sleep 3
+        kill -TERM $pid
+        wait $pid' sh "$LOVE" "$easel"
+    status=$?
+    cat "$easel/log"
+    if [ "$status" = 0 ] && head -c 4 "$easel/thumb.png" 2>/dev/null | grep -q PNG; then
+        echo "frame: SIGTERM quit cleanly and left Easel its thumb"
+    else
+        echo "frame: FAIL SIGTERM exited $status, thumb $(ls "$easel")"
+        failed=1
+    fi
+    rm -rf "$easel"
 fi
 
 [ "$failed" = 0 ] && echo "ci: all green"
