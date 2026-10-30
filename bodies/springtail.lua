@@ -56,6 +56,7 @@ Springtail.profile = {
 
 -- One profile per spring, so springtails with the same spring share it
 local profiles = {}
+Springtail.profiles = profiles -- (a cache: the book, #30, puts it back as it was)
 function Springtail.profile_for(spring)
     if spring == 1 then return Springtail.profile end
     local p = profiles[spring]
@@ -76,6 +77,7 @@ end
 Springtail.BUCKETS = 8
 Springtail.BUCKET_GENE = 'spring'
 local navs = {}
+Springtail.navs = navs -- (so does this one)
 function Springtail.nav_profile(genome)
     local k, lo, hi = Genome.bucket('springtail', 'spring', genome and genome.spring or 1, Springtail.BUCKETS)
     if navs[k] then return navs[k] end

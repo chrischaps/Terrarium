@@ -13,17 +13,22 @@
 #    its genes, day by day, to month_<seed>.csv in the save directory.
 # 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
-#    order, a table address, the wall clock.
+#    order, a table address, the wall clock. And the jar's book (#30) the
+#    same way: one process runs a jar, writes its book and runs on, another
+#    reads the book and runs on, and they must end on the same hash. Inside
+#    one process a book can't show it kept what a new one doesn't have.
 # 5. With $WINDOW set, a jar opened in a real window against one opened with
 #    none. They must hash the same, because rendering never touches the sim.
 #    And the Pi frame's mode (#90), started and stopped the way its launcher
 #    does: --frame, then SIGTERM, which must quit through love.quit and leave
-#    the launcher's thumb in $EASEL_DATA.
+#    the launcher's thumb in $EASEL_DATA, and the jar's book beside it. Started
+#    again, the frame reads the book back and goes on where it was.
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
 GAME=${GAME:-.} # what LÖVE runs; the lint always reads the source
 SECONDS_OF_JAR=${SECONDS_OF_JAR:-300}
+BOOK_SECONDS=${BOOK_SECONDS:-3600} # of 900-second days: eggs, hatchlings, elders and the first deaths
 MONTH_SEEDS=${MONTH_SEEDS:-"20261018 1 2 3 4 5 6 7 8 9"} # (dev.lua's MONTH_SEEDS)
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
 failed=0
@@ -59,6 +64,20 @@ else
     failed=1
 fi
 
+echo "== the jar's book across processes ($BOOK_SECONDS s of jar, #30)"
+book=$(mktemp -d) || exit 1
+file="$book/jar.book"
+if command -v cygpath > /dev/null 2>&1; then file=$(cygpath -m "$file"); fi # (LÖVE on Windows wants C:/...)
+a=$(hash_of "$LOVE" "$GAME" --keep "$BOOK_SECONDS" "$file" --day 900 --hour lampon)
+b=$(hash_of "$LOVE" "$GAME" --resume "$file")
+if [ -n "$a" ] && [ "$a" != "-" ] && [ "$a" = "$b" ]; then
+    echo "book: written and read back in another process, both hash $a"
+else
+    echo "book: FAIL the jar read back went another way ('$a' written vs '$b' read)"
+    failed=1
+fi
+rm -rf "$book"
+
 if [ -n "${WINDOW:-}" ]; then
     echo "== a jar in a window against a jar with none"
     w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window)
@@ -86,6 +105,26 @@ if [ -n "${WINDOW:-}" ]; then
         echo "frame: SIGTERM quit cleanly and left Easel its thumb"
     else
         echo "frame: FAIL SIGTERM exited $status, thumb $(ls "$easel")"
+        failed=1
+    fi
+    if head -c 15 "$easel/jar.book" 2>/dev/null | grep -q '^terrarium book'; then
+        mv "$easel/log" "$easel/first.log"
+        EASEL_DATA="$easel" $WINDOW sh -c '
+            "$1" . --frame > "$2/log" 2>&1 &
+            pid=$!
+            i=0
+            until grep -q "^\[frame\] [0-9]" "$2/log" || [ $i -ge 240 ]; do sleep 0.5; i=$((i + 1)); done
+            kill -TERM $pid
+            wait $pid' sh "$LOVE" "$easel"
+        cat "$easel/log"
+        if grep -q '^\[book\] resumed .*(as it was written)' "$easel/log"; then
+            echo "frame: started again, it read its book back and went on"
+        else
+            echo "frame: FAIL started again, it didn't go on from its book"
+            failed=1
+        fi
+    else
+        echo "frame: FAIL SIGTERM left no book in $EASEL_DATA ($(ls "$easel"))"
         failed=1
     fi
     rm -rf "$easel"

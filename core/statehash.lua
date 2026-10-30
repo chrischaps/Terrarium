@@ -16,7 +16,6 @@ local statehash = {}
 
 -- Fields that are drawing, not living
 local SKIP = {
-    snap = true, saved = true, -- World's render interpolation
     mesh = true,               -- a fern's draw buffer
     world = true,              -- a body's back-reference to the World walking it
     skin = true, color_name = true, -- a body's colours (#15), read only by drawing
@@ -26,6 +25,9 @@ local SKIP = {
     homes = true,              -- where the room puts each kind's pair (#74): who moved in is hashed
     slime = true,              -- a snail's ribbon of slime (#77), drawn and never read
 }
+-- The World's render interpolation (Terrarium: only the World's: a
+-- springtail's `snap` is how its furcula is thrown, #76, and that's living)
+local SKIP_WORLD = {snap = true, saved = true}
 
 local FNV_OFFSET = -2128831035 -- 2166136261 as a signed 32-bit int
 
@@ -50,6 +52,7 @@ end
 -- Append a canonical spelling of v to out. Tables are walked once; a second
 -- visit writes the order it was first seen in, which is the same every run.
 local function walk(v, out, seen)
+    local skip = seen.world == v and SKIP_WORLD or SKIP
     local t = type(v)
     if t == 'number' then
         out[#out + 1] = string.format('%.17g', v)
@@ -66,7 +69,7 @@ local function walk(v, out, seen)
         seen[v] = seen.n
         local keys = {}
         for k in pairs(v) do
-            if TYPE_ORDER[type(k)] and not SKIP[k] then keys[#keys + 1] = k end
+            if TYPE_ORDER[type(k)] and not SKIP[k] and not skip[k] then keys[#keys + 1] = k end
         end
         table.sort(keys, key_less)
         out[#out + 1] = '{'
@@ -92,7 +95,7 @@ end
 -- The World's state as {total = 'xxxxxxxx', parts = {{name, hash}, ...}}.
 -- Pass the flora's list (Plants.all()) to include the ferns and moss stalks.
 function statehash.of(world, flora)
-    local seen = {n = 0}
+    local seen = {n = 0, world = world}
     local parts = {}
     local total = FNV_OFFSET
     local function part(name, v)

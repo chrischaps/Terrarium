@@ -65,6 +65,7 @@ Snail.profile = {
 
 -- One profile per size, so snails of a size share it
 local profiles = {}
+Snail.profiles = profiles -- (a cache: the book, #30, puts it back as it was)
 function Snail.profile_for(size)
     if size == 1 then return Snail.profile end
     local p = profiles[size]
@@ -86,6 +87,7 @@ end
 Snail.BUCKETS = 8
 Snail.BUCKET_GENE = 'size'
 local navs = {}
+Snail.navs = navs -- (so does this one)
 function Snail.nav_profile(genome)
     local k, lo, hi = Genome.bucket('snail', 'size', genome and genome.size or 1, Snail.BUCKETS)
     if navs[k] then return navs[k] end

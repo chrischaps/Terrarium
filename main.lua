@@ -14,6 +14,9 @@
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
+--   love . --fresh           a new jar, whose book is kept in place of the last (kept as jar.book.old)
+--   lovec . --keep <sec> <file>   run <sec> of jar, write its book to <file>, run 60 s more, print the hash
+--   lovec . --resume <file>  read the jar's book from <file>, run 60 s, print the hash (the same)
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
 --   love . --script scripts/lineup.lua   run a capture script: offscreen, frame-exact stills
@@ -51,6 +54,8 @@ local Genome = require('genome')
 local Synth = require('core.synth')
 local Screen = require('core.screen')
 local Touch = require('core.touch')
+local Book = require('book')
+local log = require('core.log')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history
@@ -67,6 +72,8 @@ local capture -- --script: {co = coroutine, last = canvas}
 local scriptApi -- defined below love.load; forward-declared so load can see it
 local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
 local touch = Touch.new() -- a finger on the frame's glass
+local keeping -- the jar's book (#30) is kept: read at load, written now and then and at the end
+local lastKept -- the jar's clock when its book was last written
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -86,12 +93,8 @@ end
 -- minds sleep and wake by them. `level` is the jar's room unless a capture
 -- script brings its own. Who lives in it is the seed's cast (#74), or `cast`,
 -- or --cast's.
-local function openJar(seed, hour, day, level, cast)
-    rng.seed(seed)
-    Scape.init(rng.scape)
-    Glass.init(rng.scape)
-    local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day,
-        genomes = args.genomes, cast = cast or args.cast, seed = seed })
+-- Everything around `w` that's composed from its seed, after the World
+local function compose(w)
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
@@ -106,6 +109,15 @@ local function openJar(seed, hour, day, level, cast)
     w.events:on(function(ev)
         if ev.kind == 'returned' then lantern:forget(ev.index) end
     end)
+end
+
+local function openJar(seed, hour, day, level, cast)
+    rng.seed(seed)
+    Scape.init(rng.scape)
+    Glass.init(rng.scape)
+    local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day,
+        genomes = args.genomes, cast = cast or args.cast, seed = seed })
+    compose(w)
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
     local homes = World.residents(level or room, w.cast)
@@ -114,6 +126,41 @@ local function openJar(seed, hour, day, level, cast)
         w:lay(Genome.random(r.key, rng.sim), r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
     end
     return w
+end
+
+-- Terrarium: a jar read back from its book (#30). Its seed composes the room
+-- around it again, the scape stream drawn in the same order as openJar draws
+-- it (the World draws none), and then its flora and streams are as they were.
+-- Returns the World and whether it hashes as it did when it was written.
+local function resumeJar(book)
+    rng.seed(book.seed)
+    Scape.init(rng.scape)
+    Glass.init(rng.scape)
+    local w = book.world
+    compose(w)
+    local same, hash = Book.resume(book, { flora = Plants, motes = Motes })
+    startHour, daySeconds = w.start_hour, w:day_length()
+    local extra = book.extra or {}
+    if extra.follow and w.creatures[extra.follow] then lantern.who = extra.follow end
+    return w, same, hash
+end
+
+-- The jar's day and hour, for the log: "day 3, 14:05"
+local function when(w)
+    local h = w:hour()
+    return string.format('day %d, %02d:%02d', math.floor(w.time / w:day_length()) + 1, math.floor(h), math.floor(h % 1 * 60))
+end
+
+-- Write the jar's book, with who the lantern follows beside it
+local function keepBook(why)
+    local took, size = Book.save(world, { flora = Plants, motes = Motes }, { follow = lantern.who })
+    lastKept = world.time
+    if took then
+        log.info('book', '%s: %s, %d creatures, %.0f KB in %.0f ms', why, when(world), #world.creatures,
+            size / 1024, took * 1000)
+    else
+        log.info('book', 'not written (%s): %s', why, tostring(size))
+    end
 end
 
 -- The stones and plants the jar was composed with, back to front
@@ -137,7 +184,8 @@ function love.load()
         args.cast = cast
     end
     if args.selftest then
-        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast)
+        local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast,
+            resumeJar)
         if err then print('[selftest] ' .. err) end
         love.event.quit(ok and 0 or (err and 2 or 1))
         return
@@ -157,10 +205,34 @@ function love.load()
         return
     end
 
+    if args.keep or args.resume then
+        -- --keep / --resume: the book across two processes, as CI checks it (#30)
+        local same, hash = dev.keep(openJar, resumeJar, args, SEED, STEP, step)
+        print('hash ' .. hash)
+        love.event.quit(same and 0 or 1)
+        return
+    end
+
     startHour = DayCycle.parseHour(args.hour) or (args.snap and DayCycle.presets.midday) or DayCycle.clockHour()
     daySeconds = args.day or C.DAY_SECONDS
 
-    world = openJar(args.seed or SEED, startHour, daySeconds)
+    -- Terrarium: the jar remembers (#30). Watched live, its book is read back
+    -- and it goes on where it was. A run that asks for a particular jar
+    -- (--seed, --cast, --hour, ...) leaves the book alone, unless it's --fresh.
+    keeping = dev.keeps_book(args)
+    if keeping and not args.fresh then
+        local book, from = Book.open()
+        if book then
+            local same, hash
+            world, same, hash = resumeJar(book)
+            log.info('book', 'resumed from %s: %s, %d creatures, hash %s%s', from, when(world), #world.creatures, hash,
+                same and ' (as it was written)' or (', written as ' .. tostring(book.hash)))
+        else
+            log.info('book', 'a new jar (%s)', from)
+        end
+    end
+    world = world or openJar(args.seed or SEED, startHour, daySeconds)
+    lastKept = world.time
     furnish()
     if not (args.snap or args.script) then
         -- it hears what the World says happened, after each step
@@ -260,6 +332,7 @@ function love.update(dt)
     end
     lantern:update(dt, world)
     if synth then synth:update(dt, world, lantern:following(world)) end
+    if keeping and world.time - lastKept >= Book.EVERY then keepBook('kept') end
 
     -- A finger held still on the frame's glass drops a pinch of food there
     local held, hx, hy = touch:update(dt)
@@ -617,8 +690,9 @@ local function saveThumb(file)
 end
 
 -- Every way out comes through here: Escape, closing the window, and the SIGTERM
--- Easel sends (SDL turns it into a quit). When the book (#30) lands, it's saved here.
+-- Easel sends (SDL turns it into a quit). The jar's book (#30) is written here.
 function love.quit()
+    if keeping and world and not capture then keepBook('closed') end
     local easel = os.getenv('EASEL_DATA')
     if easel and easel ~= '' and world and not capture and love.window.isOpen() then
         saveThumb(easel .. '/thumb.png')

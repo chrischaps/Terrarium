@@ -87,6 +87,7 @@ NavGraph.JUMP_WORK, NavGraph.NODE_WORK = 150, 80
 
 local Builder = {}
 Builder.__index = Builder
+NavGraph.Builder = Builder -- (so the book, #30, knows one by name)
 
 function NavGraph.builder(level, profile, slice)
     local graph = blank(level, profile)
