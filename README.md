@@ -24,7 +24,7 @@ love .
 
 Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. Its `SHA256SUMS` says what the download should hash to.
 
-Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it.
+Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it. Tab changes how the jar is drawn (`--style <name>` opens it in one).
 
 A jar you leave keeps living. `love . --away 2d` opens one that was left two days ago: while the glass is fogged, the days it missed go by as light and are counted in the mist, and then it clears on the jar as it is now. A week is the most it lives through.
 

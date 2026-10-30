@@ -26,6 +26,7 @@
 -- so the jar can be stepped COARSE seconds at a time, and a month of it run
 -- in a minute and a half.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Level = require('jar.level')
 local NavGraph = require('nav.navgraph')
 local Controller = require('nav.controller')
@@ -405,7 +406,7 @@ local function nest(graph, x, y)
     local best, best_d
     for _, n in ipairs(graph.nodes) do
         if n.kind == 'top' and n.solid.moss then
-            local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+            local d = sq(n.x - x) + sq(n.y - y)
             if not best_d or d < best_d then best, best_d = n, d end
         end
     end

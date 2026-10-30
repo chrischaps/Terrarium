@@ -26,6 +26,7 @@
 -- they rise. Asleep it sits low on the moss with its legs tucked and its
 -- antennae laid back, and dying it curls on its side.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Base = require('bodies.base')
 local Skin = require('bodies.skin')
 local fabrik = require('bodies.fabrik')
@@ -354,7 +355,7 @@ function Springtail:update(dt, level, ctx)
     for _ = 1, 2 do
         for i = 1, 2 do
             local a, b = pts[i], pts[i + 1]
-            local rest = sqrt((pose[i + 1][1] - pose[i][1]) ^ 2 + (pose[i + 1][2] - pose[i][2]) ^ 2)
+            local rest = sqrt(sq(pose[i + 1][1] - pose[i][1]) + sq(pose[i + 1][2] - pose[i][2]))
             local ex, ey = b.x - a.x, b.y - a.y
             local d = sqrt(ex * ex + ey * ey)
             if d > 1e-5 then
@@ -696,8 +697,8 @@ function Springtail.health(c, m, dt)
     local pose, torn = c:pose(), 0
     for i = 1, 2 do
         local a, b = c.points[i], c.points[i + 1]
-        local rest = sqrt((pose[i + 1][1] - pose[i][1]) ^ 2 + (pose[i + 1][2] - pose[i][2]) ^ 2)
-        local d = sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
+        local rest = sqrt(sq(pose[i + 1][1] - pose[i][1]) + sq(pose[i + 1][2] - pose[i][2]))
+        local d = sqrt(sq(b.x - a.x) + sq(b.y - a.y))
         torn = max(torn, abs(d - rest) / rest)
     end
     m.torn = max(m.torn or 0, torn)
@@ -707,7 +708,7 @@ function Springtail.health(c, m, dt)
             if not leg.stepping then
                 planted = planted + 1
                 local tip = leg.chain.joints[3]
-                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 1 or not leg.grounded then bad = bad + 1 end
+                if sq(tip.x - leg.foot.x) + sq(tip.y - leg.foot.y) > 1 or not leg.grounded then bad = bad + 1 end
             end
         end
     end
