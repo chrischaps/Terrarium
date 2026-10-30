@@ -13,8 +13,9 @@
 # 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
 #    order, a table address, the wall clock.
-# 5. With $WINDOW set, a jar opened in a real window against one opened with
-#    none. They must hash the same, because rendering never touches the sim.
+# 5. With $WINDOW set, a jar opened in a real window and drawn as it runs, in
+#    each style (#94), against one opened with none. They must hash the same,
+#    because rendering never touches the sim.
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
@@ -55,15 +56,17 @@ else
 fi
 
 if [ -n "${WINDOW:-}" ]; then
-    echo "== a jar in a window against a jar with none"
-    w=$(hash_of $WINDOW "$LOVE" . --replay 60 --window)
+    echo "== a jar watched in a window, in every style, against a jar with none"
     h=$(hash_of "$LOVE" . --replay 60)
-    if [ -n "$w" ] && [ "$w" = "$h" ]; then
-        echo "window: windowed and headless both hash $w"
-    else
-        echo "window: FAIL rendering changed the jar ('$w' windowed vs '$h' headless)"
-        failed=1
-    fi
+    for style in $("$LOVE" . --styles | tr -d '\r'); do
+        w=$(hash_of $WINDOW "$LOVE" . --replay 60 --window --style "$style")
+        if [ -n "$w" ] && [ "$w" = "$h" ]; then
+            echo "window: watched in $style and unwatched both hash $w"
+        else
+            echo "window: FAIL watching in $style changed the jar ('$w' watched vs '$h' headless)"
+            failed=1
+        fi
+    done
 fi
 
 [ "$failed" = 0 ] && echo "ci: all green"
