@@ -10,6 +10,8 @@
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   right-click              drop a pinch of food into the jar there (a few a day)
 --   m                        hush the jar, or listen again (--mute opens it hushed)
+--   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
+--   tab                      the next style
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
@@ -49,6 +51,7 @@ local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
+local Styles = require('jar.styles')
 local Screen = require('core.screen')
 local Touch = require('core.touch')
 
@@ -56,6 +59,9 @@ local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this
 local SEED = 20261018 -- a jar is its seed plus its history
 
 local args = dev.parse(arg or {})
+-- --interpret: LuaJIT's compiler off, so tests/ci.sh can check a jar run
+-- interpreted hashes the same as a compiled one (core/fmath.lua)
+if args.interpret then jit.off() end
 local world
 local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
@@ -65,6 +71,9 @@ local synth -- the jar heard through its glass (#28), only while you watch it li
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
 local scriptApi -- defined below love.load; forward-declared so load can see it
+local watchReplay -- likewise: --replay in a window draws what it runs
+local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
+local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
 local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
 local touch = Touch.new() -- a finger on the frame's glass
 
@@ -136,6 +145,17 @@ function love.load()
         end
         args.cast = cast
     end
+    if args.styles then
+        -- --styles: the looks there are, one a line (tests/ci.sh watches the jar in each)
+        print(table.concat(Styles.names(), '\n'))
+        love.event.quit(0)
+        return
+    end
+    if not Styles.get(style) then
+        print('[style] no style ' .. style .. '; there are ' .. table.concat(Styles.names(), ', '))
+        love.event.quit(2)
+        return
+    end
     if args.selftest then
         local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast)
         if err then print('[selftest] ' .. err) end
@@ -150,8 +170,10 @@ function love.load()
 
     Render.init()
     if args.replay then
-        -- open the jar twice and step both for <sec>; print the hash
-        local same, hash = dev.replay(openJar, args.seed or SEED, args.replay, STEP, step)
+        -- open the jar twice and step both for <sec>; print the hash. In a
+        -- window, both are drawn as they go, in the style, which must change nothing
+        local watch = not headless.active() and watchReplay or nil
+        local same, hash = dev.replay(openJar, args.seed or SEED, args.replay, STEP, step, watch)
         print('hash ' .. hash)
         love.event.quit(same and 0 or 1)
         return
@@ -391,17 +413,21 @@ local function drawScene(light, plane)
     love.graphics.setCanvas()
 end
 
--- The front glass bends the view a little at its edges; the room vignettes.
--- A capture script's plate brings its own canvas, size and clock, and has no
--- glass in front of it. A `fit` (core/screen.lua) draws the jar's frame on a
--- screen of another shape.
-local function composite(scene, w, h, time, fit)
+-- The finished frame in the style (#94), then the front glass bends the view
+-- a little at its edges and the room vignettes. Every frame goes through
+-- here: the window's, --snap's, a capture script's and the frame's thumb. A
+-- plate brings its own canvas, size and clock, and has no glass in front of
+-- it. A `fit` (core/screen.lua) draws the jar's frame on a screen of another
+-- shape.
+local function composite(plate, w, h, time, fit)
+    time = time or love.timer.getTime()
+    local frame = Styles.apply(style, plate or Render.canvas("scene"), time)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
     if fit then Screen.push(fit) end
     if sh then
         love.graphics.setShader(sh)
-        local rect = scene and { 0, 0, 0, 0 } or { Glass.frontRect() }
+        local rect = plate and { 0, 0, 0, 0 } or { Glass.frontRect() }
         if fit then
             -- the shader finds the glass in the screen's pixels
             for i = 1, 4 do rect[i] = rect[i] * fit.k + (i % 2 == 1 and fit.x or fit.y) end
@@ -410,12 +436,27 @@ local function composite(scene, w, h, time, fit)
         sh:send("aberration", 0.012)
         sh:send("vignette", 0.40)
         sh:send("grain", 0.010)
-        sh:send("time", (time or love.timer.getTime()) % 1000)
+        sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
     end
-    love.graphics.draw(scene or Render.canvas("scene"))
+    love.graphics.draw(frame)
     love.graphics.setShader()
     if fit then love.graphics.pop() end
+end
+
+-- --replay in a window: each run's jar drawn every WATCH steps, the way
+-- love.draw draws it, in the style. Watching a jar must change nothing in it.
+local WATCH = 30
+function watchReplay(w, s)
+    if s % WATCH ~= 0 then return end
+    if world ~= w then
+        -- (dev.replay opens its jars at midday with a full-length day)
+        world, accumulator = w, 0
+        startHour, daySeconds = DayCycle.presets.midday, C.DAY_SECONDS
+        furnish()
+    end
+    drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, w.time, daySeconds)))
+    composite(nil, nil, nil, w.time)
 end
 
 -- The API a --script capture file drives (from Character's main.lua). Time
@@ -441,6 +482,14 @@ function scriptApi()
         furnish()
         accumulator = 0
         return world
+    end
+
+    -- Render later frames in style `name` (#94; --style's, else none, to
+    -- begin with). Returns the one it was.
+    function api.style(name)
+        assert(Styles.get(name), 'no style ' .. tostring(name))
+        style, name = name, style
+        return name
     end
 
     -- Advance the jar by `seconds` of fixed steps
@@ -537,6 +586,19 @@ function love.draw()
     composite(nil, nil, nil, nil, view)
     touch:draw()
     if bench and bench.warm <= 0 then bench.draw[#bench.draw + 1] = love.timer.getTime() - t0 end
+    if shown then
+        -- The style's name, low in the corner, held a moment and let go
+        local a = math.min(1, 2 - (love.timer.getTime() - shown.at) / 0.9)
+        if a <= 0 then
+            shown = nil
+        else
+            shownFont = shownFont or love.graphics.newFont(13)
+            love.graphics.setFont(shownFont)
+            love.graphics.setColor(0.93, 0.90, 0.82, 0.75 * a)
+            love.graphics.print(shown.name, 28, love.graphics.getHeight() - 44)
+            love.graphics.setColor(1, 1, 1, 1)
+        end
+    end
 
     if snapFrames then
         snapFrames = snapFrames + 1
@@ -594,6 +656,10 @@ function love.keypressed(key)
     if args.frame then return end -- the frame has no keys; Easel ends it with SIGTERM
     if key == "escape" then love.event.quit() end
     if key == "m" and synth then synth:mute(not synth.muted) end
+    if key == "tab" and not capture then
+        style = Styles.after(style)
+        shown = { name = style, at = love.timer.getTime() }
+    end
 end
 
 -- Easel's card for the jar (#90): the frame as it stands, at 640 x 360, cropped
