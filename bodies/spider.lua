@@ -26,6 +26,7 @@
 -- Terrarium: a hatchling (#23) has all its legs but they're short, and it's
 -- pale; its legs lengthen in its sleep (Spider:grow).
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Base = require('bodies.base')
 local Climb = require('bodies.climb')
 local Skin = require('bodies.skin')
@@ -477,13 +478,13 @@ function Spider:update(dt, level, ctx)
                 local ddx, ddy = sx - leg.foot.x, sy - leg.foot.y
                 local behind = sqrt(ddx * ddx + ddy * ddy) / self.step_dist
                 local hx, hy = self:hip(leg.def)
-                local stretch = sqrt((leg.foot.x - hx) ^ 2 + (leg.foot.y - hy) ^ 2) / len
+                local stretch = sqrt(sq(leg.foot.x - hx) + sq(leg.foot.y - hy)) / len
                 leg.urgent = stretch > 1
                 -- (and how far it will be one step from now, if it waits on
                 -- the other group: the hip goes on ahead)
                 local ahead = self.speed * step_time
                 hx, hy = hx + ftx * ahead, hy + fty * ahead
-                local soon = sqrt((leg.foot.x - hx) ^ 2 + (leg.foot.y - hy) ^ 2) / len
+                local soon = sqrt(sq(leg.foot.x - hx) + sq(leg.foot.y - hy)) / len
                 local g = leg.def.group
                 need[g] = max(need[g], behind, soon > 0.97 and 1.01 or 0)
                 if stretch > 0.97 then strained = true end
@@ -499,7 +500,7 @@ function Spider:update(dt, level, ctx)
             if leg.def.group == go and not leg.stepping then
                 local ddx, ddy = leg.rx - leg.foot.x, leg.ry - leg.foot.y
                 -- (a foot already where it wants to be stays put)
-                if ddx * ddx + ddy * ddy > (self.step_dist * 0.25) ^ 2 then leg.lift = true end
+                if ddx * ddx + ddy * ddy > sq(self.step_dist * 0.25) then leg.lift = true end
             end
         end
         -- A foot the leg can no longer reach lifts out of turn, but never
@@ -851,7 +852,7 @@ function Spider.health(c, m, dt)
             if not leg.stepping and not (c.tap and c.legs[c.tap.leg] == leg) then
                 planted = planted + 1
                 local tip = leg.chain.joints[#leg.chain.joints]
-                if (tip.x - leg.foot.x) ^ 2 + (tip.y - leg.foot.y) ^ 2 > 4 or not leg.grounded then bad = bad + 1 end
+                if sq(tip.x - leg.foot.x) + sq(tip.y - leg.foot.y) > 4 or not leg.grounded then bad = bad + 1 end
             end
         end
     end

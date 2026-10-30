@@ -13,9 +13,12 @@
 #    its genes, day by day, to month_<seed>.csv in the save directory.
 # 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
-#    order, a table address, the wall clock.
-# 5. With $WINDOW set, a jar opened in a real window against one opened with
-#    none. They must hash the same, because rendering never touches the sim.
+#    order, a table address, the wall clock. Then once more with LuaJIT's
+#    compiler off (--interpret), which must agree: a sum the interpreter and
+#    the compiler work out differently (x ^ 2, #94) makes processes disagree.
+# 5. With $WINDOW set, a jar opened in a real window and drawn as it runs, in
+#    each style (#94), against one opened with none. They must hash the same,
+#    because rendering never touches the sim.
 #    And the Pi frame's mode (#90), started and stopped the way its launcher
 #    does: --frame, then SIGTERM, which must quit through love.quit and leave
 #    the launcher's thumb in $EASEL_DATA.
@@ -58,17 +61,26 @@ else
     echo "replay: FAIL processes disagree ('$a' vs '$b')"
     failed=1
 fi
+i=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR" --interpret)
+if [ -n "$i" ] && [ "$i" = "$a" ]; then
+    echo "replay: interpreted, it hashes $i too"
+else
+    echo "replay: FAIL interpreted ('$i') and compiled ('$a') disagree (core/fmath.lua)"
+    failed=1
+fi
 
 if [ -n "${WINDOW:-}" ]; then
-    echo "== a jar in a window against a jar with none"
-    w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window)
+    echo "== a jar watched in a window, in every style, against a jar with none"
     h=$(hash_of "$LOVE" "$GAME" --replay 60)
-    if [ -n "$w" ] && [ "$w" = "$h" ]; then
-        echo "window: windowed and headless both hash $w"
-    else
-        echo "window: FAIL rendering changed the jar ('$w' windowed vs '$h' headless)"
-        failed=1
-    fi
+    for style in $("$LOVE" "$GAME" --styles | tr -d '\r'); do
+        w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --style "$style")
+        if [ -n "$w" ] && [ "$w" = "$h" ]; then
+            echo "window: watched in $style and unwatched both hash $w"
+        else
+            echo "window: FAIL watching in $style changed the jar ('$w' watched vs '$h' headless)"
+            failed=1
+        fi
+    done
 
     echo "== the frame, ended as Easel ends it (#90)"
     easel=$(mktemp -d) || exit 1
