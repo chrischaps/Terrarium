@@ -32,7 +32,8 @@ local SWAY = {4, 10}    -- how far it slips sideways as it turns over
 Food.KEEP = 240         -- seconds a crumb lies uneaten before it's gone into the moss
 local SOFTEN = 40       -- the last of those, it fades
 
-local sin, cos, abs, min, max, floor, exp = math.sin, math.cos, math.abs, math.min, math.max, math.floor, math.exp
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sin, cos, abs, min, max, floor, exp = fmath.sin, fmath.cos, math.abs, math.min, math.max, math.floor, fmath.exp
 
 function Food.new(level)
     return setmetatable({

@@ -36,7 +36,8 @@ local Skin = require('bodies.skin')
 local Worm = {}
 Worm.__index = Worm
 
-local sqrt, sin, cos, abs, min, max = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sqrt, sin, cos, abs, min, max = math.sqrt, fmath.sin, fmath.cos, math.abs, math.min, math.max
 local G = 980
 
 Worm.profile = {

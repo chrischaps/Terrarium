@@ -45,8 +45,9 @@ local DayCycle = require('jar.daycycle')
 local Snail = {}
 Snail.__index = Snail
 
-local sqrt, sin, cos, abs, min, max, pi, atan2, exp, log = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max,
-    math.pi, math.atan2, math.exp, math.log
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sqrt, sin, cos, abs, min, max, pi, atan2, exp, log = math.sqrt, fmath.sin, fmath.cos, math.abs, math.min, math.max,
+    math.pi, fmath.atan2, fmath.exp, fmath.log
 local floor = math.floor
 local TAU = 2 * pi
 

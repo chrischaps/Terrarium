@@ -34,7 +34,8 @@ local Genome = require('genome')
 local Springtail = {}
 Springtail.__index = Springtail
 
-local sqrt, sin, cos, abs, min, max, pi, atan2 = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max, math.pi, math.atan2
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sqrt, sin, cos, abs, min, max, pi, atan2 = math.sqrt, fmath.sin, fmath.cos, math.abs, math.min, math.max, math.pi, fmath.atan2
 local floor, ceil = math.floor, math.ceil
 local TAU = 2 * pi
 

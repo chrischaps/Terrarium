@@ -33,7 +33,8 @@ local RICH_GROW = 3     -- and how much faster it grows
 local RICH_FOR = 150000 -- seconds of full lamp it takes to use up (about three days of lamp)
 local REACH = {18, 4} -- a body this far above a top (or this far into it) is on it
 
-local sqrt, exp, sin, min, max, floor, abs = math.sqrt, math.exp, math.sin, math.min, math.max, math.floor, math.abs
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sqrt, exp, sin, min, max, floor, abs = math.sqrt, fmath.exp, fmath.sin, math.min, math.max, math.floor, math.abs
 
 -- A fixed pseudo-random number in [0, 1) for cell i: the moss's own variety,
 -- the same every run, without drawing from any stream

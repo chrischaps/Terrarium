@@ -33,7 +33,8 @@ local rng = require('core.rng')
 local Blob = {}
 Blob.__index = Blob
 
-local sqrt, sin, cos, abs, min, max, pi = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max, math.pi
+local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
+local sqrt, sin, cos, abs, min, max, pi = math.sqrt, fmath.sin, fmath.cos, math.abs, math.min, math.max, math.pi
 
 Blob.profile = {
     name = 'blob',
