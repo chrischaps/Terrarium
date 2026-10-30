@@ -3,6 +3,7 @@
 #
 #   LOVE=lovec sh tests/ci.sh                          (from the repo root)
 #   LOVE=... WINDOW="xvfb-run -a" sh tests/ci.sh       (also check a windowed jar)
+#   GAME=dist/terrarium.love sh tests/ci.sh            (check the packed game, #91)
 #
 # 1. The randomness lint.
 # 2. The whole self-test, headless, but for the month.
@@ -18,6 +19,7 @@
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
+GAME=${GAME:-.} # what LÖVE runs; the lint always reads the source
 SECONDS_OF_JAR=${SECONDS_OF_JAR:-300}
 MONTH_SEEDS=${MONTH_SEEDS:-"20261018 1 2 3 4 5 6 7 8 9"} # (dev.lua's MONTH_SEEDS)
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
@@ -31,12 +33,12 @@ echo "== randomness lint"
 sh tests/check_random.sh || failed=1
 
 echo "== self-test"
-"$LOVE" . --selftest --skip month || failed=1
+"$LOVE" "$GAME" --selftest --skip month || failed=1
 
 echo "== a month in the jar, $JOBS seeds at a time"
 logs=$(mktemp -d) || exit 1
 printf '%s\n' $MONTH_SEEDS | xargs -P "$JOBS" -I{} sh -c \
-    '"$1" . --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs"
+    '"$1" "$4" --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs" "$GAME"
 for seed in $MONTH_SEEDS; do grep -v '^\[nav\]' "$logs/$seed.log"; done
 if [ -s "$logs/failed" ]; then
     echo "month: FAIL seeds $(tr '\n' ' ' < "$logs/failed")"
@@ -45,8 +47,8 @@ fi
 rm -rf "$logs"
 
 echo "== replay across processes ($SECONDS_OF_JAR s of jar)"
-a=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR")
-b=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR")
+a=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR")
+b=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR")
 if [ -n "$a" ] && [ "$a" = "$b" ]; then
     echo "replay: both processes hash $a"
 else
@@ -56,8 +58,8 @@ fi
 
 if [ -n "${WINDOW:-}" ]; then
     echo "== a jar in a window against a jar with none"
-    w=$(hash_of $WINDOW "$LOVE" . --replay 60 --window)
-    h=$(hash_of "$LOVE" . --replay 60)
+    w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window)
+    h=$(hash_of "$LOVE" "$GAME" --replay 60)
     if [ -n "$w" ] && [ "$w" = "$h" ]; then
         echo "window: windowed and headless both hash $w"
     else
