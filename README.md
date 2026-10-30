@@ -24,7 +24,7 @@ love .
 
 Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. On Windows, a release's `terrarium-win64.zip` needs no LÖVE: unzip it and run `Terrarium/Terrarium.exe`. Its `SHA256SUMS` says what each download should hash to, and [CHANGELOG.md](CHANGELOG.md) says what's in it.
 
-Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it.
+Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it. Tab changes how the jar is drawn (`--style <name>` opens it in one).
 
 On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
 

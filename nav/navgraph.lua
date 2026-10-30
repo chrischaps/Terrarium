@@ -34,6 +34,7 @@
 -- Terrarium: jumps and falls carry `dare`, how much of the body they ask for
 -- (1 is all it has), so a timid mind can leave the big ones out (mind.lua).
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local ballistics = require('nav.ballistics')
 
 local NavGraph = {}
@@ -356,7 +357,7 @@ function NavGraph:build_surface_nodes()
         local L, T, R, B = s.x, s.y, s.x + s.w, s.y + s.h
         local ring = {}
         local function face(x0, y0, x1, y1, nx, ny)
-            local len = sqrt((x1 - x0) ^ 2 + (y1 - y0) ^ 2)
+            local len = sqrt(sq(x1 - x0) + sq(y1 - y0))
             local count = math.max(1, math.ceil(len / FACE_SPACING))
             for i = 1, count - 1 do
                 local t = i / count
@@ -511,7 +512,7 @@ end
 function NavGraph:node_near(x, y, solid, nx, ny)
     local best, best_d = nil, math.huge
     for _, n in ipairs(self.nodes) do
-        local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+        local d = sq(n.x - x) + sq(n.y - y)
         if solid and n.solid ~= solid then d = d + 1e6 end
         if nx and (n.nx * nx + n.ny * ny) < 0.5 then d = d + 4000 end
         if d < best_d then best, best_d = n, d end
@@ -528,7 +529,7 @@ function NavGraph:snap_goal(x, y)
         -- even if the click itself landed a little inside the stone
         local best, best_d = nil, 60 * 60
         for _, n in ipairs(self.nodes) do
-            local d = (n.x - x) ^ 2 + (n.y - y) ^ 2
+            local d = sq(n.x - x) + sq(n.y - y)
             if d < best_d then best, best_d = n, d end
         end
         if best then return best end
