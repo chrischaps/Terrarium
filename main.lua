@@ -12,6 +12,9 @@
 --   m                        hush the jar, or listen again (--mute opens it hushed)
 --   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
 --   tab                      the next style
+--   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
+--                            follows, a long press drops food, and SIGTERM quits
+--                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
@@ -49,6 +52,8 @@ local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
 local Styles = require('jar.styles')
+local Screen = require('core.screen')
+local Touch = require('core.touch')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
 local SEED = 20261018 -- a jar is its seed plus its history
@@ -69,6 +74,8 @@ local scriptApi -- defined below love.load; forward-declared so load can see it
 local watchReplay -- likewise: --replay in a window draws what it runs
 local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
 local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
+local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
+local touch = Touch.new() -- a finger on the frame's glass
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -192,6 +199,13 @@ function love.load()
         love.window.setVSync(0)
         bench = { warm = 3, times = {}, update = {}, draw = {} }
     end
+    if not headless.active() then love.resize(love.graphics.getDimensions()) end
+    if args.frame then
+        love.mouse.setVisible(false)
+        print(string.format('[frame] %dx%d, the jar at %.2f from (%d, %d)', love.graphics.getWidth(),
+            love.graphics.getHeight(), view.k, view.x, view.y))
+        io.stdout:flush() -- (a launcher reading this knows the jar is up)
+    end
     if args.follow then
         for i, c in ipairs(world.creatures) do
             if c.key == args.follow then lantern.who = i end
@@ -234,6 +248,19 @@ local function benchFrame(dt, took)
     end
 end
 
+-- Follow whoever is at a point on the screen with the lantern, or let go
+local function followAt(x, y)
+    local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
+    if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
+end
+
+-- Drop a pinch of food in at a point on the screen, if it's over the jar and
+-- there's one left to give (#25)
+local function pinchAt(x, y)
+    local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
+    return lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B and world:pinch(lx)
+end
+
 function love.update(dt)
     if capture then
         local ok, err = coroutine.resume(capture.co)
@@ -256,9 +283,13 @@ function love.update(dt)
     lantern:update(dt, world)
     if synth then synth:update(dt, world, lantern:following(world)) end
 
+    -- A finger held still on the frame's glass drops a pinch of food there
+    local held, hx, hy = touch:update(dt)
+    if held == 'hold' and not pinchAt(hx, hy) then touch:empty() end
+
     -- A hand over anyone you could follow
-    if love.mouse.isCursorSupported() then
-        local lx, ly = Tank.toLevel(love.mouse.getPosition())
+    if love.mouse.isCursorSupported() and not args.frame then
+        local lx, ly = Tank.toLevel(Screen.toView(view, love.mouse.getPosition()))
         local over = Lantern.creatureAt(world, lx, ly)
         love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
@@ -376,23 +407,32 @@ local function drawScene(light, plane)
     Motes.drawFront(light)
     Scape.drawFront(light)
     Condensation.draw(light) -- on the inside of the glass, under its dust
-    Glass.drawFront(light, love.mouse.getX())
+    -- (the glass shifts as the cursor does; the frame has none, so it's still)
+    Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
     love.graphics.setCanvas()
 end
 
 -- The finished frame in the style (#94), then the front glass bends the view
 -- a little at its edges and the room vignettes. Every frame goes through
--- here: the window's, --snap's and a capture script's. A plate brings its own
--- canvas, size and clock, and has no glass in front of it.
-local function composite(plate, w, h, time)
+-- here: the window's, --snap's, a capture script's and the frame's thumb. A
+-- plate brings its own canvas, size and clock, and has no glass in front of
+-- it. A `fit` (core/screen.lua) draws the jar's frame on a screen of another
+-- shape.
+local function composite(plate, w, h, time, fit)
     time = time or love.timer.getTime()
     local frame = Styles.apply(style, plate or Render.canvas("scene"), time)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
+    if fit then Screen.push(fit) end
     if sh then
         love.graphics.setShader(sh)
-        sh:send("glassRect", plate and { 0, 0, 0, 0 } or { Glass.frontRect() })
+        local rect = plate and { 0, 0, 0, 0 } or { Glass.frontRect() }
+        if fit then
+            -- the shader finds the glass in the screen's pixels
+            for i = 1, 4 do rect[i] = rect[i] * fit.k + (i % 2 == 1 and fit.x or fit.y) end
+        end
+        sh:send("glassRect", rect)
         sh:send("aberration", 0.012)
         sh:send("vignette", 0.40)
         sh:send("grain", 0.010)
@@ -401,6 +441,7 @@ local function composite(plate, w, h, time)
     end
     love.graphics.draw(frame)
     love.graphics.setShader()
+    if fit then love.graphics.pop() end
 end
 
 -- --replay in a window: each run's jar drawn every WATCH steps, the way
@@ -542,7 +583,8 @@ function love.draw()
     local t0 = bench and love.timer.getTime()
     -- Render reads the jar's clock; it never moves it
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
-    composite()
+    composite(nil, nil, nil, nil, view)
+    touch:draw()
     if bench and bench.warm <= 0 then bench.draw[#bench.draw + 1] = love.timer.getTime() - t0 end
     if shown then
         -- The style's name, low in the corner, held a moment and let go
@@ -570,23 +612,81 @@ function love.draw()
     end
 end
 
+function love.resize(w, h)
+    view = Screen.fit(w, h, C.W, C.H)
+end
+
 -- Click a creature to follow it with the lantern; click anywhere else to let
--- go. Right-click in the jar to drop in a pinch of food there (#25).
-function love.mousepressed(x, y, button)
-    if not world or capture then return end
-    local lx, ly = Tank.toLevel(x, y)
-    if button == 1 then
-        if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
-    elseif button == 2 and lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B then
-        world:pinch(lx)
+-- go. Right-click in the jar to drop in a pinch of food there (#25). On the
+-- frame, the left button is a finger too: a touchscreen may come as a pointer.
+function love.mousepressed(x, y, button, istouch)
+    if not world or capture or istouch then return end
+    if button == 1 and args.frame then
+        touch:press('mouse', x, y)
+    elseif button == 1 then
+        followAt(x, y)
+    elseif button == 2 then
+        pinchAt(x, y)
     end
 end
 
+function love.mousemoved(x, y, _, _, istouch)
+    if not istouch then touch:move('mouse', x, y) end
+end
+
+function love.mousereleased(x, y, button, istouch)
+    if button == 1 and not istouch and touch:release('mouse', x, y) == 'tap' then followAt(x, y) end
+end
+
+-- A tap follows, as a click does; a long press is a pinch (Touch:update)
+function love.touchpressed(id, x, y)
+    if world and not capture then touch:press(id, x, y) end
+end
+
+function love.touchmoved(id, x, y)
+    touch:move(id, x, y)
+end
+
+function love.touchreleased(id, x, y)
+    local tap, tx, ty = touch:release(id, x, y)
+    if tap then followAt(tx, ty) end
+end
+
 function love.keypressed(key)
+    if args.frame then return end -- the frame has no keys; Easel ends it with SIGTERM
     if key == "escape" then love.event.quit() end
     if key == "m" and synth then synth:mute(not synth.muted) end
     if key == "tab" and not capture then
         style = Styles.after(style)
         shown = { name = style, at = love.timer.getTime() }
+    end
+end
+
+-- Easel's card for the jar (#90): the frame as it stands, at 640 x 360, cropped
+-- the way the frame's own screen is
+local function saveThumb(file)
+    local w, h = 640, 360
+    local canvas = love.graphics.newCanvas(w, h)
+    drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0, 0, 0, 1)
+    composite(nil, nil, nil, world.time, Screen.fit(w, h, C.W, C.H))
+    love.graphics.setCanvas()
+    local out, err = io.open(file, 'wb')
+    if not out then
+        print('[frame] no thumb: ' .. tostring(err))
+        return
+    end
+    out:write(canvas:newImageData():encode('png'):getString())
+    out:close()
+    print('[frame] saved ' .. file)
+end
+
+-- Every way out comes through here: Escape, closing the window, and the SIGTERM
+-- Easel sends (SDL turns it into a quit). When the book (#30) lands, it's saved here.
+function love.quit()
+    local easel = os.getenv('EASEL_DATA')
+    if easel and easel ~= '' and world and not capture and love.window.isOpen() then
+        saveThumb(easel .. '/thumb.png')
     end
 end

@@ -3,6 +3,7 @@
 #
 #   LOVE=lovec sh tests/ci.sh                          (from the repo root)
 #   LOVE=... WINDOW="xvfb-run -a" sh tests/ci.sh       (also check a windowed jar)
+#   GAME=dist/terrarium.love sh tests/ci.sh            (check the packed game, #91)
 #
 # 1. The randomness lint.
 # 2. The whole self-test, headless, but for the month.
@@ -18,9 +19,13 @@
 # 5. With $WINDOW set, a jar opened in a real window and drawn as it runs, in
 #    each style (#94), against one opened with none. They must hash the same,
 #    because rendering never touches the sim.
+#    And the Pi frame's mode (#90), started and stopped the way its launcher
+#    does: --frame, then SIGTERM, which must quit through love.quit and leave
+#    the launcher's thumb in $EASEL_DATA.
 
 cd "$(dirname "$0")/.." || exit 1
 LOVE=${LOVE:-lovec}
+GAME=${GAME:-.} # what LÖVE runs; the lint always reads the source
 SECONDS_OF_JAR=${SECONDS_OF_JAR:-300}
 MONTH_SEEDS=${MONTH_SEEDS:-"20261018 1 2 3 4 5 6 7 8 9"} # (dev.lua's MONTH_SEEDS)
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
@@ -34,12 +39,12 @@ echo "== randomness lint"
 sh tests/check_random.sh || failed=1
 
 echo "== self-test"
-"$LOVE" . --selftest --skip month || failed=1
+"$LOVE" "$GAME" --selftest --skip month || failed=1
 
 echo "== a month in the jar, $JOBS seeds at a time"
 logs=$(mktemp -d) || exit 1
 printf '%s\n' $MONTH_SEEDS | xargs -P "$JOBS" -I{} sh -c \
-    '"$1" . --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs"
+    '"$1" "$4" --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs" "$GAME"
 for seed in $MONTH_SEEDS; do grep -v '^\[nav\]' "$logs/$seed.log"; done
 if [ -s "$logs/failed" ]; then
     echo "month: FAIL seeds $(tr '\n' ' ' < "$logs/failed")"
@@ -48,15 +53,15 @@ fi
 rm -rf "$logs"
 
 echo "== replay across processes ($SECONDS_OF_JAR s of jar)"
-a=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR")
-b=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR")
+a=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR")
+b=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR")
 if [ -n "$a" ] && [ "$a" = "$b" ]; then
     echo "replay: both processes hash $a"
 else
     echo "replay: FAIL processes disagree ('$a' vs '$b')"
     failed=1
 fi
-i=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR" --interpret)
+i=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR" --interpret)
 if [ -n "$i" ] && [ "$i" = "$a" ]; then
     echo "replay: interpreted, it hashes $i too"
 else
@@ -66,9 +71,9 @@ fi
 
 if [ -n "${WINDOW:-}" ]; then
     echo "== a jar watched in a window, in every style, against a jar with none"
-    h=$(hash_of "$LOVE" . --replay 60)
-    for style in $("$LOVE" . --styles | tr -d '\r'); do
-        w=$(hash_of $WINDOW "$LOVE" . --replay 60 --window --style "$style")
+    h=$(hash_of "$LOVE" "$GAME" --replay 60)
+    for style in $("$LOVE" "$GAME" --styles | tr -d '\r'); do
+        w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --style "$style")
         if [ -n "$w" ] && [ "$w" = "$h" ]; then
             echo "window: watched in $style and unwatched both hash $w"
         else
@@ -76,6 +81,26 @@ if [ -n "${WINDOW:-}" ]; then
             failed=1
         fi
     done
+
+    echo "== the frame, ended as Easel ends it (#90)"
+    easel=$(mktemp -d) || exit 1
+    EASEL_DATA="$easel" $WINDOW sh -c '
+        "$1" . --frame > "$2/log" 2>&1 &
+        pid=$!
+        i=0
+        until grep -q "^\[frame\] [0-9]" "$2/log" || [ $i -ge 240 ]; do sleep 0.5; i=$((i + 1)); done
+        sleep 3
+        kill -TERM $pid
+        wait $pid' sh "$LOVE" "$easel"
+    status=$?
+    cat "$easel/log"
+    if [ "$status" = 0 ] && head -c 4 "$easel/thumb.png" 2>/dev/null | grep -q PNG; then
+        echo "frame: SIGTERM quit cleanly and left Easel its thumb"
+    else
+        echo "frame: FAIL SIGTERM exited $status, thumb $(ls "$easel")"
+        failed=1
+    fi
+    rm -rf "$easel"
 fi
 
 [ "$failed" = 0 ] && echo "ci: all green"

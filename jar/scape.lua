@@ -507,6 +507,11 @@ end
 
 function Scape.getStones() return stones end
 
+--- Terrarium: the lamp hangs on its cord to just above the lid, which in a tall
+--- jar is near the top of the view. This is its shade's top; its lit rim is 58 below.
+function Scape.lampHang() return Tank.wy(C.GLASS_T - C.LID_THICK) - 76 end
+Scape.LAMP_RIM = 58
+
 --- The room and desk (drawn into the room layer, which is blurred)
 function Scape.drawRoom(light)
     local rm = light.room
@@ -540,9 +545,8 @@ function Scape.drawRoom(light)
     Render.drawBlob(sx, sy + 6, (C.GLASS_R - C.GLASS_L) * C.S * 0.62, 46)
 
     -- The lamp's pool of light, on the wall and on the desk around the jar
-    -- Terrarium: the lamp hangs on its cord to just above the lid, which in a
-    -- tall jar is near the top of the view
-    local hang = Tank.wy(C.GLASS_T - C.LID_THICK) - 76
+    local hang = Scape.lampHang()
+    local rim = hang + Scape.LAMP_RIM
     local l = light.lamp
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.10, l[2] * 0.10, l[3] * 0.10, 1)
@@ -555,10 +559,10 @@ function Scape.drawRoom(light)
     love.graphics.setColor(0.05 * rm[1], 0.045 * rm[2], 0.04 * rm[3], 1)
     love.graphics.setLineWidth(2)
     love.graphics.line(C.CX, -10, C.CX, hang)
-    love.graphics.polygon("fill", C.CX - 38, hang - 10, C.CX + 38, hang - 10, C.CX + 92, hang + 58, C.CX - 92, hang + 58)
+    love.graphics.polygon("fill", C.CX - 38, hang - 10, C.CX + 38, hang - 10, C.CX + 92, rim, C.CX - 92, rim)
     love.graphics.setBlendMode("add")
     love.graphics.setColor(l[1] * 0.9, l[2] * 0.9, l[3] * 0.9, 1)
-    love.graphics.ellipse("fill", C.CX, hang + 58, 88, 6)
+    love.graphics.ellipse("fill", C.CX, rim, 88, 6)
     love.graphics.setColor(l[1] * 0.35, l[2] * 0.35, l[3] * 0.35, 1)
     Render.drawBlob(C.CX, hang + 64, 220, 46)
     love.graphics.pop()

@@ -22,7 +22,11 @@ Install [LÖVE 11.5](https://love2d.org), then from the repo root:
 love .
 ```
 
+Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. Its `SHA256SUMS` says what the download should hash to.
+
 Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The jar is heard faintly through its glass, and M hushes it. Tab changes how the jar is drawn (`--style <name>` opens it in one).
+
+On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
 
 ## Milestones
 
