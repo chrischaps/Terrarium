@@ -83,6 +83,7 @@ local function hash(s)
     h = mul32(bit.bxor(h, bit.rshift(h, 13)), 0xc2b2ae35)
     return bit.bxor(h, bit.rshift(h, 16))
 end
+World.hash = hash -- (the book names the jar's own by it, #32)
 
 -- The kinds a jar in `level_data` can hold: each with a body and a home, in Genome.order
 function World.kinds(level_data)
@@ -459,7 +460,7 @@ function World:hatch()
         if ready then
             egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name, egg.young)
             local y = self.level.by_id[egg.solid].y
-            self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = y})
+            self.events:emit('hatched', {who = self.creatures[egg.who], egg = egg, x = egg.x, y = y})
             if egg.young then
                 self.shells[#self.shells + 1] = {key = egg.key, genome = egg.genome, x = egg.x, y = y, at = self.time}
             end

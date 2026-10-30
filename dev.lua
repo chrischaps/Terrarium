@@ -4,7 +4,7 @@
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
---                                         hatch, crowd, ranges, moss, audio, or all;
+--                                         hatch, crowd, ranges, moss, food, book, audio, or all;
 --                                         --seed <n> reseeds the day, month and others;
 --                                         --day <sec> shortens the month's days)
 --   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI runs the month apart)
@@ -1437,6 +1437,110 @@ test('food', function(j, results)
     seconds(w, Food.KEEP + 30)
     check(results, #w.food.crumbs == 0, 'food: %d crumbs still lying after %d s', #w.food.crumbs, Food.KEEP + 30)
     log.info('selftest', 'food         %d pinches a day, one back every %.0f s of a %d s day', Food.PINCHES, wait, DAY)
+end)
+
+-- Terrarium: 3c. The family book (#32), the gate. A coarse jar of 900-second
+-- days is left BOOK_DAYS with a book beside it, and another from the same
+-- seed without one, and they hash the same: the book only listens. Everyone
+-- who ever lived is in it once, in the order they came: the founders with the
+-- jar, every hatchling with the two who laid it, each parent with it among
+-- their children, and everyone gone with when, and how long they lived. The
+-- living are named apart. Shut at dawn on the third day, it says what came
+-- and went after, and nothing from before. And its words are words.
+local BOOK_DAYS = 6
+test('book', function(j, results)
+    local World, level_data = j.World, j.level_data
+    local DayCycle = require('jar.daycycle')
+    local Book = require('book')
+    local statehash = require('core.statehash')
+    local seed = j.seed or 20261018
+    local function open()
+        rng.seed(seed)
+        return World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY,
+            coarse = true})
+    end
+    local dt, steps = World.COARSE, math.floor(BOOK_DAYS * DAY / World.COARSE + 0.5)
+    -- (one jar after the other: they'd share rng.sim side by side)
+    local bare = open()
+    for _ = 1, steps do bare:step(dt) end
+    local unread = statehash.of(bare)
+    local w = open()
+    local book = Book.new(w, seed)
+    local founders = #w.creatures
+    local hatched, returned = {}, {}
+    w.events:on(function(ev)
+        if ev.kind == 'hatched' then hatched[#hatched + 1] = ev.who
+        elseif ev.kind == 'returned' then returned[#returned + 1] = ev.who end
+    end)
+    local shut = 2 * DAY - (DayCycle.presets.lampon - 6) / 24 * DAY -- (dawn on the third day)
+    local twins = 0
+    for _ = 1, steps do
+        w:step(dt)
+        if book.seen == 0 and w.time >= shut then book:close() end
+        local named = {}
+        for n in pairs(book.alive) do
+            local name = Book.named(book.entries[n])
+            if named[name] then twins = twins + 1 end
+            named[name] = true
+        end
+    end
+    local where = statehash.diverged(statehash.of(w), unread)
+    check(results, where == nil, 'book: a jar with a book went another way than one without, first in %s', tostring(where))
+
+    check(results, #book.entries == founders + #hatched, 'book: %d in the book, but %d came with the jar and %d hatched',
+        #book.entries, founders, #hatched)
+    check(results, #hatched > 0 and #returned > 0, 'book: %d hatched and %d went back to the moss in %d days',
+        #hatched, #returned, BOOK_DAYS)
+    for k = 1, founders do
+        check(results, book.entries[k] and book.entries[k].founder, 'book: page %d is not one who came with the jar', k)
+    end
+    for _, c in ipairs(hatched) do
+        local e = book:entry_of(c)
+        check(results, e and e.parents and #e.parents == 2, 'book: a hatchling has no page, or not two parents')
+        for _, p in ipairs(e and e.parents or {}) do
+            local listed = false
+            for _, n in ipairs(book.entries[p].children) do listed = listed or n == e.n end
+            check(results, listed, 'book: %s is not among %s\'s children', Book.named(e), Book.named(book.entries[p]))
+            check(results, book.entries[p].key == e.key and p < e.n, 'book: %s has a parent of another kind, or a younger one', Book.named(e))
+        end
+    end
+    for _, c in ipairs(returned) do
+        local e = book:entry_of(c)
+        check(results, e and e.gone and not book.alive[e.n], 'book: one who went back to the moss is still alive in the book')
+        check(results, e and book:lived(e) > 0.5, 'book: %s lived only %.2f days', e and Book.named(e) or '?', e and book:lived(e) or 0)
+    end
+    check(results, book:living() == #w.creatures, 'book: %d alive in the book, %d in the jar', book:living(), #w.creatures)
+    for i, c in ipairs(w.creatures) do
+        local e = book:entry_of(c)
+        check(results, e and not e.gone and select(2, book:creature(e.n)) == i, 'book: creature %d has no living page', i)
+    end
+    check(results, twins == 0, 'book: two of the living shared a name %d times', twins)
+
+    -- What happened while you were away is what came and went after you shut it
+    local away, births, gone = book:since(book.seen), 0, 0
+    for _, h in ipairs(away) do
+        check(results, h.at > book.seen, 'book: something from before it was shut is news')
+        if h.kind == 'born' then births = births + 1 elseif h.kind == 'gone' then gone = gone + 1 end
+    end
+    local want_births, want_gone = 0, 0
+    for _, e in ipairs(book.entries) do
+        if not e.founder and e.came > book.seen then want_births = want_births + 1 end
+        if e.gone and e.gone > book.seen then want_gone = want_gone + 1 end
+    end
+    check(results, births == want_births and gone == want_gone and births + gone > 0,
+        'book: while you were away, %d born and %d gone; wanted %d and %d', births, gone, want_births, want_gone)
+
+    -- In words
+    for _, case in ipairs({{Book.days(0.4), 'less than a day'}, {Book.days(1.1), 'a day'}, {Book.days(1.6), 'a day and a half'},
+        {Book.days(4.4), 'four and a half days'}, {Book.ordinal(3), 'third'}, {Book.ordinal(21), 'twenty-first'},
+        {Book.words(34), 'thirty-four'}, {Book.list({'Fen', 'Moss', 'Ivo'}), 'Fen, Moss and Ivo'},
+        {Book.named({name = 'Fen', ordinal = 2}), 'Fen the Second'}}) do
+        check(results, case[1] == case[2], 'book: wrote %q for %q', case[1], case[2])
+    end
+    local named_for = 0
+    for _, e in ipairs(book.entries) do named_for = named_for + (e.named_for and 1 or 0) end
+    log.info('selftest', 'book         %d days of seed %d: %d came with the jar, %d hatched, %d gone, %d named for one gone; '
+        .. 'while you were away, %d born and %d gone', BOOK_DAYS, seed, founders, #hatched, #returned, named_for, births, gone)
 end)
 
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
