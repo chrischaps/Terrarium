@@ -17,8 +17,7 @@ local Render = require("jar.render")
 
 local Plants = {}
 
-local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
-local sin, cos, sqrt, abs, min, max, pi = fmath.sin, fmath.cos, math.sqrt, math.abs, math.min, math.max, math.pi
+local sin, cos, sqrt, abs, min, max, pi = math.sin, math.cos, math.sqrt, math.abs, math.min, math.max, math.pi
 
 local gen
 local list = {}

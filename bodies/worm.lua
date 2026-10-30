@@ -29,6 +29,7 @@
 -- Terrarium: a hatchling (#23) is short, loose and pale, and grows in its
 -- sleep: Worm:grow adds segments at its tail.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Base = require('bodies.base')
 local Genome = require('genome')
 local Skin = require('bodies.skin')
@@ -36,8 +37,7 @@ local Skin = require('bodies.skin')
 local Worm = {}
 Worm.__index = Worm
 
-local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
-local sqrt, sin, cos, abs, min, max = math.sqrt, fmath.sin, fmath.cos, math.abs, math.min, math.max
+local sqrt, sin, cos, abs, min, max = math.sqrt, math.sin, math.cos, math.abs, math.min, math.max
 local G = 980
 
 Worm.profile = {
@@ -90,7 +90,7 @@ function Worm:take(genome, young)
     self.genome = genome
     self.n = n
     self.wave = 2 * math.pi * bunches(n) / (n - 1) -- radians of crawl wave per segment
-    self.tone = stiff ^ 2                         -- leaning on the line of the segments ahead
+    self.tone = sq(stiff)                         -- leaning on the line of the segments ahead
     self.reach = 1 / stiff                        -- how fast that fades toward the tail
     self.bend = stiff ^ 0.5                       -- smoothing each joint
     self.bear = min(1, 0.4 / stiff)               -- the share of its weight it doesn't carry

@@ -30,6 +30,7 @@
 --   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
 --                                         jar/styles.lua; Tab cycles them in play)
 --   lovec . --styles                      Terrarium: list the styles, one a line
+--   lovec . --interpret                   Terrarium: run with LuaJIT's compiler off (for --replay)
 --   lovec . --cast <kind>,<kind>,...      Terrarium: these kinds live in the jar, not the
 --                                         seed's cast (the self-tests hold the classic one)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
@@ -88,6 +89,7 @@ function dev.parse(args)
         elseif a == '--mute' then o.mute = true
         elseif a == '--style' then o.style = args[i + 1]; i = i + 1
         elseif a == '--styles' then o.styles = true
+        elseif a == '--interpret' then o.interpret = true
         -- Terrarium: who lives in the jar, e.g. --cast worm,snail,moth (#74)
         elseif a == '--cast' then
             o.cast = {}

@@ -1,27 +1,14 @@
--- Terrarium: the sim's sines and cosines (#94). In LÖVE 11.5's LuaJIT, the
--- interpreter's math.sin and the compiled one don't agree to the last bit, so
--- a body's step came out different depending on whether its code had been
--- compiled yet, and that depends on what else the process has run: drawing the
--- jar (with no window, the jar was never drawn, so the order was always the
--- same). These are the C library's, called through the FFI, the same function
--- either way. Anything the sim steps with uses them; drawing can keep math's.
+-- Terrarium: the sim's squares (#94). In the LuaJIT LÖVE 11.5 ships, `x ^ 2`
+-- isn't one number: the interpreter calls the C library's pow, the compiler
+-- turns it into x * x, and about one square in 500 comes out a bit apart.
+-- Which one a step gets depends on what the process had compiled by then, so
+-- two processes could run the same jar to different hashes (tests/ci.sh's
+-- replay across processes, and its --interpret check). A square in sim code is
+-- sq(x), or x * x, never x ^ 2. (The rest of math, and every other power, came
+-- out the same both ways when this was measured.)
 
-local ffi = require('ffi')
+local fmath = {}
 
-ffi.cdef [[
-double sin(double);
-double cos(double);
-double atan2(double, double);
-double exp(double);
-double log(double);
-]]
+function fmath.sq(x) return x * x end
 
-local C = ffi.C
-
-return {
-    sin = C.sin,
-    cos = C.cos,
-    atan2 = C.atan2,
-    exp = C.exp,
-    log = C.log,
-}
+return fmath

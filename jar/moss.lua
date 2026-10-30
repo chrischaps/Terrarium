@@ -15,6 +15,7 @@
 -- The heights are simulation: the World steps them on the fixed step and the
 -- state hash reads them. Moss.draw only reads them.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local C = require('jar.config')
 local Render = require('jar.render')
 
@@ -33,8 +34,7 @@ local RICH_GROW = 3     -- and how much faster it grows
 local RICH_FOR = 150000 -- seconds of full lamp it takes to use up (about three days of lamp)
 local REACH = {18, 4} -- a body this far above a top (or this far into it) is on it
 
-local fmath = require('core.fmath') -- Terrarium: the same sines compiled or not (#94)
-local sqrt, exp, sin, min, max, floor, abs = math.sqrt, fmath.exp, fmath.sin, math.min, math.max, math.floor, math.abs
+local sqrt, exp, sin, min, max, floor, abs = math.sqrt, math.exp, math.sin, math.min, math.max, math.floor, math.abs
 
 -- A fixed pseudo-random number in [0, 1) for cell i: the moss's own variety,
 -- the same every run, without drawing from any stream
@@ -291,7 +291,7 @@ function Moss.draw(m, light, time, creatures)
             for i = s.first, s.first + s.n - 1 do
                 local f = min(1, m.h[i] / m.cap[i])
                 if f > 0.7 and noise(i, 3) < 0.6 then
-                    local a = glow * ((f - 0.7) / 0.3) ^ 2 * (1.1 - 0.6 * m.sun[i]) * (0.6 + 0.4 * sin(time * 0.4 + i))
+                    local a = glow * sq((f - 0.7) / 0.3) * (1.1 - 0.6 * m.sun[i]) * (0.6 + 0.4 * sin(time * 0.4 + i))
                     love.graphics.setColor(0.55 * a, 0.62 * a, 0.14 * a, 1)
                     love.graphics.circle('fill', m.x[i] + (noise(i, 5) - 0.5) * s.w, s.y - depth[i] - 0.6, 1.1)
                 end

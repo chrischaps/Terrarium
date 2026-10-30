@@ -12,7 +12,9 @@
 #    its genes, day by day, to month_<seed>.csv in the save directory.
 # 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
-#    order, a table address, the wall clock.
+#    order, a table address, the wall clock. Then once more with LuaJIT's
+#    compiler off (--interpret), which must agree: a sum the interpreter and
+#    the compiler work out differently (x ^ 2, #94) makes processes disagree.
 # 5. With $WINDOW set, a jar opened in a real window and drawn as it runs, in
 #    each style (#94), against one opened with none. They must hash the same,
 #    because rendering never touches the sim.
@@ -52,6 +54,13 @@ if [ -n "$a" ] && [ "$a" = "$b" ]; then
     echo "replay: both processes hash $a"
 else
     echo "replay: FAIL processes disagree ('$a' vs '$b')"
+    failed=1
+fi
+i=$(hash_of "$LOVE" . --replay "$SECONDS_OF_JAR" --interpret)
+if [ -n "$i" ] && [ "$i" = "$a" ]; then
+    echo "replay: interpreted, it hashes $i too"
+else
+    echo "replay: FAIL interpreted ('$i') and compiled ('$a') disagree (core/fmath.lua)"
     failed=1
 fi
 

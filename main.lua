@@ -54,6 +54,9 @@ local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this
 local SEED = 20261018 -- a jar is its seed plus its history
 
 local args = dev.parse(arg or {})
+-- --interpret: LuaJIT's compiler off, so tests/ci.sh can check a jar run
+-- interpreted hashes the same as a compiled one (core/fmath.lua)
+if args.interpret then jit.off() end
 local world
 local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
