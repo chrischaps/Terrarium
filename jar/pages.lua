@@ -781,6 +781,7 @@ function Pages:key(key)
     elseif key == 'left' or key == 'pageup' then self:turn_to(self.spread - 1)
     elseif key == 'home' then self:turn_to(1)
     elseif key == 'end' then self:turn_to(self:spreads())
+    else return false -- (the jar's own keys, m and tab, still work with it open)
     end
     return true
 end

@@ -24,7 +24,7 @@ love .
 
 Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrarium/releases) and run `love terrarium.love`. Its `SHA256SUMS` says what the download should hash to.
 
-Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The little green book on the desk (or B) is the family book: who came and who has gone while you were away, and a page with a portrait for everyone who has lived in the jar. The jar is heard faintly through its glass, and M hushes it.
+Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The little green book on the desk (or B) is the family book: who came and who has gone while you were away, and a page with a portrait for everyone who has lived in the jar. The jar is heard faintly through its glass, and M hushes it. Tab changes how the jar is drawn (`--style <name>` opens it in one).
 
 On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
 

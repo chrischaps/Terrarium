@@ -6,6 +6,7 @@
 -- Climbers (spider) crawl node to node over any surface and only use the
 -- mover for jumps. If a landing goes wrong or progress stalls, it repaths.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Pathfinder = require('nav.pathfinder')
 local ballistics = require('nav.ballistics')
 local log = require('core.log')
@@ -63,7 +64,7 @@ local STALL = 7
 function Controller:patience(i)
     local from, to = self.path[i - 1], self.path[i]
     if not (from and to) then return STALL end
-    local len = sqrt((to.node.x - from.node.x) ^ 2 + (to.node.y - from.node.y) ^ 2)
+    local len = sqrt(sq(to.node.x - from.node.x) + sq(to.node.y - from.node.y))
     return STALL + len / (speed(self.creature) * self.pace)
 end
 
@@ -287,7 +288,7 @@ function Controller:draw_path(alpha, color, time)
         local carry = (t * 18) % spacing
         for i = 1, #pts - 3, 2 do
             local ax, ay, bx, by = pts[i], pts[i + 1], pts[i + 2], pts[i + 3]
-            local seg = sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+            local seg = sqrt(sq(bx - ax) + sq(by - ay))
             local d = spacing - carry
             while d < seg do
                 local u = d / seg

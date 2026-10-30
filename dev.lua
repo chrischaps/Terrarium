@@ -4,7 +4,7 @@
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
---                                         hatch, crowd, ranges, moss, food, book, audio, or all;
+--                                         hatch, crowd, ranges, moss, food, book, audio, styles, or all;
 --                                         --seed <n> reseeds the day, month and others;
 --                                         --day <sec> shortens the month's days)
 --   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI runs the month apart)
@@ -27,12 +27,17 @@
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to the first of a plan
 --   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
+--   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
+--                                         jar/styles.lua; Tab cycles them in play)
+--   lovec . --styles                      Terrarium: list the styles, one a line
+--   lovec . --interpret                   Terrarium: run with LuaJIT's compiler off (for --replay)
 --   lovec . --cast <kind>,<kind>,...      Terrarium: these kinds live in the jar, not the
 --                                         seed's cast (the self-tests hold the classic one)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
 --                                         this genome (repeat for the second)
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
 --                                         print the state hash, exit 1 if they differ
+--                                         (with --window, drawing both as they go)
 --
 -- The fixed-step sim makes all of this deterministic.
 
@@ -82,6 +87,9 @@ function dev.parse(args)
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
         elseif a == '--mute' then o.mute = true
+        elseif a == '--style' then o.style = args[i + 1]; i = i + 1
+        elseif a == '--styles' then o.styles = true
+        elseif a == '--interpret' then o.interpret = true
         -- Terrarium: the Pi frame's mode (#90): fullscreen, no cursor, no keys
         elseif a == '--frame' then o.frame = true
         -- Terrarium: who lives in the jar, e.g. --cast worm,snail,moth (#74)
@@ -1547,6 +1555,33 @@ end)
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
+end)
+
+-- Terrarium: 3d''. Styles (#94). The jar's looks: none first, the default, and
+-- the jar as it always looked; every other one a shader that's there; Tab
+-- visits them all and comes round again. (That a jar watched in each hashes
+-- the same as one nobody watched is tests/ci.sh's window check: it needs a
+-- window to compile them.)
+test('styles', function(j, results)
+    local Styles = require('jar.styles')
+    local first = Styles.list[1]
+    check(results, first.name == 'none' and Styles.DEFAULT == 'none' and not first.shader,
+        'styles: none is not the first and default, or it has a shader')
+    local seen = {}
+    for _, s in ipairs(Styles.list) do
+        check(results, not seen[s.name], 'styles: two called %s', s.name)
+        seen[s.name] = true
+        if s ~= first then
+            check(results, s.shader and love.filesystem.getInfo('shaders/' .. s.shader .. '.glsl'),
+                'styles: %s has no shader in shaders/', s.name)
+        end
+    end
+    local name, visits = Styles.DEFAULT, 0
+    repeat
+        name, visits = Styles.after(name), visits + 1
+    until name == Styles.DEFAULT or visits > #Styles.list
+    check(results, visits == #Styles.list, 'styles: Tab came round in %d presses, not %d', visits, #Styles.list)
+    log.info('selftest', 'styles       %s', table.concat(Styles.names(), ', '))
 end)
 
 -- Terrarium: 3d'. Casts (#74). A seed's cast is the same every time it's
@@ -3166,15 +3201,20 @@ end
 -- same seed, step each for <seconds> the way the game does, and compare state
 -- hashes. --replay prints the hash so separate processes (and CI runs) can compare
 -- them too: a mismatch there means something read the wall clock, a table
--- address, or pairs() order.
-function dev.replay(open_jar, seed, seconds, fixed_dt, step)
+-- address, or pairs() order. Given `watch(w, s)`, it's called after each step
+-- `s` of both runs, to draw the jar (in a window): watched or not, it must hash
+-- the same.
+function dev.replay(open_jar, seed, seconds, fixed_dt, step, watch)
     local statehash = require('core.statehash')
     local Plants = require('jar.plants')
     local steps = math.floor(seconds / fixed_dt + 0.5)
     local function run()
         local t0 = love.timer.getTime()
         local w = open_jar(seed)
-        for _ = 1, steps do step(w) end
+        for s = 1, steps do
+            step(w)
+            if watch then watch(w, s) end
+        end
         local h = statehash.of(w, Plants.all())
         log.info('dev', 'replay  seed %d  cast %s', seed, table.concat(w.cast, ','))
         log.info('dev', 'replay  seed %d  %d steps (%.0fs of jar)  hash %s  in %.1fs', seed, steps, seconds, h.total,
