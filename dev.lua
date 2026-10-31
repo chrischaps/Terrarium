@@ -7,7 +7,7 @@
 --                                         hatch, crowd, ranges, moss, food, book, audio, styles, or all;
 --                                         --seed <n> reseeds the day, month and others;
 --                                         --day <sec> shortens the month's days)
---   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI runs the month apart)
+--   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI leaves out the long gates, #112)
 --   lovec . --headless                    Terrarium: no window (implied by --test,
 --                                         --selftest, --replay and --navdump; --window undoes it)
 --   lovec . --snap <who> <sec> <file> [--goal x y] [--debug] [--nav]
@@ -3366,7 +3366,12 @@ function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, s
     local results = {total = 0, pass = 0, fail = {}}
     local t0 = love.timer.getTime()
     for _, t in ipairs(TESTS) do
-        if (not want or want[t.name]) and not (skipped and skipped[t.name]) then t.fn(j, results) end
+        if (not want or want[t.name]) and not (skipped and skipped[t.name]) then
+            -- Terrarium: each test's time, so a slow one is plain in CI's log (#112)
+            local t1 = love.timer.getTime()
+            t.fn(j, results)
+            log.info('selftest', '%-12s took %.1fs', t.name, love.timer.getTime() - t1)
+        end
     end
     log.info('selftest', '%d/%d checks passed (%d trips) in %.1fs', results.pass, results.total, results.trips or 0,
         love.timer.getTime() - t0)
