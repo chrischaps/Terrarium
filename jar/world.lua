@@ -84,6 +84,7 @@ local function hash(s)
     h = mul32(bit.bxor(h, bit.rshift(h, 13)), 0xc2b2ae35)
     return bit.bxor(h, bit.rshift(h, 16))
 end
+World.hash = hash -- (the book names the jar's own by it, #32)
 
 -- The kinds a jar in `level_data` can hold: each with a body and a home, in Genome.order
 function World.kinds(level_data)
@@ -167,6 +168,11 @@ Bus.__index = Bus
 function Bus.new() return setmetatable({queue = {}, listeners = {}}, Bus) end
 function Bus:emit(kind, data) data.kind = kind; self.queue[#self.queue + 1] = data end
 function Bus:on(fn) self.listeners[#self.listeners + 1] = fn end
+-- (said at once, between steps: World:coarsen and :embody, which are not in one)
+function Bus:tell(kind, data)
+    data.kind = kind
+    for _, fn in ipairs(self.listeners) do fn(data) end
+end
 function Bus:flush()
     local q = self.queue
     self.queue = {}
@@ -460,7 +466,7 @@ function World:hatch()
         if ready then
             egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name, egg.young)
             local y = self.level.by_id[egg.solid].y
-            self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = y})
+            self.events:emit('hatched', {who = self.creatures[egg.who], egg = egg, x = egg.x, y = y})
             if egg.young then
                 self.shells[#self.shells + 1] = {key = egg.key, genome = egg.genome, x = egg.x, y = y, at = self.time}
             end
@@ -729,6 +735,8 @@ end
 -- Every body to a token where it stands
 function World:coarsen()
     if self.coarse then return end
+    local was = {}
+    for i, c in ipairs(self.creatures) do was[i] = c end
     for i, c in ipairs(self.creatures) do
         local n = self:standing(i)
         local t = Token.new(c.key, CLASS[c.key], n.x, n.y, c.genome, self:pale(i))
@@ -740,11 +748,15 @@ function World:coarsen()
         self.controllers[i] = handover(self.controllers[i], Glide, t, self.graphs[i])
     end
     self.coarse, self.snap, self.saved = true, nil, nil
+    -- (each is a new table now: whoever holds one hears which it became)
+    for i, t in ipairs(self.creatures) do self.events:tell('became', {who = t, was = was[i], index = i}) end
 end
 
 -- Every token to a body where it stands, its feet set down on its node
 function World:embody()
     if not self.coarse then return end
+    local was = {}
+    for i, c in ipairs(self.creatures) do was[i] = c end
     self.coarse, self.snap, self.saved = nil, nil, nil
     for i, t in ipairs(self.creatures) do
         local n, g = self:standing(i), self.controllers[i]
@@ -769,6 +781,7 @@ function World:embody()
         self.controllers[i] = handover(g, Controller, c, self.graphs[i])
         self.controllers[i].arrived = g.arrived
     end
+    for i, c in ipairs(self.creatures) do self.events:tell('became', {who = c, was = was[i], index = i}) end
 end
 
 -- Collect everything that pushes flora and scatters fireflies
