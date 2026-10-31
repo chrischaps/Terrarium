@@ -42,7 +42,7 @@ end
 
 function Render.init()
     for _, name in ipairs({ "object", "blur", "haze", "composite", "floor", "mist" }) do
-        shaders[name] = loadShader(name)
+        shaders[name] = loadShader(name) or false
     end
 
     local w, h = C.W, C.H
@@ -62,7 +62,12 @@ function Render.init()
     blob = makeBlob(64)
 end
 
-function Render.shader(name) return shaders[name] end
+-- Terrarium: any other shader (a style's, #94) loads the first time it's
+-- asked for, and one that fails is asked for once
+function Render.shader(name)
+    if shaders[name] == nil then shaders[name] = loadShader(name) or false end
+    return shaders[name] or nil
+end
 function Render.canvas(name) return canvases[name] end
 function Render.white() return white end
 function Render.blob() return blob end

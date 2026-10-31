@@ -40,6 +40,7 @@
 -- only numbers (another creature is an index), so it runs the same over the
 -- anchors-only coarse step of catch-up (#31) as over the live one.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local rng = require('core.rng')
 local DayCycle = require('jar.daycycle')
 
@@ -217,7 +218,7 @@ function Mind:choose(pool, near)
         local n = pool[rng.sim:random(1, #pool)]
         local d = FAR
         for _, p in ipairs(near) do
-            d = math.min(d, math.sqrt((n.x - p[1]) ^ 2 + (n.y - p[2]) ^ 2))
+            d = math.min(d, math.sqrt(sq(n.x - p[1]) + sq(n.y - p[2])))
         end
         scored[k] = {n = n, score = (self.sociability - 0.5) * math.max(d, CLOSE), k = k}
     end
@@ -253,7 +254,7 @@ local function companion(world, me)
         local m = world.minds[j]
         if j ~= me and m.doing ~= 'rest' and m.doing ~= 'to_rest' then
             local ox, oy = o:anchor()
-            local d = math.sqrt((ox - x) ^ 2 + (oy - y) ^ 2) + (o.key == c.key and 0 or FAR)
+            local d = math.sqrt(sq(ox - x) + sq(oy - y)) + (o.key == c.key and 0 or FAR)
             if not best_d or d < best_d then best, best_d = j, d end
         end
     end
@@ -305,7 +306,7 @@ function Mind.meet(world)
                 local b, mb = cs[j], ms[j]
                 if b.key == a.key and mb.doing ~= 'rest' then
                     local bx, by = b:anchor()
-                    local d2 = (bx - ax) ^ 2 + (by - ay) ^ 2
+                    local d2 = sq(bx - ax) + sq(by - ay)
                     if not ma.near[j] and d2 < MEET * MEET then
                         ma.near[j], mb.near[i] = true, true
                         ma.met[j], mb.met[i] = (ma.met[j] or 0) + 1, (mb.met[i] or 0) + 1
@@ -405,7 +406,7 @@ function Mind:woo(dt, world, me, arrived)
     if self.doing == 'to_court' then
         local x, y = c:anchor()
         local ox, oy = p:anchor()
-        if self.timer <= 0 or (arrived and (ox - x) ^ 2 + (oy - y) ^ 2 > BESIDE * BESIDE) then
+        if self.timer <= 0 or (arrived and sq(ox - x) + sq(oy - y) > BESIDE * BESIDE) then
             self:part(world, me)
         elseif arrived then
             self:set('court', rng.range(rng.sim, COURT[1], COURT[2]))
@@ -440,7 +441,7 @@ local function crumbs(world, me, self)
     local out = {}
     for _, f in ipairs(food.crumbs) do
         if f.down and not self.passed[f.id] then
-            local d = math.sqrt((f.x - x) ^ 2 + (f.y - y) ^ 2)
+            local d = math.sqrt(sq(f.x - x) + sq(f.y - y))
             if d <= self.notice then
                 for j, m in ipairs(world.minds) do
                     if j ~= me and m.treat == f.id then d = d + CROWD end
@@ -474,7 +475,7 @@ local function at_crumb(graph, world, me, f)
             local d = math.abs(math.sqrt(dx * dx + dy * dy) - mouth)
             if dx * (x - f.x) < 0 then d = d + mouth end
             for _, g in ipairs(taken) do
-                if (g.x - n.x) ^ 2 + (g.y - n.y) ^ 2 < mouth * mouth then d = d + 4 * reach end
+                if sq(g.x - n.x) + sq(g.y - n.y) < mouth * mouth then d = d + 4 * reach end
             end
             if not best_d or d < best_d then best, best_d = n, d end
         end
@@ -544,7 +545,7 @@ function Mind:update(dt, hour, world, me)
         elseif arrived then
             local x, y = c:anchor()
             local ox, oy = world.creatures[self.with]:anchor()
-            if (ox - x) ^ 2 + (oy - y) ^ 2 > CLOSE * CLOSE * 4 then self:after(ctrl, graph, world, me) end
+            if sq(ox - x) + sq(oy - y) > CLOSE * CLOSE * 4 then self:after(ctrl, graph, world, me) end
         end
     elseif doing == 'to_court' or doing == 'await' or doing == 'court' then
         self:woo(dt, world, me, arrived)

@@ -36,6 +36,7 @@
 -- Coloured from its genes (#15, #75): a shell of dark amber to bronze and a
 -- grey-fawn foot. A hatchling is small and pale.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Base = require('bodies.base')
 local Climb = require('bodies.climb')
 local Skin = require('bodies.skin')
@@ -254,7 +255,7 @@ function Snail:target(k, level)
         local left, px, py = abs(d), sole.x, sole.y
         local found = false
         for _, q in ipairs(self.track) do
-            local seg = sqrt((q.x - px) ^ 2 + (q.y - py) ^ 2)
+            local seg = sqrt(sq(q.x - px) + sq(q.y - py))
             if seg >= left and seg > 1e-6 then
                 local u = left / seg
                 x, y = px + (q.x - px) * u, py + (q.y - py) * u
@@ -270,7 +271,7 @@ function Snail:target(k, level)
     end
     local lift = LIFT * s
     -- (courting, its head rears up off the surface)
-    if k <= 3 then lift = lift + self.rear * (1 - (k - 1) / 3) ^ 2 end
+    if k <= 3 then lift = lift + self.rear * sq(1 - (k - 1) / 3) end
     return x + nx * lift, y + ny * lift, nx, ny
 end
 
@@ -497,13 +498,13 @@ function Snail:alarmed(ctx, hx, hy)
     for _, o in ipairs(w.creatures) do
         if o ~= self then
             local ox, oy = o:anchor()
-            if (ox - hx) ^ 2 + (oy - hy) ^ 2 < r * r and not (partner and abs(ox - partner.x) < 1 and abs(oy - partner.y) < 1) then
+            if sq(ox - hx) + sq(oy - hy) < r * r and not (partner and abs(ox - partner.x) < 1 and abs(oy - partner.y) < 1) then
                 return true
             end
         end
     end
     for _, f in ipairs(w.food and w.food.crumbs or {}) do
-        if not f.down and (f.x - hx) ^ 2 + (f.y - hy) ^ 2 < r * r then return true end
+        if not f.down and sq(f.x - hx) + sq(f.y - hy) < r * r then return true end
     end
     return false
 end
@@ -528,7 +529,7 @@ function Snail:update(dt, level, ctx)
     local want = (sealed or self.startle > 0) and 0 or 1
     self.stalks = self.stalks + (want - self.stalks) * min(1, dt * (want < self.stalks and 9 or 0.8))
     -- (in its shell it can't go, and pulled in it goes carefully)
-    self.gait = (1 - self.retract) ^ 2 * (self.startle > 0 and 0.4 or 1)
+    self.gait = sq(1 - self.retract) * (self.startle > 0 and 0.4 or 1)
 
     -- Courting, it turns to its partner and reaches out to it, and once their
     -- feet have met they rear up and sway together, feelers touching (#22)
@@ -561,14 +562,14 @@ function Snail:update(dt, level, ctx)
     if self.facing ~= self.track_facing then self.track, self.track_facing = {}, self.facing end
     local sx, sy = self:find_sole(level)
     local last = self.track[1]
-    if not last or (sx - last.x) ^ 2 + (sy - last.y) ^ 2 > (TRACK_GAP * s) ^ 2 then
-        local moved = last and sqrt((sx - last.x) ^ 2 + (sy - last.y) ^ 2) or 0
+    if not last or sq(sx - last.x) + sq(sy - last.y) > sq(TRACK_GAP * s) then
+        local moved = last and sqrt(sq(sx - last.x) + sq(sy - last.y)) or 0
         self.wave = self.wave + moved / (WAVE * s)
         table.insert(self.track, 1, {x = sx, y = sy, nx = self.sole.nx, ny = self.sole.ny})
         local behind = ((FOOT - 1) * SEG - HEAD + 4) * s
         local len, px, py = 0, sx, sy
         for i, q in ipairs(self.track) do
-            len = len + sqrt((q.x - px) ^ 2 + (q.y - py) ^ 2)
+            len = len + sqrt(sq(q.x - px) + sq(q.y - py))
             px, py = q.x, q.y
             if len > behind then
                 for j = #self.track, i + 1, -1 do self.track[j] = nil end
@@ -594,7 +595,7 @@ function Snail:update(dt, level, ctx)
     end
     for k = 1, FOOT - 1 do
         local a, b = foot[k], foot[k + 1]
-        local rest = sqrt((want_at[k + 1][1] - want_at[k][1]) ^ 2 + (want_at[k + 1][2] - want_at[k][2]) ^ 2)
+        local rest = sqrt(sq(want_at[k + 1][1] - want_at[k][1]) + sq(want_at[k + 1][2] - want_at[k][2]))
         local ex, ey = b.x - a.x, b.y - a.y
         local d = sqrt(ex * ex + ey * ey)
         if d > 1e-5 then
@@ -608,8 +609,8 @@ function Snail:update(dt, level, ctx)
     -- Slime from its anchor, as it goes
     local slime = self.slime
     local tip = slime[#slime]
-    if self.pace > 0.5 and (not tip or (sx - tip.x) ^ 2 + (sy - tip.y) ^ 2 > (SLIME_GAP * s) ^ 2) then
-        local gap = tip and (sx - tip.x) ^ 2 + (sy - tip.y) ^ 2 > (SLIME_GAP * s * 4) ^ 2
+    if self.pace > 0.5 and (not tip or sq(sx - tip.x) + sq(sy - tip.y) > sq(SLIME_GAP * s)) then
+        local gap = tip and sq(sx - tip.x) + sq(sy - tip.y) > sq(SLIME_GAP * s * 4)
         slime[#slime + 1] = {x = sx, y = sy, nx = self.sole.nx, ny = self.sole.ny, t = self.clock, w = s, gap = gap or nil}
     end
     while slime[1] and self.clock - slime[1].t > DRY do table.remove(slime, 1) end
@@ -997,7 +998,7 @@ function Snail.health(c, m, dt)
     for k = 1, FOOT - 1 do
         local a, b = c.foot[k], c.foot[k + 1]
         local rest = abs(c:reach_of(k) - c:reach_of(k + 1)) * abs(c.turn)
-        local d = sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
+        local d = sqrt(sq(b.x - a.x) + sq(b.y - a.y))
         torn = max(torn, abs(d - rest) / max(rest, 0.5))
     end
     m.torn = max(m.torn or 0, torn)

@@ -10,9 +10,13 @@
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   right-click              drop a pinch of food into the jar there (a few a day)
 --   m                        hush the jar, or listen again (--mute opens it hushed)
+--   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
+--   tab                      the next style
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
+--   love . --away <time>     come back to a jar left that long ago: 90m, 36h, 2d (jar days)
+--                            or seconds, lived on the coarse step while the glass is fogged
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   love . --fresh           a new jar, whose book is kept in place of the last (kept as jar.book.old)
 --   lovec . --keep <sec> <file>   run <sec> of jar, write its book to <file>, run 60 s more, print the hash
@@ -48,10 +52,13 @@ local Eggs = require('jar.eggs')
 local Remains = require('jar.remains')
 local Food = require('jar.food')
 local Condensation = require('jar.condensation')
+local Catchup = require('jar.catchup')
+local Passing = require('jar.passing')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
+local Styles = require('jar.styles')
 local Screen = require('core.screen')
 local Touch = require('core.touch')
 local Book = require('book')
@@ -61,6 +68,9 @@ local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this
 local SEED = 20261018 -- a jar is its seed plus its history
 
 local args = dev.parse(arg or {})
+-- --interpret: LuaJIT's compiler off, so tests/ci.sh can check a jar run
+-- interpreted hashes the same as a compiled one (core/fmath.lua)
+if args.interpret then jit.off() end
 local world
 local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
@@ -70,10 +80,14 @@ local synth -- the jar heard through its glass (#28), only while you watch it li
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
 local scriptApi -- defined below love.load; forward-declared so load can see it
+local watchReplay -- likewise: --replay in a window draws what it runs
+local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
+local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
 local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
 local touch = Touch.new() -- a finger on the frame's glass
 local keeping -- the jar's book (#30) is kept: read at load, written now and then and at the end
 local lastKept -- the jar's clock when its book was last written
+local passing -- the moment on opening a jar that was left (#31), while it lasts
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -183,6 +197,17 @@ function love.load()
         end
         args.cast = cast
     end
+    if args.styles then
+        -- --styles: the looks there are, one a line (tests/ci.sh watches the jar in each)
+        print(table.concat(Styles.names(), '\n'))
+        love.event.quit(0)
+        return
+    end
+    if not Styles.get(style) then
+        print('[style] no style ' .. style .. '; there are ' .. table.concat(Styles.names(), ', '))
+        love.event.quit(2)
+        return
+    end
     if args.selftest then
         local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast,
             resumeJar)
@@ -198,8 +223,10 @@ function love.load()
 
     Render.init()
     if args.replay then
-        -- open the jar twice and step both for <sec>; print the hash
-        local same, hash = dev.replay(openJar, args.seed or SEED, args.replay, STEP, step)
+        -- open the jar twice and step both for <sec>; print the hash. In a
+        -- window, both are drawn as they go, in the style, which must change nothing
+        local watch = not headless.active() and watchReplay or nil
+        local same, hash = dev.replay(openJar, args.seed or SEED, args.replay, STEP, step, watch)
         print('hash ' .. hash)
         love.event.quit(same and 0 or 1)
         return
@@ -215,16 +242,23 @@ function love.load()
 
     startHour = DayCycle.parseHour(args.hour) or (args.snap and DayCycle.presets.midday) or DayCycle.clockHour()
     daySeconds = args.day or C.DAY_SECONDS
+    if args.away then
+        -- (left that long ago, so it comes back at this hour, less any days past the cap)
+        local away = args.away.days and args.away.days * daySeconds or args.away.seconds
+        startHour = (startHour - Catchup.span(away, daySeconds) / daySeconds * 24) % 24
+    end
 
     -- Terrarium: the jar remembers (#30). Watched live, its book is read back
     -- and it goes on where it was. A run that asks for a particular jar
     -- (--seed, --cast, --hour, ...) leaves the book alone, unless it's --fresh.
     keeping = dev.keeps_book(args)
+    local left -- the wall clock its book was written at, if it was read back
     if keeping and not args.fresh then
         local book, from = Book.open()
         if book then
             local same, hash
             world, same, hash = resumeJar(book)
+            left = book.saved
             log.info('book', 'resumed from %s: %s, %d creatures, hash %s%s', from, when(world), #world.creatures, hash,
                 same and ' (as it was written)' or (', written as ' .. tostring(book.hash)))
         else
@@ -238,7 +272,25 @@ function love.load()
         -- it hears what the World says happened, after each step
         synth = Synth.new()
         synth:mute(args.mute)
-        world.events:on(function(ev) synth:on_event(ev, world, lantern:following(world)) end)
+        -- (but not to what happened while you were away)
+        world.events:on(function(ev)
+            if not world.catching then synth:on_event(ev, world, lantern:following(world)) end
+        end)
+    end
+
+    -- Terrarium: the time the jar was left, lived on the coarse step (#31).
+    -- --away opens it that long before now and catches it up; a jar read back
+    -- from its book (#30) is caught up on the seconds since it was written
+    -- (the jar's clock runs as the wall's does). A snap or a script gets it
+    -- at once, and play gets the moment.
+    local away = args.away and (args.away.days and args.away.days * daySeconds or args.away.seconds)
+    if left then away = math.max(0, os.time() - left) end
+    if away and away > 0 then
+        if args.snap or args.script or args.bench then
+            Catchup.now(world, away)
+        else
+            passing = Passing.begin(world, away)
+        end
     end
 
     if args.snap then
@@ -324,6 +376,10 @@ function love.update(dt)
         return
     end
     if not world or snapFrames then return end
+    if passing then
+        if passing:update(dt) then passing = nil end
+        if passing and passing:catching() then return end -- (nothing to hear, follow or touch yet)
+    end
     local t0 = bench and love.timer.getTime()
     accumulator = accumulator + math.min(dt, 0.25)
     while accumulator >= STEP do
@@ -379,28 +435,30 @@ local function drawNav()
 end
 
 local function drawCreatures(alpha, light)
-    -- Draw between the last two steps; the sim never sees the blended points
-    world:interpolate(alpha)
+    -- Draw between the last two steps; the sim never sees the blended points.
+    -- (A jar catching up is only anchors, and the moment draws those, #31.)
+    local bodies = not world.coarse
+    if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
     Render.useObject(C.PLANE_D)
-    for _, c in ipairs(world.creatures) do
+    for _, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_trail then c:draw_trail() end
     end
     Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
     Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
     Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
-    for i, c in ipairs(world.creatures) do
+    for i in ipairs(bodies and world.creatures or {}) do
         Remains.through(world, i, 'draw', ctx)
     end
     love.graphics.setShader()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
     Food.draw_emissive(world.food, light, world.time, alpha)
-    for i, c in ipairs(world.creatures) do
+    for i, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
-    world:restore()
+    if bodies then world:restore() end
 end
 
 local function drawObject(o)
@@ -446,6 +504,7 @@ local function drawScene(light, plane)
         Scenery.draw(light, world.time)
         Moss.draw(world.moss, light, world.time, world.creatures)
         drawCreatures(accumulator / STEP, light)
+        if passing then passing:draw() end
         lantern:draw(light)
         if args.nav then drawNav() end
         love.graphics.pop()
@@ -457,24 +516,28 @@ local function drawScene(light, plane)
     Plants.drawGlow(light)
     Motes.drawFront(light)
     Scape.drawFront(light)
-    Condensation.draw(light) -- on the inside of the glass, under its dust
+    Condensation.draw(light, passing and passing:glass()) -- on the inside of the glass, under its dust
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
     love.graphics.setCanvas()
 end
 
--- The front glass bends the view a little at its edges; the room vignettes.
--- A capture script's plate brings its own canvas, size and clock, and has no
--- glass in front of it. A `fit` (core/screen.lua) draws the jar's frame on a
--- screen of another shape.
-local function composite(scene, w, h, time, fit)
+-- The finished frame in the style (#94), then the front glass bends the view
+-- a little at its edges and the room vignettes. Every frame goes through
+-- here: the window's, --snap's, a capture script's and the frame's thumb. A
+-- plate brings its own canvas, size and clock, and has no glass in front of
+-- it. A `fit` (core/screen.lua) draws the jar's frame on a screen of another
+-- shape.
+local function composite(plate, w, h, time, fit)
+    time = time or love.timer.getTime()
+    local frame = Styles.apply(style, plate or Render.canvas("scene"), time)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
     if fit then Screen.push(fit) end
     if sh then
         love.graphics.setShader(sh)
-        local rect = scene and { 0, 0, 0, 0 } or { Glass.frontRect() }
+        local rect = plate and { 0, 0, 0, 0 } or { Glass.frontRect() }
         if fit then
             -- the shader finds the glass in the screen's pixels
             for i = 1, 4 do rect[i] = rect[i] * fit.k + (i % 2 == 1 and fit.x or fit.y) end
@@ -483,12 +546,27 @@ local function composite(scene, w, h, time, fit)
         sh:send("aberration", 0.012)
         sh:send("vignette", 0.40)
         sh:send("grain", 0.010)
-        sh:send("time", (time or love.timer.getTime()) % 1000)
+        sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
     end
-    love.graphics.draw(scene or Render.canvas("scene"))
+    love.graphics.draw(frame)
     love.graphics.setShader()
     if fit then love.graphics.pop() end
+end
+
+-- --replay in a window: each run's jar drawn every WATCH steps, the way
+-- love.draw draws it, in the style. Watching a jar must change nothing in it.
+local WATCH = 30
+function watchReplay(w, s)
+    if s % WATCH ~= 0 then return end
+    if world ~= w then
+        -- (dev.replay opens its jars at midday with a full-length day)
+        world, accumulator = w, 0
+        startHour, daySeconds = DayCycle.presets.midday, C.DAY_SECONDS
+        furnish()
+    end
+    drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, w.time, daySeconds)))
+    composite(nil, nil, nil, w.time)
 end
 
 -- The API a --script capture file drives (from Character's main.lua). Time
@@ -516,9 +594,35 @@ function scriptApi()
         return world
     end
 
+    -- Render later frames in style `name` (#94; --style's, else none, to
+    -- begin with). Returns the one it was.
+    function api.style(name)
+        assert(Styles.get(name), 'no style ' .. tostring(name))
+        style, name = name, style
+        return name
+    end
+
     -- Advance the jar by `seconds` of fixed steps
     function api.step(seconds)
         for _ = 1, math.max(1, math.floor(seconds / STEP + 0.5)) do step() end
+    end
+
+    -- Terrarium: come back to the open jar `seconds` after it was left (#31).
+    -- Returns the moment, or nil if the time was short enough to live at once.
+    function api.away(seconds)
+        passing = Passing.begin(world, seconds)
+        return passing
+    end
+
+    -- A frame of the moment, `dt` long, with `steps` coarse steps of catch-up
+    -- in it (so a capture is exact), and the live jar going on once it's back.
+    -- Returns false once the moment is over.
+    function api.pass(dt, steps)
+        if not passing then return false end
+        local over = passing:update(dt, steps or 1)
+        if not passing:catching() then api.step(dt) end
+        if over then passing = nil end
+        return not over
     end
 
     -- Render a frame into a w x h canvas (default the window's size) and return it.
@@ -610,6 +714,19 @@ function love.draw()
     composite(nil, nil, nil, nil, view)
     touch:draw()
     if bench and bench.warm <= 0 then bench.draw[#bench.draw + 1] = love.timer.getTime() - t0 end
+    if shown then
+        -- The style's name, low in the corner, held a moment and let go
+        local a = math.min(1, 2 - (love.timer.getTime() - shown.at) / 0.9)
+        if a <= 0 then
+            shown = nil
+        else
+            shownFont = shownFont or love.graphics.newFont(13)
+            love.graphics.setFont(shownFont)
+            love.graphics.setColor(0.93, 0.90, 0.82, 0.75 * a)
+            love.graphics.print(shown.name, 28, love.graphics.getHeight() - 44)
+            love.graphics.setColor(1, 1, 1, 1)
+        end
+    end
 
     if snapFrames then
         snapFrames = snapFrames + 1
@@ -631,7 +748,7 @@ end
 -- go. Right-click in the jar to drop in a pinch of food there (#25). On the
 -- frame, the left button is a finger too: a touchscreen may come as a pointer.
 function love.mousepressed(x, y, button, istouch)
-    if not world or capture or istouch then return end
+    if not world or capture or istouch or (passing and passing:catching()) then return end
     if button == 1 and args.frame then
         touch:press('mouse', x, y)
     elseif button == 1 then
@@ -651,7 +768,7 @@ end
 
 -- A tap follows, as a click does; a long press is a pinch (Touch:update)
 function love.touchpressed(id, x, y)
-    if world and not capture then touch:press(id, x, y) end
+    if world and not capture and not (passing and passing:catching()) then touch:press(id, x, y) end
 end
 
 function love.touchmoved(id, x, y)
@@ -667,6 +784,10 @@ function love.keypressed(key)
     if args.frame then return end -- the frame has no keys; Easel ends it with SIGTERM
     if key == "escape" then love.event.quit() end
     if key == "m" and synth then synth:mute(not synth.muted) end
+    if key == "tab" and not capture then
+        style = Styles.after(style)
+        shown = { name = style, at = love.timer.getTime() }
+    end
 end
 
 -- Easel's card for the jar (#90): the frame as it stands, at 640 x 360, cropped
@@ -692,7 +813,9 @@ end
 -- Every way out comes through here: Escape, closing the window, and the SIGTERM
 -- Easel sends (SDL turns it into a quit). The jar's book (#30) is written here.
 function love.quit()
-    if keeping and world and not capture then keepBook('closed') end
+    -- (not while it's still living the time away: the book it was read from
+    -- is kept, and the next opening catches up from when that was written)
+    if keeping and world and not capture and not (passing and passing:catching()) then keepBook('closed') end
     local easel = os.getenv('EASEL_DATA')
     if easel and easel ~= '' and world and not capture and love.window.isOpen() then
         saveThumb(easel .. '/thumb.png')

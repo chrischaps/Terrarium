@@ -15,6 +15,7 @@
 -- The heights are simulation: the World steps them on the fixed step and the
 -- state hash reads them. Moss.draw only reads them.
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local C = require('jar.config')
 local Render = require('jar.render')
 
@@ -290,7 +291,7 @@ function Moss.draw(m, light, time, creatures)
             for i = s.first, s.first + s.n - 1 do
                 local f = min(1, m.h[i] / m.cap[i])
                 if f > 0.7 and noise(i, 3) < 0.6 then
-                    local a = glow * ((f - 0.7) / 0.3) ^ 2 * (1.1 - 0.6 * m.sun[i]) * (0.6 + 0.4 * sin(time * 0.4 + i))
+                    local a = glow * sq((f - 0.7) / 0.3) * (1.1 - 0.6 * m.sun[i]) * (0.6 + 0.4 * sin(time * 0.4 + i))
                     love.graphics.setColor(0.55 * a, 0.62 * a, 0.14 * a, 1)
                     love.graphics.circle('fill', m.x[i] + (noise(i, 5) - 0.5) * s.w, s.y - depth[i] - 0.6, 1.1)
                 end

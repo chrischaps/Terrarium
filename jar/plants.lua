@@ -217,6 +217,9 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 local stripVerts = {}
+-- Terrarium: where each capsule was last drawn, on screen, for its glow. Kept
+-- here and not on the blade, which is sim state (statehash reads it, #94).
+local tips = setmetatable({}, { __mode = 'k' })
 for i = 1, 64 do stripVerts[i] = { 0, 0, 0, 0, 1, 1, 1, 1 } end
 
 local function drawRibbon(c, d, bx, by, colorAt, widthAt)
@@ -316,7 +319,8 @@ local function drawSpores(p)
         love.graphics.setColor(0.78, 0.70, 0.50, 0.8)
         love.graphics.ellipse("fill", 0, -3.4 * k, 0.8 * k, 0.9 * k)
         love.graphics.pop()
-        b.sx, b.sy = x2, y2
+        local tip = tips[b] or {}
+        tip[1], tip[2], tips[b] = x2, y2, tip
     end
     love.graphics.setLineWidth(1)
 end
@@ -338,12 +342,13 @@ function Plants.drawGlow(env)
         if p.blades then
             local fade = 1 - Tank.haze(p.d) * 0.6
             for _, b in ipairs(p.blades) do
-                if b.glows and b.sx then
+                local tip = tips[b]
+                if b.glows and tip then
                     local pulse = 0.6 + 0.4 * sin(time * 0.5 + b.phase)
                     love.graphics.setColor(0.45, 0.85, 0.40, 0.30 * g * pulse * fade)
-                    Render.drawBlob(b.sx, b.sy, 7 * Tank.k(p.d))
+                    Render.drawBlob(tip[1], tip[2], 7 * Tank.k(p.d))
                     love.graphics.setColor(0.80, 1.00, 0.70, 0.45 * g * pulse * fade)
-                    Render.drawBlob(b.sx, b.sy, 2.2 * Tank.k(p.d))
+                    Render.drawBlob(tip[1], tip[2], 2.2 * Tank.k(p.d))
                 end
             end
         end

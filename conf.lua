@@ -1,7 +1,7 @@
 -- Terrarium: the dev modes that only check the sim run with no window, so they
 -- run in CI (see core/headless.lua). --window opens one anyway.
 local WINDOWLESS = { ['--headless'] = true, ['--test'] = true, ['--selftest'] = true, ['--replay'] = true,
-    ['--navdump'] = true, ['--keep'] = true, ['--resume'] = true }
+    ['--navdump'] = true, ['--styles'] = true, ['--keep'] = true, ['--resume'] = true }
 
 local function windowless()
     local found = false

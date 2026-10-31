@@ -25,6 +25,7 @@
 -- Terrarium: a hatchling (#23) is small, soft and pale, and swells in its
 -- sleep (Blob:grow).
 
+local sq = require('core.fmath').sq -- Terrarium: x ^ 2 isn't one number in LuaJIT (#94)
 local Base = require('bodies.base')
 local Genome = require('genome')
 local Skin = require('bodies.skin')
@@ -117,7 +118,7 @@ function Blob:take(genome, young)
     self.nav = Blob.nav_profile(genome)
     self.edge_k = min(0.95, 0.8 * firm ^ 0.4)    -- how hard the skin holds its length
     self.area_k = min(1, 0.9 * firm ^ 0.5)       -- how hard it holds its volume
-    self.sag = 260 / firm ^ 2                    -- a soft blob slumps into a dome
+    self.sag = 260 / sq(firm)                    -- a soft blob slumps into a dome
     self.sit = 0.96 + 0.1 * (firm - 1)           -- and its middle sits lower
     self.give = 0.55 / firm                      -- how far a landing carries into the floor
     self.dent = 0.08 / firm                      -- how much pressure a landing knocks out
@@ -277,7 +278,7 @@ function Blob:update(dt, level, ctx)
     if self.court then
         local c, k = self.court, self.ardour
         if court and abs(c.x - m.x) > 1 then m.facing = c.x > m.x and 1 or -1 end
-        local beat = (0.5 - 0.5 * cos(c.beat * 2 * pi / PULSE)) ^ 2
+        local beat = sq(0.5 - 0.5 * cos(c.beat * 2 * pi / PULSE))
         target_pressure = target_pressure + k * (0.2 * beat - 0.05)
         lean = k * (c.x > m.x and 1 or -1) * R * 0.12
         self.flush = k * beat
