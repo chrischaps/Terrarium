@@ -40,6 +40,12 @@
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
 --                                         print the state hash, exit 1 if they differ
 --                                         (with --window, drawing both as they go)
+--   love . --fresh                        Terrarium: a new jar, whose book (#30) is kept
+--                                         in place of the last one's
+--   lovec . --keep <sec> <file>           Terrarium: run <sec> of the jar, write its book
+--                                         to <file>, run a minute more, print the hash
+--   lovec . --resume <file>               Terrarium: read the book at <file>, run a minute,
+--                                         print the hash (--keep's, if the book kept it all)
 --
 -- The fixed-step sim makes all of this deterministic.
 
@@ -116,6 +122,10 @@ function dev.parse(args)
             end
             i = i + 1
         elseif a == '--replay' then o.replay = tonumber(args[i + 1]); i = i + 1
+        -- Terrarium: the jar's book (#30)
+        elseif a == '--fresh' then o.fresh = true
+        elseif a == '--keep' then o.keep = {seconds = tonumber(args[i + 1]), file = args[i + 2]}; i = i + 2
+        elseif a == '--resume' then o.resume = args[i + 1]; i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
         end
         i = i + 1
@@ -1620,6 +1630,140 @@ end)
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
+end)
+
+-- Terrarium: 3h. The book (#30), the gate. A jar written to its book and read
+-- back goes on exactly as it would have. In a jar of 900-second days from
+-- lamp-on, of each cast (between them they hold every kind), the book is
+-- written a step or two after the first clutch is laid, while the clutch's
+-- graphs are still being built a slice at a time. The jar it's read back into,
+-- composed again from its seed, hashes as the written one did, keeps its
+-- names, ids and family log, draws without touching the sim, and hashes as
+-- the written one does after another minute of both. A book of another
+-- version, or one cut short, isn't read; on disk, one that can't be read is
+-- kept aside and the book before it is read instead.
+local BOOK_AFTER = 20
+
+-- Where two Worlds first differ, as a path of keys, for a book that drifted
+local function first_difference(a, b, path, seen)
+    path, seen = path or 'world', seen or {}
+    if type(a) ~= type(b) then return path .. ' (' .. type(a) .. ' vs ' .. type(b) .. ')' end
+    if type(a) ~= 'table' then
+        if a ~= b and not (a ~= a and b ~= b) then return path .. ' (' .. tostring(a) .. ' vs ' .. tostring(b) .. ')' end
+        return nil
+    end
+    if seen[a] then return nil end
+    seen[a] = true
+    local keys = {}
+    for k in pairs(a) do keys[#keys + 1] = k end
+    for k in pairs(b) do if a[k] == nil then keys[#keys + 1] = k end end
+    table.sort(keys, function(x, y) return tostring(x) < tostring(y) end)
+    for _, k in ipairs(keys) do
+        if type(k) ~= 'table' and k ~= 'snap' and k ~= 'saved' and k ~= 'mesh' and k ~= 'glow_mesh' and k ~= 'marks'
+            and k ~= 'local_marks' and k ~= 'listeners' and type(a[k]) ~= 'function' and type(a[k]) ~= 'userdata'
+            and type(a[k]) ~= 'thread' then
+            local d = first_difference(a[k], b[k], path .. '.' .. tostring(k), seen)
+            if d then return d end
+        end
+    end
+end
+test('book', function(j, results)
+    local Book = require('book')
+    local statehash = require('core.statehash')
+    local Plants = require('jar.plants')
+    local DayCycle = require('jar.daycycle')
+    local Eggs = require('jar.eggs')
+    local dt, text = j.fixed_dt, nil
+    for _, jar in ipairs(jars(j, {20261018}, {20261018})) do
+        local seed = jar.seed
+        local w = j.open_cast(seed, DayCycle.presets.lampon, DAY, nil, jar.cast)
+        local laid
+        w.events:on(function(ev) if ev.kind == 'laid' then laid = laid or w.time end end)
+        local steps = 0
+        while not (laid and (#w.building == 0 or w.building[1].slices > 1)) and steps < DAY / dt do
+            j.step(w)
+            steps = steps + 1
+        end
+        check(results, laid, 'book: no clutch in a day of seed %d (%s)', seed, jar.name)
+        text = Book.write(w, {flora = Plants, motes = require('jar.motes')})
+        local written = statehash.of(w, Plants.all()).total
+        local who, building, logged = {}, #w.building, #w.history
+        -- (the graphs it has, by nav profile: keys a state hash doesn't see)
+        local function graphs(x)
+            local n = 0
+            for nav, g in pairs(x.navs) do
+                if type(nav) == 'table' and g.nodes then n = n + 1 end
+            end
+            return n
+        end
+        local built = graphs(w)
+        for i, c in ipairs(w.creatures) do who[i] = string.format('%s %s #%d', c.key, tostring(c.name), c.id) end
+        for _ = 1, math.floor(BOOK_AFTER / dt + 0.5) do j.step(w) end
+        local went_on = statehash.of(w, Plants.all())
+
+        local book, err = Book.read(text)
+        check(results, book, 'book: the book of seed %d (%s) can\'t be read: %s', seed, jar.name, tostring(err))
+        if book then
+            local r, same, hash = j.resume_jar(book)
+            check(results, same and hash == written, 'book: seed %d (%s) reads back as %s, written as %s', seed,
+                jar.name, hash, written)
+            local names = 0
+            for i, c in ipairs(r.creatures) do
+                if who[i] == string.format('%s %s #%d', c.key, tostring(c.name), c.id) then names = names + 1 end
+            end
+            check(results, names == #who and #r.creatures == #who, 'book: seed %d (%s) read back %d of %d by name and id',
+                seed, jar.name, names, #who)
+            check(results, #r.history == logged and r.history[1] and r.history[1].kind == 'arrived',
+                'book: seed %d (%s) read back %d of the log\'s %d', seed, jar.name, #r.history, logged)
+            check(results, graphs(r) == built, 'book: seed %d (%s) read back %d of its %d graphs by nav profile', seed,
+                jar.name, graphs(r), built)
+            -- (drawn as main.lua draws it, which makes its meshes again)
+            local ctx = {light_dir = r.light_dir, light = {glow = 1}}
+            local drew, derr = pcall(function()
+                for _, c in ipairs(r.creatures) do
+                    if c.draw_trail then c:draw_trail() end
+                    c:draw(ctx)
+                    if c.draw_emissive then c:draw_emissive(ctx) end
+                end
+                Eggs.draw(r, ctx.light)
+            end)
+            check(results, drew, 'book: seed %d (%s) read back won\'t draw: %s', seed, jar.name, tostring(derr))
+            check(results, statehash.of(r, Plants.all()).total == written, 'book: drawing seed %d (%s) changed it', seed,
+                jar.name)
+            for _ = 1, math.floor(BOOK_AFTER / dt + 0.5) do j.step(r) end
+            local where = statehash.diverged(went_on, statehash.of(r, Plants.all()))
+            check(results, not where, 'book: a minute after seed %d (%s) was read back it drifted, first in %s (%s)',
+                seed, jar.name, tostring(where), where and tostring(first_difference(w, r)) or '')
+            log.info('selftest', 'book   seed %-9d %d KB at %.0fs, %d creatures, %d eggs, %d graphs building: %s (%s)',
+                seed, #text / 1024, book.time, #r.creatures, #r.eggs, building, where and 'FAIL' or 'the same',
+                jar.name)
+        end
+    end
+
+    -- What isn't a book of this one's, isn't read
+    local other = text:gsub('^[^\n]*', 'terrarium book ' .. (Book.VERSION + 1), 1)
+    local book, err = Book.read(other)
+    check(results, not book and tostring(err):find('version'), 'book: a book of another version was read (%s)', tostring(err))
+    book = Book.read(text:sub(1, math.floor(#text / 2)))
+    check(results, not book, 'book: a book cut in half was read')
+    -- On disk: written beside itself and moved into place, the last one kept;
+    -- one that can't be read is kept aside, and the one before it read
+    love.filesystem.createDirectory('booktest')
+    local file = love.filesystem.getSaveDirectory() .. '/booktest/jar.book'
+    for _, f in ipairs({file, file .. '.old', file .. '.unread', file .. '.new'}) do os.remove(f) end
+    local stored, serr = Book.store(text, file)
+    if stored then stored, serr = Book.store(text, file) end
+    check(results, stored, 'book: a book couldn\'t be written: %s', tostring(serr))
+    local torn = io.open(file, 'wb')
+    torn:write(text:sub(1, 1000))
+    torn:close()
+    local back, from = Book.open(file)
+    check(results, back and from == file .. '.old', 'book: a torn book wasn\'t passed over for the one before (%s)',
+        tostring(from))
+    local aside = io.open(file .. '.unread', 'rb')
+    check(results, aside ~= nil, 'book: a torn book wasn\'t kept aside')
+    if aside then aside:close() end
+    for _, f in ipairs({file, file .. '.old', file .. '.unread'}) do os.remove(f) end
 end)
 
 -- Terrarium: 3d''. Styles (#94). The jar's looks: none first, the default, and
@@ -3227,11 +3371,11 @@ end
 -- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
 -- Returns true when every check passed, or nil and a message for a name it
 -- doesn't know.
-function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day, cast)
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day, cast, resume_jar)
     -- (the jars it opens the way the game does hold the classic cast too)
     local function open_classic(s, hour, d, level) return open_jar(s, hour, d, level, CLASSIC) end
     local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_classic, step = step, seed = seed,
-        day = day, cast = cast}
+        day = day, cast = cast, open_cast = open_jar, resume_jar = resume_jar}
     -- Terrarium: the names in a comma list, or nil and a message for one it doesn't know
     local function names(list)
         local out = {}
@@ -3297,6 +3441,65 @@ function dev.replay(open_jar, seed, seconds, fixed_dt, step, watch)
         log.info('dev', 'replay  identical')
     end
     return where == nil, a.total
+end
+
+-- Terrarium: whether a run keeps the jar's book (#30). Live play does, unless
+-- it asks for a jar of its own (a seed, a cast, a body, an hour, a day, a
+-- crowd, no wandering, or time away) and isn't --fresh. A snap, script or bench
+-- never does.
+local SHAPES = {'seed', 'cast', 'genomes', 'hour', 'day', 'crowd', 'nowander', 'away'}
+function dev.keeps_book(o)
+    if o.snap or o.script or o.bench then return false end
+    if o.fresh then return true end
+    for _, k in ipairs(SHAPES) do
+        if o[k] then return false end
+    end
+    return true
+end
+
+-- Terrarium: the book across two processes (#30), as tests/ci.sh checks it.
+-- --keep <sec> <file> opens the jar (from --seed, at --hour, with --day's
+-- days, or at midday on a real day), runs it <sec>, writes its book to
+-- <file>, then runs KEEP_AFTER more. --resume <file> reads that book back
+-- into a jar composed again from its seed, and runs KEEP_AFTER. Each returns
+-- whether all went well and the hash it ends on, which must be the same:
+-- inside one process, a book can't show that it kept what a new process
+-- doesn't have (a cache, a stream, a module's state).
+dev.KEEP_AFTER = 60
+function dev.keep(open_jar, resume_jar, o, seed, fixed_dt, step)
+    local Book = require('book')
+    local statehash = require('core.statehash')
+    local Plants = require('jar.plants')
+    local DayCycle = require('jar.daycycle')
+    local w
+    if o.keep then
+        w = open_jar(o.seed or seed, DayCycle.parseHour(o.hour) or DayCycle.presets.midday, o.day)
+        for _ = 1, math.floor((o.keep.seconds or 0) / fixed_dt + 0.5) do step(w) end
+        local text = Book.write(w, {flora = Plants, motes = require('jar.motes')})
+        local ok, err = Book.store(text, o.keep.file)
+        if not ok then
+            log.info('dev', 'keep  FAIL the book wasn\'t written: %s', tostring(err))
+            return false, '-'
+        end
+        log.info('dev', 'keep  %.0fs of jar (%s): %d creatures, %d eggs, %d graphs being built, %d in the log, %d KB, hash %s',
+            w.time, table.concat(w.cast, ','), #w.creatures, #w.eggs, #w.building, #w.history, #text / 1024, statehash.of(w, Plants.all()).total)
+    else
+        local f = io.open(o.resume, 'rb')
+        local text = f and f:read('*a')
+        if f then f:close() end
+        local book, err = Book.read(text or '')
+        if not book then
+            log.info('dev', 'resume  FAIL %s: %s', o.resume, tostring(err))
+            return false, '-'
+        end
+        local same, hash
+        w, same, hash = resume_jar(book)
+        log.info('dev', 'resume  %.0fs of jar (%s): %d creatures, %d eggs, %d graphs being built, hash %s%s', w.time,
+            table.concat(w.cast, ','), #w.creatures, #w.eggs, #w.building, hash, same and ' (as written)' or (', FAIL written as ' .. book.hash))
+        if not same then return false, hash end
+    end
+    for _ = 1, math.floor(dev.KEEP_AFTER / fixed_dt + 0.5) do step(w) end
+    return true, statehash.of(w, Plants.all()).total
 end
 
 -- Print every node on one solid with its edges, for a creature's graph

@@ -174,6 +174,17 @@ function Bus:flush()
         for _, fn in ipairs(self.listeners) do fn(ev) end
     end
 end
+World.Bus = Bus -- (so the book, #30, knows one by name)
+
+-- The way to the lamp from (x, y), for a body's light
+local function lamp_from(level_data)
+    local mouth = level_data.lamp or level_data.mouth -- Terrarium: the lamp above the jar
+    return function(x, y)
+        local dx, dy = mouth.x - x, mouth.y - y
+        local d = math.sqrt(dx * dx + dy * dy)
+        return dx / d, dy / d
+    end
+end
 
 function World.new(level_data, opts)
     opts = opts or {}
@@ -201,13 +212,13 @@ function World.new(level_data, opts)
     self.creatures, self.graphs, self.controllers = {}, {}, {}
     self.minds = {}
     self.graph_of = {} -- the first resident's graph, per kind
-
-    local mouth = level_data.lamp or level_data.mouth -- Terrarium: the lamp above the jar
-    self.light_dir = function(x, y)
-        local dx, dy = mouth.x - x, mouth.y - y
-        local d = math.sqrt(dx * dx + dy * dy)
-        return dx / d, dy / d
-    end
+    self.light_dir = lamp_from(level_data)
+    -- Terrarium: the family's log (#30), for the family book (#32): who
+    -- arrived, who laid, who hatched to whom, and who went back to the moss,
+    -- and when. Everyone is known in it by `id`, which is never given twice
+    -- (an index moves as the dead are taken out).
+    self.history = {}
+    self.ids = 0
 
     -- Terrarium: each resident is built from a genome. A jar draws its own from
     -- rng.sim; opts.genomes (strings or tables) stand in for the first residents
@@ -235,10 +246,7 @@ function World.new(level_data, opts)
     self.shells = {}   -- what's left of the eggs that hatched lately, until they fade
     self.lives = {}    -- creature index -> when it was born and how long it has (#24)
     self.remains = {}  -- where the dead went back to the moss lately, until their spores settle
-    -- Terrarium: a pair that has courted lays a clutch (#23)
-    self.events:on(function(ev)
-        if ev.kind == 'courted' then self:clutch(ev.who, ev.with) end
-    end)
+    self:listen()
     for i, r in ipairs(residents) do
         local nav = CLASS[r.key].nav_profile(self.genomes[i])
         if not self.navs[nav] then self:built(r.key, nav, NavGraph.new(self.level, nav)) end
@@ -246,6 +254,22 @@ function World.new(level_data, opts)
     end
     self:census()
     return self
+end
+
+-- Terrarium: what the World hears itself: a pair that has courted lays a clutch (#23)
+function World:listen()
+    self.events:on(function(ev)
+        if ev.kind == 'courted' then self:clutch(ev.who, ev.with) end
+    end)
+end
+
+-- Terrarium: a World read back from its book (#30) is whole but for its
+-- closures, which a book can't keep: the lamp's direction and who listens.
+-- (Those outside the World, the lantern and the synth, listen again too.)
+function World:revive()
+    self.light_dir = lamp_from(self.level.data)
+    self.events.listeners = {}
+    self:listen()
 end
 
 -- Work spent on hatchlings' graphs per step: about half a millisecond, so a clutch
@@ -281,7 +305,8 @@ function World:place(key, genome, x, solid_id, name, young, y)
     else
         c = CLASS[key].new(x, y or solid.y, self, body, young and 1 or nil)
     end
-    c.key, c.name = key, name
+    self.ids = self.ids + 1
+    c.key, c.name, c.id = key, name, self.ids
     c.home = {x = x, solid = solid_id, y = y}
     -- (every body carries a Base.Mover, even a climber that only jumps with it, #73)
     assert(c.mover, 'world: a ' .. key .. ' has no mover')
@@ -310,6 +335,10 @@ function World:place(key, genome, x, solid_id, name, young, y)
     local lived = young and 0 or day * rng.range(rng.sim, 0, World.LIVED)
     self.lives[i] = {born = self.time - lived, span = day * rng.range(rng.sim, World.LIFE[1], World.LIFE[2]), spared = 0}
     self.minds[i].scarce = self.scarce and self.scarce[key]
+    if not young then
+        self.history[#self.history + 1] = {kind = 'arrived', at = self.time, id = c.id, key = key, name = name,
+            genome = Genome.copy(genome)}
+    end
     return i
 end
 
@@ -320,7 +349,8 @@ end
 -- With `opts.due`, it waits until the jar's clock reaches it as well; with
 -- `opts.young`, it hatches small (#23), and waits for the graph of every body
 -- it will grow through, so its graphs are built while it incubates and a
--- moult never waits on one. `opts.parents` are the genomes it came from.
+-- moult never waits on one. `opts.parents` are the genomes it came from,
+-- and `opts.from` the ids of the two who laid it.
 function World:lay(genome, x, solid_id, name, opts)
     opts = opts or {}
     genome = Genome.clamp(Genome.copy(genome))
@@ -330,7 +360,7 @@ function World:lay(genome, x, solid_id, name, opts)
         navs[#navs + 1] = CLASS[key].nav_profile(Genome.young(genome, k / World.STAGES))
     end
     local egg = {key = key, genome = genome, x = x, solid = solid_id, name = name, nav = navs[#navs], navs = navs,
-        laid = self.time, due = opts.due or self.time, young = opts.young, parents = opts.parents}
+        laid = self.time, due = opts.due or self.time, young = opts.young, parents = opts.parents, from = opts.from}
     self.eggs[#self.eggs + 1] = egg
     for _, nav in ipairs(navs) do
         local queued = self.navs[nav] ~= nil
@@ -434,8 +464,10 @@ function World:clutch(a, b)
         local child = Genome.child(self.genomes[i], self.genomes[j], rng.sim)
         local due = self.time + day * rng.range(rng.sim, World.INCUBATE[1], World.INCUBATE[2])
         eggs[k] = self:lay(child, first + (k - 1) * World.EGG_GAP, s.id, nil,
-            {due = due, young = true, parents = {Genome.copy(self.genomes[i]), Genome.copy(self.genomes[j])}})
+            {due = due, young = true, parents = {Genome.copy(self.genomes[i]), Genome.copy(self.genomes[j])},
+                from = {a.id, b.id}})
     end
+    self.history[#self.history + 1] = {kind = 'laid', at = self.time, by = {a.id, b.id}, eggs = count}
     self.events:emit('laid', {who = a, with = b, eggs = eggs, x = spot.x, y = spot.y})
     return eggs
 end
@@ -459,6 +491,10 @@ function World:hatch()
         for _, nav in ipairs(egg.navs) do ready = ready and self.navs[nav] ~= nil end
         if ready then
             egg.who = self:place(egg.key, egg.genome, egg.x, egg.solid, egg.name, egg.young)
+            if egg.young then
+                self.history[#self.history + 1] = {kind = 'hatched', at = self.time, id = self.creatures[egg.who].id,
+                    key = egg.key, name = egg.name, genome = Genome.copy(egg.genome), parents = egg.from}
+            end
             local y = self.level.by_id[egg.solid].y
             self.events:emit('hatched', {who = self.creatures[egg.who], x = egg.x, y = y})
             if egg.young then
@@ -581,6 +617,8 @@ function World:return_to_moss(i)
     local kept = CLASS[c.key].keeps and not self.coarse and CLASS[c.key].keeps(c)
     if kept then r.kept, r.keep = kept, World.KEPT * self:day_length() end
     self.remains[#self.remains + 1] = r
+    self.history[#self.history + 1] = {kind = 'returned', at = self.time, id = c.id, key = c.key, name = c.name,
+        born = self.lives[i].born}
     self:remove(i)
     self.events:emit('returned', {who = c, index = i, x = x, y = y})
 end
