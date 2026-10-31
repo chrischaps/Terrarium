@@ -4,6 +4,8 @@ A sealed glass jar of moss, stone and soil where small soft-bodied creatures liv
 
 It's a quiet game about watching something become itself.
 
+**Project page:** [chaps.dev/projects/terrarium](https://chaps.dev/projects/terrarium/) has a day in the jar in a minute, the lantern at night, and stills of courting, frogspawn and a hatchling.
+
 ## The life loop
 
 ```
