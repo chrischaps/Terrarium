@@ -28,6 +28,8 @@ Click a creature to follow it with the lantern, and right-click to drop in a pin
 
 On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
 
+The jar asks for LÖVE 11.5 (`conf.lua`), and an older LÖVE stops on a Compatibility Warning dialog before the jar appears, which a frame on a wall has no one to dismiss. On a Raspberry Pi, use Raspberry Pi OS trixie (Debian 13), whose `apt install love` is 11.5. Bookworm's is 11.4. Checked on the frame's Pi 5 on 2026-10-30, with trixie's 11.5 package unpacked to the home folder: `love terrarium.love --frame` came up at 1280 × 720 within 3 seconds and showed no dialog. Linux has no `lovec`, so run the self-test with `love`, which already prints to the terminal.
+
 ## Milestones
 
 | Milestone | Done when |
