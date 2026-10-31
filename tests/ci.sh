@@ -4,13 +4,18 @@
 #   LOVE=lovec sh tests/ci.sh                          (from the repo root)
 #   LOVE=... WINDOW="xvfb-run -a" sh tests/ci.sh       (also check a windowed jar)
 #   GAME=dist/terrarium.love sh tests/ci.sh            (check the packed game, #91)
+#   LONG=1 sh tests/ci.sh                              (the long gates too, #112)
 #
 # 1. The randomness lint.
-# 2. The whole self-test, headless, but for the month.
-# 3. The month (#27, the M3 gate): ten jars of 30 jar days each, one process
-#    per seed, side by side (it's the slowest test by far, and the timed
-#    tests in the self-test mustn't share the machine with it). Each writes
-#    its genes, day by day, to month_<seed>.csv in the save directory.
+# 2. The self-test, headless, but for the long gates (#112): eggs (#23), floor
+#    (#26), ranges (#17) and the month (#27). Together they're about half an
+#    hour of each run, and an ordinary commit doesn't need them every time, so
+#    they run only with LONG=1: by hand, and on every release (release.yml).
+#    Each is still `lovec . --test <name>` on its own.
+# 3. With LONG=1, the month (#27, the M3 gate): ten jars of 30 jar days each,
+#    one process per seed, side by side (it's the slowest test by far, and the
+#    timed tests in the self-test mustn't share the machine with it). Each
+#    writes its genes, day by day, to month_<seed>.csv in the save directory.
 # 4. The replay hash from two separate processes. Inside one process the
 #    replay check can't see bugs that only differ between runs: a pairs()
 #    order, a table address, the wall clock. Then once more with LuaJIT's
@@ -29,6 +34,8 @@ GAME=${GAME:-.} # what LÖVE runs; the lint always reads the source
 SECONDS_OF_JAR=${SECONDS_OF_JAR:-300}
 MONTH_SEEDS=${MONTH_SEEDS:-"20261018 1 2 3 4 5 6 7 8 9"} # (dev.lua's MONTH_SEEDS)
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 2)}
+LONG=${LONG:-}           # set to anything for the long gates too
+SLOW=eggs,floor,ranges   # (the self-test's long gates; the month runs apart)
 failed=0
 
 hash_of() {
@@ -38,19 +45,26 @@ hash_of() {
 echo "== randomness lint"
 sh tests/check_random.sh || failed=1
 
-echo "== self-test"
-"$LOVE" "$GAME" --selftest --skip month || failed=1
-
-echo "== a month in the jar, $JOBS seeds at a time"
-logs=$(mktemp -d) || exit 1
-printf '%s\n' $MONTH_SEEDS | xargs -P "$JOBS" -I{} sh -c \
-    '"$1" "$4" --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs" "$GAME"
-for seed in $MONTH_SEEDS; do grep -v '^\[nav\]' "$logs/$seed.log"; done
-if [ -s "$logs/failed" ]; then
-    echo "month: FAIL seeds $(tr '\n' ' ' < "$logs/failed")"
-    failed=1
+if [ -n "$LONG" ]; then
+    echo "== self-test, the long gates too"
+    "$LOVE" "$GAME" --selftest --skip month || failed=1
+else
+    echo "== self-test, but for the long gates ($SLOW and the month; LONG=1 runs them)"
+    "$LOVE" "$GAME" --selftest --skip "month,$SLOW" || failed=1
 fi
-rm -rf "$logs"
+
+if [ -n "$LONG" ]; then
+    echo "== a month in the jar, $JOBS seeds at a time"
+    logs=$(mktemp -d) || exit 1
+    printf '%s\n' $MONTH_SEEDS | xargs -P "$JOBS" -I{} sh -c \
+        '"$1" "$4" --test month --seed "$2" > "$3/$2.log" 2>&1 || echo "$2" >> "$3/failed"' sh "$LOVE" {} "$logs" "$GAME"
+    for seed in $MONTH_SEEDS; do grep -v '^\[nav\]' "$logs/$seed.log"; done
+    if [ -s "$logs/failed" ]; then
+        echo "month: FAIL seeds $(tr '\n' ' ' < "$logs/failed")"
+        failed=1
+    fi
+    rm -rf "$logs"
+fi
 
 echo "== replay across processes ($SECONDS_OF_JAR s of jar)"
 a=$(hash_of "$LOVE" "$GAME" --replay "$SECONDS_OF_JAR")
