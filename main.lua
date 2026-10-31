@@ -82,11 +82,36 @@ local sitting -- a portrait for the family book (#32), defined with the plates b
 local watchReplay -- likewise: --replay in a window draws what it runs
 local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
 local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
-local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
+-- How the jar's view goes on a w x h screen (#90): in a window the room shows
+-- round the jar, and on the frame the glass's inside fills it (#110)
+local function fitFor(w, h)
+    return args.frame and Screen.tank(w, h) or Screen.fit(w, h, C.W, C.H)
+end
+local view = fitFor(C.W, C.H) -- the jar's view on the window
+-- The open family book's fit: always the window's, so on the frame it's no
+-- bigger than in a window and none of it is lost off the screen's edges
+local leaf = Screen.fit(C.W, C.H, C.W, C.H)
+
 local touch = Touch.new() -- a finger on the frame's glass
 local book -- the family book (#32): everyone who has lived in the jar
 local pages -- and the book itself, on the desk and open, wherever there's a window
 local passing -- the moment on opening a jar that was left (#31), while it lasts
+
+-- On the frame the closed book is off the screen, below it on the desk, so
+-- it's found by its ribbon, up over the bottom edge (jar/pages.lua)
+local function tabOn(f, w, h)
+    local x, y = Screen.toView(f, w - Pages.TAB_X, h)
+    return { x = x, y = y, k = f.k }
+end
+local function tuck()
+    if pages and args.frame then pages.tab = tabOn(view, love.graphics.getDimensions()) end
+end
+
+-- A point on the screen, in the view's pixels the book is drawn in: the
+-- jar's, or the open book's own
+local function onBook(x, y)
+    return Screen.toView(pages and pages.open and leaf or view, x, y)
+end
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -129,6 +154,7 @@ local function openJar(seed, hour, day, level, cast)
     -- (and the family book hears who comes and goes, and keeps their portraits)
     book = Book.new(w, seed)
     pages = not headless.active() and Pages.new(book) or nil
+    tuck()
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
     local homes = World.residents(level or room, w.cast)
@@ -237,7 +263,7 @@ function love.load()
     if not headless.active() then love.resize(love.graphics.getDimensions()) end
     if args.frame then
         love.mouse.setVisible(false)
-        print(string.format('[frame] %dx%d, the jar at %.2f from (%d, %d)', love.graphics.getWidth(),
+        print(string.format("[frame] %dx%d, the jar at %.3f from (%.1f, %.1f)", love.graphics.getWidth(),
             love.graphics.getHeight(), view.k, view.x, view.y))
         io.stdout:flush() -- (a launcher reading this knows the jar is up)
     end
@@ -286,7 +312,7 @@ end
 -- Follow whoever is at a point on the screen with the lantern, or let go.
 -- Terrarium: or, on the family book (#32), open it, turn its pages, close it.
 local function followAt(x, y)
-    if pages and pages:press(Screen.toView(view, x, y)) then return end
+    if pages and pages:press(onBook(x, y)) then return end
     local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
     if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
 end
@@ -338,7 +364,7 @@ function love.update(dt)
     -- A hand over anyone you could follow, or the book
     if love.mouse.isCursorSupported() and not args.frame then
         local vx, vy = Screen.toView(view, love.mouse.getPosition())
-        local over = pages and pages:over(vx, vy)
+        local over = pages and pages:over(onBook(love.mouse.getPosition()))
         if not (pages and pages.open) then
             local lx, ly = Tank.toLevel(vx, vy)
             over = over or Lantern.creatureAt(world, lx, ly)
@@ -642,6 +668,10 @@ function scriptApi()
 
     -- Render a frame into a w x h canvas (default the window's size) and return it.
     --
+    -- With opts.fit (core/screen.lua), through that fit, as a w x h screen
+    -- shows it; with opts.frame, as the frame shows it (#110): the glass's
+    -- inside filling it, and the book's ribbon to find it by.
+    --
     -- With opts.view = {x0, y0, x1, y1}, a plate instead: that stretch of the
     -- creatures' plane, in level units, drawn across the canvas's width at full
     -- resolution. Behind it is the window's own frame, enlarged and blurred
@@ -653,15 +683,29 @@ function scriptApi()
         local target = canvas('target', w, h)
         local v = opts.view
         if not v then
+            local fit, tab = opts.frame and Screen.tank(w, h) or opts.fit, pages and pages.tab
+            if pages and opts.frame then pages.tab = tabOn(fit, w, h) end
             drawScene(light)
             love.graphics.setCanvas({ target, stencil = true })
             love.graphics.clear(0, 0, 0, 1)
-            love.graphics.push()
-            love.graphics.scale(w / C.W, h / C.H)
-            composite(nil, nil, nil, world.time)
+            if fit then
+                -- (through a fit, core/screen.lua, as a screen of that shape shows it)
+                composite(nil, nil, nil, world.time, fit)
+                if pages and pages.tab then
+                    Screen.push(fit)
+                    pages:drawTab()
+                    love.graphics.pop()
+                end
+                Screen.push(Screen.fit(w, h, C.W, C.H)) -- (the open book, as on a screen)
+            else
+                love.graphics.push()
+                love.graphics.scale(w / C.W, h / C.H)
+                composite(nil, nil, nil, world.time)
+            end
             if pages then pages:draw() end
             love.graphics.pop()
             love.graphics.setCanvas()
+            if pages then pages.tab = tab end
             capture.last = target
             return target
         end
@@ -726,9 +770,15 @@ function love.draw()
     -- Render reads the jar's clock; it never moves it
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     composite(nil, nil, nil, nil, view)
+    if pages and pages.tab then
+        -- the book's ribbon, on the frame (its desk is off the screen)
+        Screen.push(view)
+        pages:drawTab()
+        love.graphics.pop()
+    end
     if pages and pages.shown > 0 then
         -- the family book, open over the jar (#32)
-        Screen.push(view)
+        Screen.push(leaf)
         pages:draw()
         love.graphics.pop()
     end
@@ -761,7 +811,8 @@ function love.draw()
 end
 
 function love.resize(w, h)
-    view = Screen.fit(w, h, C.W, C.H)
+    view, leaf = fitFor(w, h), Screen.fit(w, h, C.W, C.H)
+    tuck()
 end
 
 -- Click a creature to follow it with the lantern; click anywhere else to let
@@ -819,7 +870,7 @@ local function saveThumb(file)
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     love.graphics.setCanvas(canvas)
     love.graphics.clear(0, 0, 0, 1)
-    composite(nil, nil, nil, world.time, Screen.fit(w, h, C.W, C.H))
+    composite(nil, nil, nil, world.time, fitFor(w, h))
     love.graphics.setCanvas()
     local out, err = io.open(file, 'wb')
     if not out then
