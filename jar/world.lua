@@ -168,6 +168,11 @@ Bus.__index = Bus
 function Bus.new() return setmetatable({queue = {}, listeners = {}}, Bus) end
 function Bus:emit(kind, data) data.kind = kind; self.queue[#self.queue + 1] = data end
 function Bus:on(fn) self.listeners[#self.listeners + 1] = fn end
+-- (said at once, between steps: World:coarsen and :embody, which are not in one)
+function Bus:tell(kind, data)
+    data.kind = kind
+    for _, fn in ipairs(self.listeners) do fn(data) end
+end
 function Bus:flush()
     local q = self.queue
     self.queue = {}
@@ -688,6 +693,95 @@ function World:reset()
         self.minds[i].dying = life.dying and true or nil
         self.minds[i].scarce = self.scarce[c.key]
     end
+end
+
+-- Terrarium: catch-up (#31). A live jar can go coarse and come back: each
+-- body is swapped for a token of itself (or a token for a body of itself) in
+-- place, so every index, mind, life and egg is untouched, and each goes on to
+-- the goal it had. Both stand it on its graph's node nearest its anchor (a
+-- token mid-leap lands where it was going), so a body is only ever put where
+-- its own graph says it can be. A creature is a new table after either: hold
+-- its index, or listen for `returned`, as the lantern does.
+
+-- How pale creature `i` is still (#23): what its plan's new and grow take
+function World:pale(i)
+    local y = self.young[i]
+    return y and 1 - y.stage / World.STAGES or nil
+end
+
+-- The node of its graph creature `i` stands on, or is landing on
+function World:standing(i)
+    local c, g = self.creatures[i], self.graphs[i]
+    local to = c.leg and c.leg.to
+    if to then return to end
+    local x, y = c:anchor()
+    if c.profile.climbs then
+        local nx, ny = c.nx, c.ny
+        if c.normal then nx, ny = c:normal() end
+        return g:node_near(x, y, c.solid, nx, ny)
+    end
+    return g:node_near(x, y, c.mover.solid)
+end
+
+-- Its controller's goal and dare, then a new one of `kind` for `c`, going there
+local function handover(old, kind, c, graph)
+    local new = kind.new(c, graph)
+    new.pace = old.pace
+    local goal = old.goal or old.pending
+    if goal and old:has_path() then new:go_to(goal, old.dare) end
+    return new
+end
+
+-- Every body to a token where it stands
+function World:coarsen()
+    if self.coarse then return end
+    local was = {}
+    for i, c in ipairs(self.creatures) do was[i] = c end
+    for i, c in ipairs(self.creatures) do
+        local n = self:standing(i)
+        local t = Token.new(c.key, CLASS[c.key], n.x, n.y, c.genome, self:pale(i))
+        t.name, t.home, t.skin = c.name, c.home, c.skin
+        t:set(n.x, n.y, n.solid, n.nx, n.ny)
+        t.mover.solid = n.solid
+        t.face.closing = c.face and c.face.closing
+        self.creatures[i] = t
+        self.controllers[i] = handover(self.controllers[i], Glide, t, self.graphs[i])
+    end
+    self.coarse, self.snap, self.saved = true, nil, nil
+    -- (each is a new table now: whoever holds one hears which it became)
+    for i, t in ipairs(self.creatures) do self.events:tell('became', {who = t, was = was[i], index = i}) end
+end
+
+-- Every token to a body where it stands, its feet set down on its node
+function World:embody()
+    if not self.coarse then return end
+    local was = {}
+    for i, c in ipairs(self.creatures) do was[i] = c end
+    self.coarse, self.snap, self.saved = nil, nil, nil
+    for i, t in ipairs(self.creatures) do
+        local n, g = self:standing(i), self.controllers[i]
+        if t.leg then
+            -- (it lands: the step of its path it was on is done)
+            t.leg = nil
+            if g.path and g.path[g.i] and g.path[g.i].node == n then
+                g.i = g.i + 1
+                if g.i > #g.path then g.path, g.arrived = nil, true end
+            end
+        end
+        local c = CLASS[t.key].new(n.x, n.y, self, t.genome, self:pale(i))
+        c.key, c.name, c.home = t.key, t.name, t.home
+        c.mover.solid = n.solid
+        if c.profile.climbs then
+            c.solid = n.solid
+            c.nx, c.ny, c.tnx, c.tny = n.nx, n.ny, n.nx, n.ny
+            c:plant_all()
+        end
+        if c.face then c.face.closing = t.face.closing end
+        self.creatures[i] = c
+        self.controllers[i] = handover(g, Controller, c, self.graphs[i])
+        self.controllers[i].arrived = g.arrived
+    end
+    for i, c in ipairs(self.creatures) do self.events:tell('became', {who = c, was = was[i], index = i}) end
 end
 
 -- Collect everything that pushes flora and scatters fireflies

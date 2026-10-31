@@ -26,7 +26,11 @@ Or take `terrarium.love` from a [release](https://github.com/chrischaps/Terrariu
 
 Click a creature to follow it with the lantern, and right-click to drop in a pinch of food. The little green book on the desk (or B) is the family book: who came and who has gone while you were away, and a page with a portrait for everyone who has lived in the jar. The jar is heard faintly through its glass, and M hushes it. Tab changes how the jar is drawn (`--style <name>` opens it in one).
 
+A jar you leave keeps living. `love . --away 2d` opens one that was left two days ago: while the glass is fogged, the days it missed go by as light and are counted in the mist, and then it clears on the jar as it is now. A week is the most it lives through.
+
 On a touchscreen picture frame, `love . --frame` fills the screen. Tap a creature to follow it, and hold a finger still on the glass to drop in a pinch of food.
+
+The jar asks for LÖVE 11.5 (`conf.lua`), and an older LÖVE stops on a Compatibility Warning dialog before the jar appears, which a frame on a wall has no one to dismiss. On a Raspberry Pi, use Raspberry Pi OS trixie (Debian 13), whose `apt install love` is 11.5. Bookworm's is 11.4. Checked on the frame's Pi 5 on 2026-10-30, with trixie's 11.5 package unpacked to the home folder: `love terrarium.love --frame` came up at 1280 × 720 within 3 seconds and showed no dialog. Linux has no `lovec`, so run the self-test with `love`, which already prints to the terminal.
 
 ## Milestones
 

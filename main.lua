@@ -16,6 +16,8 @@
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
+--   love . --away <time>     come back to a jar left that long ago: 90m, 36h, 2d (jar days)
+--                            or seconds, lived on the coarse step while the glass is fogged
 --   lovec . --replay <sec>   open the jar twice, run <sec> of sim, check both hash the same
 --   lovec . --test <name>    one self-test (graphs, trips, framerate, lantern, day, replay, genome, worm, blob, audio)
 --   lovec . --genome "worm segments=24 stiffness=0.9"   the first worm has this body
@@ -48,6 +50,8 @@ local Eggs = require('jar.eggs')
 local Remains = require('jar.remains')
 local Food = require('jar.food')
 local Condensation = require('jar.condensation')
+local Catchup = require('jar.catchup')
+local Passing = require('jar.passing')
 local Lantern = require('jar.lantern')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
@@ -82,6 +86,7 @@ local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90
 local touch = Touch.new() -- a finger on the frame's glass
 local book -- the family book (#32): everyone who has lived in the jar
 local pages -- and the book itself, on the desk and open, wherever there's a window
+local passing -- the moment on opening a jar that was left (#31), while it lasts
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -190,6 +195,11 @@ function love.load()
 
     startHour = DayCycle.parseHour(args.hour) or (args.snap and DayCycle.presets.midday) or DayCycle.clockHour()
     daySeconds = args.day or C.DAY_SECONDS
+    if args.away then
+        -- (left that long ago, so it comes back at this hour, less any days past the cap)
+        local away = args.away.days and args.away.days * daySeconds or args.away.seconds
+        startHour = (startHour - Catchup.span(away, daySeconds) / daySeconds * 24) % 24
+    end
 
     world = openJar(args.seed or SEED, startHour, daySeconds)
     furnish()
@@ -197,7 +207,23 @@ function love.load()
         -- it hears what the World says happened, after each step
         synth = Synth.new()
         synth:mute(args.mute)
-        world.events:on(function(ev) synth:on_event(ev, world, lantern:following(world)) end)
+        -- (but not to what happened while you were away)
+        world.events:on(function(ev)
+            if not world.catching then synth:on_event(ev, world, lantern:following(world)) end
+        end)
+    end
+
+    -- Terrarium: the time the jar was left, lived on the coarse step (#31).
+    -- --away opens it that long before now and catches it up; the book (#30)
+    -- will ask the same of a saved jar, with the time since it was saved. A
+    -- snap or a script gets it at once, and play gets the moment.
+    if args.away then
+        local away = args.away.days and args.away.days * daySeconds or args.away.seconds
+        if args.snap or args.script or args.bench then
+            Catchup.now(world, away)
+        else
+            passing = Passing.begin(world, away)
+        end
     end
 
     if args.snap then
@@ -285,6 +311,10 @@ function love.update(dt)
         return
     end
     if not world or snapFrames then return end
+    if passing then
+        if passing:update(dt) then passing = nil end
+        if passing and passing:catching() then return end -- (nothing to hear, follow or touch yet)
+    end
     local t0 = bench and love.timer.getTime()
     accumulator = accumulator + math.min(dt, 0.25)
     while accumulator >= STEP do
@@ -350,28 +380,30 @@ local function drawNav()
 end
 
 local function drawCreatures(alpha, light)
-    -- Draw between the last two steps; the sim never sees the blended points
-    world:interpolate(alpha)
+    -- Draw between the last two steps; the sim never sees the blended points.
+    -- (A jar catching up is only anchors, and the moment draws those, #31.)
+    local bodies = not world.coarse
+    if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
     Render.useObject(C.PLANE_D)
-    for _, c in ipairs(world.creatures) do
+    for _, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_trail then c:draw_trail() end
     end
     Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
     Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
     Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
-    for i, c in ipairs(world.creatures) do
+    for i in ipairs(bodies and world.creatures or {}) do
         Remains.through(world, i, 'draw', ctx)
     end
     love.graphics.setShader()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
     Food.draw_emissive(world.food, light, world.time, alpha)
-    for i, c in ipairs(world.creatures) do
+    for i, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
-    world:restore()
+    if bodies then world:restore() end
 end
 
 local function drawObject(o)
@@ -417,6 +449,7 @@ local function drawScene(light, plane)
         Scenery.draw(light, world.time)
         Moss.draw(world.moss, light, world.time, world.creatures)
         drawCreatures(accumulator / STEP, light)
+        if passing then passing:draw() end
         lantern:draw(light)
         if args.nav then drawNav() end
         love.graphics.pop()
@@ -428,7 +461,7 @@ local function drawScene(light, plane)
     Plants.drawGlow(light)
     Motes.drawFront(light)
     Scape.drawFront(light)
-    Condensation.draw(light) -- on the inside of the glass, under its dust
+    Condensation.draw(light, passing and passing:glass()) -- on the inside of the glass, under its dust
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
@@ -589,6 +622,24 @@ function scriptApi()
         for _ = 1, math.max(1, math.floor(seconds / STEP + 0.5)) do step() end
     end
 
+    -- Terrarium: come back to the open jar `seconds` after it was left (#31).
+    -- Returns the moment, or nil if the time was short enough to live at once.
+    function api.away(seconds)
+        passing = Passing.begin(world, seconds)
+        return passing
+    end
+
+    -- A frame of the moment, `dt` long, with `steps` coarse steps of catch-up
+    -- in it (so a capture is exact), and the live jar going on once it's back.
+    -- Returns false once the moment is over.
+    function api.pass(dt, steps)
+        if not passing then return false end
+        local over = passing:update(dt, steps or 1)
+        if not passing:catching() then api.step(dt) end
+        if over then passing = nil end
+        return not over
+    end
+
     -- Render a frame into a w x h canvas (default the window's size) and return it.
     --
     -- With opts.view = {x0, y0, x1, y1}, a plate instead: that stretch of the
@@ -717,7 +768,7 @@ end
 -- go. Right-click in the jar to drop in a pinch of food there (#25). On the
 -- frame, the left button is a finger too: a touchscreen may come as a pointer.
 function love.mousepressed(x, y, button, istouch)
-    if not world or capture or istouch then return end
+    if not world or capture or istouch or (passing and passing:catching()) then return end
     if button == 1 and args.frame then
         touch:press('mouse', x, y)
     elseif button == 1 then
@@ -737,7 +788,7 @@ end
 
 -- A tap follows, as a click does; a long press is a pinch (Touch:update)
 function love.touchpressed(id, x, y)
-    if world and not capture then touch:press(id, x, y) end
+    if world and not capture and not (passing and passing:catching()) then touch:press(id, x, y) end
 end
 
 function love.touchmoved(id, x, y)

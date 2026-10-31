@@ -35,6 +35,8 @@
 --                                         seed's cast (the self-tests hold the classic one)
 --   lovec . --genome "<plan> gene=v ..."  Terrarium: the first resident of that plan has
 --                                         this genome (repeat for the second)
+--   love . --away <time>                  Terrarium: a jar left <time> ago (2d, 36h, 90m or
+--                                         seconds), caught up on opening (#31)
 --   lovec . --replay <sec>                Terrarium: open the jar twice, step both <sec>,
 --                                         print the state hash, exit 1 if they differ
 --                                         (with --window, drawing both as they go)
@@ -101,6 +103,17 @@ function dev.parse(args)
         elseif a == '--genome' then
             o.genomes = o.genomes or {}
             o.genomes[#o.genomes + 1] = args[i + 1]
+            i = i + 1
+        -- Terrarium: a jar left that long ago (#31): 2d, 36h, 90m in jar days, hours
+        -- and minutes (so --day shortens them too), or plain seconds
+        elseif a == '--away' then
+            local n, unit = (args[i + 1] or ''):match('^([%d%.]+)([dhms]?)$')
+            n = tonumber(n)
+            if n and unit ~= '' and unit ~= 's' then
+                o.away = {days = n / ({d = 1, h = 24, m = 1440})[unit]}
+            elseif n then
+                o.away = {seconds = n}
+            end
             i = i + 1
         elseif a == '--replay' then o.replay = tonumber(args[i + 1]); i = i + 1
         elseif a == '--navdump' then o.navdump = {who = args[i + 1], solid = args[i + 2]}; i = i + 2
@@ -1317,6 +1330,162 @@ test('month', function(j, results)
     check(results, where == nil, 'month: two coarse runs of seed %d diverged, first in %s', seeds[1], tostring(where))
 end)
 
+-- Terrarium: 3f. Catch-up after time away (#31), the gate. A live jar, caught
+-- mid-stride, is away a whole day: it lives it on the coarse step
+-- (jar/catchup.lua) in a few seconds (AWAY_BUDGET, a second try for a slow
+-- machine) and comes back at the hour it should, every creature a body again,
+-- and for AWAY_AFTER seconds after every one of them stays whole by its plan's
+-- LIMITS, in the jar and out of the scenery. Then a week, with a compressed
+-- day: more than CAP days away lives CAP of them, keeping the hour, and the
+-- eggs laid, hatched and grown and the elders gone back to the moss in it come
+-- back as bodies too, the hatchlings small. A jar away is still its seed plus
+-- its history: two runs agree, however the catch-up was split between frames.
+-- (AWAY_AFTER is long enough for a body set down on its node to settle. Watched
+-- longer, a young worm grazing will now and then stay knotted for a few
+-- seconds; a jar that was never away does that too.)
+local AWAY_BUDGET = 8 -- seconds a day away may take
+local AWAY_AFTER = 20
+local AWAY_SUNK = 4
+test('catchup', function(j, results)
+    local World, level_data, dt = j.World, j.level_data, j.fixed_dt
+    local Catchup = require('jar.catchup')
+    local DayCycle = require('jar.daycycle')
+    local Token = require('bodies.token')
+    local statehash = require('core.statehash')
+    local C = require('jar.config')
+    local level = require('jar.level').new(level_data)
+    local W, H = level_data.width, level_data.height
+    local every = math.floor(0.1 / dt + 0.5)
+
+    -- The cap: whole days past it are let go, so the hour is kept
+    local D = C.DAY_SECONDS
+    for _, t in ipairs({{0, 0}, {-5, 0}, {0.5, 0}, {D, D}, {3.5 * D, 3.5 * D}, {7 * D, 7 * D}, {7 * D + 1, 6 * D + 1},
+        {30 * D + 3600, 6 * D + 3600}}) do
+        local got = Catchup.span(t[1], D)
+        check(results, got == t[2], 'catchup: %.0f s away lived %.0f s, not %.0f', t[1], got, t[2])
+    end
+
+    local function open(seed, cast, day)
+        rng.seed(seed)
+        return World.new(level_data, {cast = cast, wander = true, selected = 0, hour = DayCycle.presets.lampon,
+            day = day, seed = seed})
+    end
+
+    -- How far a point is inside the scenery (0 outside it)
+    local function depth(x, y)
+        local s = level:solid_at(x, y)
+        if not s then return 0 end
+        return math.min(x - s.x, s.x + s.w - x, y - s.y, s.y + s.h - y)
+    end
+
+    -- `seconds` of live jar, watching every body: what went wrong, if anything
+    local function watch(w, seconds, name)
+        local ms, out = {}, {}
+        for s = 1, math.floor(seconds / dt + 0.5) do
+            w:step(dt)
+            if s % every == 0 then
+                for _, c in ipairs(w.creatures) do
+                    local m = ms[c] or {sunk = 0}
+                    ms[c] = m
+                    for _, p in ipairs(c:interp_points()) do
+                        if not (p.x >= 0 and p.x <= W and p.y >= 0 and p.y <= H) then -- (NaN too)
+                            m.out = m.out or string.format('left the jar at (%.0f,%.0f)', p.x, p.y)
+                        else
+                            m.sunk = math.max(m.sunk, depth(p.x, p.y))
+                        end
+                    end
+                    class_of(World, c.key).health(c, m, every * dt)
+                end
+            end
+        end
+        for c, m in pairs(ms) do
+            local f = faults(class_of(World, c.key), m)
+            if m.out then f[#f + 1] = m.out end
+            if m.sunk > AWAY_SUNK then f[#f + 1] = string.format('sank %.1fpx into the scenery', m.sunk) end
+            if #f > 0 then out[#out + 1] = string.format('%s: a %s %s', name, c.key, table.concat(f, ', ')) end
+        end
+        table.sort(out)
+        return out
+    end
+
+    local function bodies(w)
+        local n = 0
+        for _, c in ipairs(w.creatures) do
+            if getmetatable(c) ~= Token and c.draw then n = n + 1 end
+        end
+        return n == #w.creatures and not w.coarse
+    end
+
+    -- A day away, from a jar caught mid-stride
+    for _, jar in ipairs(jars(j, {20261018, 3}, {7})) do
+        local name = string.format('seed %d (%s)', jar.seed, jar.name)
+        local w = open(jar.seed, jar.cast)
+        for _ = 1, math.floor(30 / dt + 0.5) do w:step(dt) end
+        local hour, t = w:hour(), w.time
+        local t0 = love.timer.getTime()
+        Catchup.now(w, D)
+        local took = love.timer.getTime() - t0
+        if took >= AWAY_BUDGET then
+            -- (a slow run from the machine gets a second try; a real cost slows both)
+            local again = open(jar.seed, jar.cast)
+            for _ = 1, math.floor(30 / dt + 0.5) do again:step(dt) end
+            t0 = love.timer.getTime()
+            Catchup.now(again, D)
+            took = math.min(took, love.timer.getTime() - t0)
+        end
+        check(results, took < AWAY_BUDGET, 'catchup: a day away from %s took %.1fs (budget %d)', name, took, AWAY_BUDGET)
+        check(results, math.abs(w.time - t - D) < 1e-6 and math.abs(w:hour() - hour) < 1e-6,
+            'catchup: %s came back at %.2f h, %.0f s on, not %.2f h a day on', name, w:hour(), w.time - t, hour)
+        check(results, bodies(w), 'catchup: %s came back with tokens in it', name)
+        local wrong = watch(w, AWAY_AFTER, name)
+        check(results, #wrong == 0, 'catchup: %d bodies came back broken', #wrong)
+        for _, f in ipairs(wrong) do results.fail[#results.fail + 1] = 'catchup:   ' .. f end
+        log.info('selftest', 'catchup      a day away from %-26s in %.1fs: %d in the jar, %d eggs, whole for %d s after',
+            name, took, #w.creatures, #w.eggs, AWAY_AFTER)
+    end
+
+    -- A month away, on a day of `day` seconds: it lives a week of it
+    local day = DAY
+    for _, jar in ipairs(jars(j, {20261018}, {7})) do
+        local name = string.format('seed %d (%s)', jar.seed, jar.name)
+        local w = open(jar.seed, jar.cast, day)
+        for _ = 1, math.floor(10 / dt + 0.5) do w:step(dt) end
+        local hatched, returned, young = 0, 0, 0
+        w.events:on(function(ev)
+            if ev.kind == 'hatched' then hatched = hatched + 1 end
+            if ev.kind == 'returned' then returned = returned + 1 end
+        end)
+        local t = w.time
+        Catchup.now(w, 30 * day + 100)
+        for i in pairs(w.young) do young = young + (w.creatures[i] and 1 or 0) end
+        check(results, math.abs(w.time - t - 6 * day - 100) < 1e-6, 'catchup: a month away from %s lived %.2f days, not %.2f',
+            name, (w.time - t) / day, 6 + 100 / day)
+        check(results, hatched > 0 and returned > 0, 'catchup: a week away from %s saw %d hatch and %d go back to the moss',
+            name, hatched, returned)
+        check(results, bodies(w), 'catchup: %s came back from a week with tokens in it', name)
+        local wrong = watch(w, AWAY_AFTER, name .. ' a week on')
+        check(results, #wrong == 0, 'catchup: %d bodies came back broken from a week', #wrong)
+        for _, f in ipairs(wrong) do results.fail[#results.fail + 1] = 'catchup:   ' .. f end
+        log.info('selftest', 'catchup      a month away from %-26s lived %.1f days: %d hatched, %d went back to the moss, '
+            .. '%d in the jar (%d young), %d eggs', name, (w.time - t) / day, hatched, returned, #w.creatures, young, #w.eggs)
+    end
+
+    -- Its seed plus its history: two runs agree, and so does one caught up a
+    -- step at a time (the moment on open splits it by the frame)
+    local function run(chunk)
+        local w = open(20261018, CLASSIC, day)
+        for _ = 1, math.floor(10 / dt + 0.5) do w:step(dt) end
+        local cu = Catchup.new(w, 2 * day)
+        while cu:run(chunk) > 0 do end
+        cu:finish()
+        for _ = 1, math.floor(10 / dt + 0.5) do w:step(dt) end
+        return statehash.of(w)
+    end
+    local a, b, c = run(math.huge), run(math.huge), run(7)
+    local where = statehash.diverged(a, b) or statehash.diverged(a, c)
+    check(results, where == nil, 'catchup: two runs of a jar away diverged, first in %s', tostring(where))
+end)
+
 -- Terrarium: 3c. A pinch of food (#25), the gate. In a jar at midday, a pinch
 -- dropped beside one that's up and about falls from under the lid and settles
 -- on what's below it, never in it, and the awake ones near enough come over
@@ -1523,6 +1692,14 @@ test('book', function(j, results)
         check(results, e and not e.gone and select(2, book:creature(e.n)) == i, 'book: creature %d has no living page', i)
     end
     check(results, twins == 0, 'book: two of the living shared a name %d times', twins)
+    -- (catch-up, #31, makes each body a token and back: the book keeps up)
+    for _, change in ipairs({'embody', 'coarsen'}) do
+        w[change](w)
+        for i, c in ipairs(w.creatures) do
+            local e = book:entry_of(c)
+            check(results, e and select(2, book:creature(e.n)) == i, 'book: after %s, creature %d has no living page', change, i)
+        end
+    end
 
     -- What happened while you were away is what came and went after you shut it
     local away, births, gone = book:since(book.seen), 0, 0

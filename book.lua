@@ -176,6 +176,10 @@ function Book:hear(ev)
     elseif ev.kind == 'dying' then
         local e = self.of[ev.who]
         if e then e.dying = world.time end
+    elseif ev.kind == 'became' then
+        -- (catch-up, #31: a body became a token, or a token its body again)
+        local e = self.of[ev.was]
+        if e then self.alive[e.n], self.of[ev.who] = ev.who, e end
     elseif ev.kind == 'returned' then
         local e = self.of[ev.who]
         if e then
