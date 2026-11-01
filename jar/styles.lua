@@ -15,9 +15,7 @@
 -- are how many of the target's pixels a pixel of the frame covers, so it can
 -- draw at the target's own pixels and stay sharp (ascii's glyphs at 1080p).
 -- One with a size to it brings `adjust(dir)` ([ and ] in play) and `label()`,
--- what the corner says it is. `fringe` scales the colour fringe the front
--- glass gives the frame's edges (1 if it's not given): fine strokes split
--- into their colours where a photograph's edges only soften.
+-- what the corner says it is.
 --
 -- A style is drawing only. It sees the frame's pixels and nothing of the
 -- World, so a jar hashes the same under every style (tests/ci.sh watches one
@@ -30,6 +28,11 @@ local Styles = {}
 
 Styles.DEFAULT = 'none'
 
+-- What the front glass does to a frame after its style (main.lua's composite):
+-- the colour fringe toward its edges and the film's grain. A style may set its
+-- own `glass` (a drawing on paper has neither).
+Styles.GLASS = { aberration = 0.012, grain = 0.010 }
+
 Styles.list = {
     { name = 'none' },
     -- The seam's own test: the jar as a silver gelatin print, its light as
@@ -40,9 +43,10 @@ Styles.list = {
     end },
     -- The jar on a character grid, a moth-eaten roguelike of moss and
     -- creatures (#97, jar/ascii.lua): a glyph a cell by its light, a stroke
-    -- where an edge runs through it, inked in the cell's colour
+    -- where an edge runs through it, inked in the cell's colour. No fringe:
+    -- the glass would split a glyph's fine strokes into their colours.
     { name = 'ascii', shader = 'styles/ascii', draw = Ascii.draw,
-        adjust = Ascii.step, label = Ascii.label, fringe = 0 },
+        adjust = Ascii.step, label = Ascii.label, glass = { aberration = 0, grain = 0.010 } },
 }
 
 local by_name = {}
@@ -53,10 +57,10 @@ end
 
 function Styles.get(name) return by_name[name] end
 
--- How much of the glass's colour fringe style `name` keeps
-function Styles.fringe(name)
+-- The glass's fringe and grain over a frame in style `name`
+function Styles.glass(name)
     local s = by_name[name]
-    return s and s.fringe or 1
+    return s and s.glass or Styles.GLASS
 end
 
 -- What the corner calls style `name` when it's switched to or resized
