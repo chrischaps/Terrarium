@@ -159,7 +159,11 @@ local function openJar(seed, hour, day, level, cast)
     tuck()
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
-    local homes = World.residents(level or room, w.cast)
+    -- (on tops only: a snail's home up the glass gives a y, not an x, #77)
+    local homes = {}
+    for _, r in ipairs(World.residents(level or room, w.cast)) do
+        if r.x then homes[#homes + 1] = r end
+    end
     for k = #w.creatures + 1, args.crowd or 0 do
         local r = homes[(k - 1) % #homes + 1]
         w:lay(Genome.random(r.key, rng.sim), r.x + (k % 5 - 2) * 8, r.solid, 'crowd ' .. k)
