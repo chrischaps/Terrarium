@@ -12,6 +12,10 @@
 --   ffmpeg -framerate 30 -i ab_day_%03d.png -pix_fmt yuv420p ab_day.mp4
 
 local FRAMES = tonumber(os.getenv('AB_FRAMES') or '') or 120
+-- Terrarium: any two styles, AB=ascii,ascii-each (#97); their names go on the
+-- files, ab_<a>_<b>_<scene>_<nnn>.png, unless they're pencil's own
+local A, B = (os.getenv('AB') or 'pencil,pencil-each'):match('([^,]+),([^,]+)')
+local PREFIX = A == 'pencil' and B == 'pencil-each' and 'ab_' or ('ab_' .. A .. '_' .. B .. '_')
 local W, H = 800, 450
 local SEED = 20261018
 
@@ -55,18 +59,22 @@ local function film(api, scene, hour)
     local side = love.graphics.newCanvas(W * 2, H)
     local font = love.graphics.newFont(14)
     for f = 1, FRAMES do
-        for k, name in ipairs({ 'pencil', 'pencil-each' }) do
+        for k, name in ipairs({ A, B }) do
             api.style(name)
             local plate = api.render(W, H, { view = view })
             love.graphics.setCanvas(side)
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.draw(plate, (k - 1) * W, 0)
             love.graphics.setFont(font)
-            love.graphics.setColor(0.17, 0.175, 0.195, 0.8)
-            love.graphics.print(k == 1 and 'A  whole frame' or 'B  each body', (k - 1) * W + 14, 12)
+            if name:match('^pencil') then
+                love.graphics.setColor(0.17, 0.175, 0.195, 0.8)
+            else
+                love.graphics.setColor(0.6, 0.62, 0.66, 0.85) -- (light, on a dark style)
+            end
+            love.graphics.print((k == 1 and 'A  ' or 'B  ') .. name, (k - 1) * W + 14, 12)
             love.graphics.setCanvas()
         end
-        api.save(side, string.format('ab_%s_%03d.png', scene, f))
+        api.save(side, string.format('%s%s_%03d.png', PREFIX, scene, f))
         api.step(1 / 30)
         api.yield()
     end
