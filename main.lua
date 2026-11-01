@@ -516,9 +516,10 @@ local function composite(plate, w, h, time, fit)
             for i = 1, 4 do rect[i] = rect[i] * fit.k + (i % 2 == 1 and fit.x or fit.y) end
         end
         sh:send("glassRect", rect)
-        sh:send("aberration", 0.012)
+        local glass = Styles.glass(style) -- (a style may want no fringe or grain)
+        sh:send("aberration", glass.aberration)
         sh:send("vignette", 0.40)
-        sh:send("grain", 0.010)
+        sh:send("grain", glass.grain)
         sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
     end

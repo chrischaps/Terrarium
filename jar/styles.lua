@@ -15,10 +15,66 @@
 -- in a window under each of them).
 
 local Render = require('jar.render')
+local bit = require('bit')
 
 local Styles = {}
 
 Styles.DEFAULT = 'none'
+
+-- What the front glass does to a frame after its style (main.lua's composite):
+-- the colour fringe toward its edges and the film's grain. A style may set its
+-- own `glass` (a drawing on paper has neither).
+Styles.GLASS = { aberration = 0.012, grain = 0.010 }
+
+-- A sheet of drawing paper, made once the first time it's asked for: PAPER
+-- px square, tiling, r its tooth (fine, a little long in the grain, as laid
+-- paper's is), g a mottle (where the sheet took more size or less), b a slow
+-- wobble for a line to wander by. It's made by hashing, so it draws from no
+-- stream and is the same sheet every time.
+Styles.PAPER = 512
+local sheet
+local function paper()
+    if sheet then return sheet end
+    local N = Styles.PAPER
+    -- one octave of tiling value noise: a lattice of `cw` x `ch` px cells
+    local function octave(cw, ch, seed)
+        local nx, ny = N / cw, N / ch
+        local grid = {}
+        for j = 0, ny - 1 do
+            for i = 0, nx - 1 do
+                local h = bit.bxor(bit.tobit(i * 73856093), bit.tobit(j * 19349663), bit.tobit(seed * 83492791))
+                h = bit.bxor(h, bit.rshift(h, 13))
+                h = bit.tobit(bit.band(h, 0xfffff) * 1046527 + bit.rshift(h, 20))
+                h = bit.bxor(h, bit.rshift(h, 16))
+                grid[j * nx + i] = bit.band(h, 0xffff) / 0xffff
+            end
+        end
+        return function(x, y)
+            local fx, fy = x / cw, y / ch
+            local i, j = math.floor(fx), math.floor(fy)
+            local u, v = fx - i, fy - j
+            u, v = u * u * (3 - 2 * u), v * v * (3 - 2 * v)
+            local i1, j1 = (i + 1) % nx, (j + 1) % ny
+            local a, b = grid[j * nx + i], grid[j * nx + i1]
+            local c, d = grid[j1 * nx + i], grid[j1 * nx + i1]
+            return (a + (b - a) * u) + ((c + (d - c) * u) - (a + (b - a) * u)) * v
+        end
+    end
+    local fine, fibre, coarse = octave(1, 1, 1), octave(4, 1, 2), octave(8, 8, 3)
+    local m1, m2, m3 = octave(128, 128, 4), octave(32, 32, 5), octave(16, 16, 6)
+    local wobble = octave(64, 64, 7)
+    local data = love.image.newImageData(N, N)
+    data:mapPixel(function(x, y)
+        local tooth = 0.25 * fine(x, y) + 0.45 * fibre(x, y) + 0.30 * coarse(x, y)
+        tooth = math.min(1, math.max(0, (tooth - 0.5) * 2.2 + 0.5))
+        local mottle = 0.55 * m1(x, y) + 0.30 * m2(x, y) + 0.15 * m3(x, y)
+        return tooth, mottle, wobble(x, y), 1
+    end)
+    sheet = love.graphics.newImage(data)
+    sheet:setWrap('repeat', 'repeat')
+    sheet:setFilter('linear', 'linear')
+    return sheet
+end
 
 Styles.list = {
     { name = 'none' },
@@ -28,6 +84,19 @@ Styles.list = {
     { name = 'silver', shader = 'styles/silver', setup = function(sh)
         sh:send('tone', 0.6)
     end },
+    -- A sketchbook page (#95): the jar's edges in graphite, its shade
+    -- hatched, crossed where it's dark, its light the bare paper. The
+    -- hatching is anchored to the page and holds still; the line boils a
+    -- little, as a drawn line does. Paper takes no fringe or film grain.
+    { name = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0 },
+        setup = function(sh, w, h, time)
+            sh:send('paper', paper())
+            sh:send('size', { w, h })
+            sh:send('time', time % 1000)
+            sh:send('boil', 0.5)
+            sh:send('exposure', 6.5)
+            sh:send('contrast', 1.6)
+        end },
 }
 
 local by_name = {}
@@ -37,6 +106,12 @@ for i, s in ipairs(Styles.list) do
 end
 
 function Styles.get(name) return by_name[name] end
+
+-- The glass's fringe and grain over a frame in style `name`
+function Styles.glass(name)
+    local s = by_name[name]
+    return s and s.glass or Styles.GLASS
+end
 
 function Styles.names()
     local out = {}
