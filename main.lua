@@ -9,6 +9,7 @@
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
 --   right-click              drop a pinch of food into the jar there (a few a day)
+--   the book on the desk, b  open the family book (#32); click a page to turn it, off it to close
 --   m                        hush the jar, or listen again (--mute opens it hushed)
 --   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
 --   tab                      the next style
@@ -62,6 +63,8 @@ local Styles = require('jar.styles')
 local Screen = require('core.screen')
 local Touch = require('core.touch')
 local Book = require('book')
+local Pages = require('jar.pages')
+local Keep = require('keep')
 local log = require('core.log')
 
 local STEP = 1 / 120 -- fixed simulation step; everything alive advances on this clock
@@ -80,11 +83,14 @@ local synth -- the jar heard through its glass (#28), only while you watch it li
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
 local scriptApi -- defined below love.load; forward-declared so load can see it
+local sitting -- a portrait for the family book (#32), defined with the plates below
 local watchReplay -- likewise: --replay in a window draws what it runs
 local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
 local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
 local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
 local touch = Touch.new() -- a finger on the frame's glass
+local book -- the family book (#32): everyone who has lived in the jar
+local pages -- and the book itself, on the desk and open, wherever there's a window
 local keeping -- the jar's book (#30) is kept: read at load, written now and then and at the end
 local lastKept -- the jar's clock when its book was last written
 local passing -- the moment on opening a jar that was left (#31), while it lasts
@@ -108,7 +114,7 @@ end
 -- script brings its own. Who lives in it is the seed's cast (#74), or `cast`,
 -- or --cast's.
 -- Everything around `w` that's composed from its seed, after the World
-local function compose(w)
+local function compose(w, seed)
     local ledges = {}
     for _, s in ipairs(w.level.solids) do
         if s.moss and s.kind == 'ledge' then ledges[#ledges + 1] = s end
@@ -123,6 +129,16 @@ local function compose(w)
     w.events:on(function(ev)
         if ev.kind == 'returned' then lantern:forget(ev.index) end
     end)
+    -- (and the family book hears who comes and goes, and keeps their portraits)
+    book = Book.new(w, seed)
+    pages = not headless.active() and Pages.new(book) or nil
+end
+
+-- What's kept beside the World in the jar's book (#30): the flora, the motes,
+-- and the family book's record (#32), which listens to the World from outside it
+local function around()
+    return { flora = Plants, motes = Motes,
+        family = { state = function() return book:state() end, restore = function(s) book:restore(s) end } }
 end
 
 local function openJar(seed, hour, day, level, cast)
@@ -131,7 +147,7 @@ local function openJar(seed, hour, day, level, cast)
     Glass.init(rng.scape)
     local w = World.new(level or room, { wander = not args.nowander, selected = 0, hour = hour, day = day,
         genomes = args.genomes, cast = cast or args.cast, seed = seed })
-    compose(w)
+    compose(w, seed)
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
     local homes = World.residents(level or room, w.cast)
@@ -144,17 +160,18 @@ end
 
 -- Terrarium: a jar read back from its book (#30). Its seed composes the room
 -- around it again, the scape stream drawn in the same order as openJar draws
--- it (the World draws none), and then its flora and streams are as they were.
--- Returns the World and whether it hashes as it did when it was written.
-local function resumeJar(book)
-    rng.seed(book.seed)
+-- it (the World draws none), and then its flora, family book and streams are
+-- as they were. Returns the World and whether it hashes as it did when it was
+-- written.
+local function resumeJar(kept)
+    rng.seed(kept.seed)
     Scape.init(rng.scape)
     Glass.init(rng.scape)
-    local w = book.world
-    compose(w)
-    local same, hash = Book.resume(book, { flora = Plants, motes = Motes })
+    local w = kept.world
+    compose(w, kept.seed)
+    local same, hash = Keep.resume(kept, around())
     startHour, daySeconds = w.start_hour, w:day_length()
-    local extra = book.extra or {}
+    local extra = kept.extra or {}
     if extra.follow and w.creatures[extra.follow] then lantern.who = extra.follow end
     return w, same, hash
 end
@@ -167,7 +184,7 @@ end
 
 -- Write the jar's book, with who the lantern follows beside it
 local function keepBook(why)
-    local took, size = Book.save(world, { flora = Plants, motes = Motes }, { follow = lantern.who })
+    local took, size = Keep.save(world, around(), { follow = lantern.who })
     lastKept = world.time
     if took then
         log.info('book', '%s: %s, %d creatures, %.0f KB in %.0f ms', why, when(world), #world.creatures,
@@ -210,7 +227,7 @@ function love.load()
     end
     if args.selftest then
         local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast,
-            resumeJar)
+            resumeJar, around)
         if err then print('[selftest] ' .. err) end
         love.event.quit(ok and 0 or (err and 2 or 1))
         return
@@ -234,7 +251,7 @@ function love.load()
 
     if args.keep or args.resume then
         -- --keep / --resume: the book across two processes, as CI checks it (#30)
-        local same, hash = dev.keep(openJar, resumeJar, args, SEED, STEP, step)
+        local same, hash = dev.keep(openJar, resumeJar, args, SEED, STEP, step, around)
         print('hash ' .. hash)
         love.event.quit(same and 0 or 1)
         return
@@ -254,13 +271,13 @@ function love.load()
     keeping = dev.keeps_book(args)
     local left -- the wall clock its book was written at, if it was read back
     if keeping and not args.fresh then
-        local book, from = Book.open()
-        if book then
+        local kept, from = Keep.open()
+        if kept then
             local same, hash
-            world, same, hash = resumeJar(book)
-            left = book.saved
+            world, same, hash = resumeJar(kept)
+            left = kept.saved
             log.info('book', 'resumed from %s: %s, %d creatures, hash %s%s', from, when(world), #world.creatures, hash,
-                same and ' (as it was written)' or (', written as ' .. tostring(book.hash)))
+                same and ' (as it was written)' or (', written as ' .. tostring(kept.hash)))
         else
             log.info('book', 'a new jar (%s)', from)
         end
@@ -350,8 +367,10 @@ local function benchFrame(dt, took)
     end
 end
 
--- Follow whoever is at a point on the screen with the lantern, or let go
+-- Follow whoever is at a point on the screen with the lantern, or let go.
+-- Terrarium: or, on the family book (#32), open it, turn its pages, close it.
 local function followAt(x, y)
+    if pages and pages:press(Screen.toView(view, x, y)) then return end
     local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
     if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
 end
@@ -388,16 +407,27 @@ function love.update(dt)
     end
     lantern:update(dt, world)
     if synth then synth:update(dt, world, lantern:following(world)) end
-    if keeping and world.time - lastKept >= Book.EVERY then keepBook('kept') end
+    if keeping and world.time - lastKept >= Keep.EVERY then keepBook('kept') end
 
     -- A finger held still on the frame's glass drops a pinch of food there
+    -- (but not while the family book is open, or onto it)
     local held, hx, hy = touch:update(dt)
-    if held == 'hold' and not pinchAt(hx, hy) then touch:empty() end
+    if held == 'hold' and (pages and (pages.open or pages:overClosed(Screen.toView(view, hx, hy))) or not pinchAt(hx, hy)) then
+        touch:empty()
+    end
+    if pages then
+        pages:update(dt)
+        if not pages.open then sitting() end
+    end
 
-    -- A hand over anyone you could follow
+    -- A hand over anyone you could follow, or the book
     if love.mouse.isCursorSupported() and not args.frame then
-        local lx, ly = Tank.toLevel(Screen.toView(view, love.mouse.getPosition()))
-        local over = Lantern.creatureAt(world, lx, ly)
+        local vx, vy = Screen.toView(view, love.mouse.getPosition())
+        local over = pages and pages:over(vx, vy)
+        if not (pages and pages.open) then
+            local lx, ly = Tank.toLevel(vx, vy)
+            over = over or Lantern.creatureAt(world, lx, ly)
+        end
         love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
     if bench then benchFrame(dt, love.timer.getTime() - t0) end
@@ -520,6 +550,8 @@ local function drawScene(light, plane)
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
+    -- (the family book lies on the desk in front of the glass, #32)
+    if pages and plane ~= false then pages:drawClosed(light) end
     love.graphics.setCanvas()
 end
 
@@ -554,6 +586,80 @@ local function composite(plate, w, h, time, fit)
     if fit then love.graphics.pop() end
 end
 
+-- Offscreen canvases, kept by name and size
+local canvases = {}
+local function canvas(name, w, h, hdr)
+    local key = name .. w .. 'x' .. h
+    canvases[key] = canvases[key] or love.graphics.newCanvas(w, h, hdr and { format = 'rgba16f' } or nil)
+    return canvases[key]
+end
+
+-- A plate, onto `target`: the stretch of the creatures' plane `v` = {x0, y0,
+-- x1, y1}, in level units, drawn across the target's width at full
+-- resolution. Behind it is the window's own frame, enlarged and blurred
+-- (`blur`), so the plane stands sharp in a shallow depth of field.
+local function plate(target, v, light, blur)
+    local w, h = target:getDimensions()
+    drawScene(light, false)
+    -- The view's corners in the window's frame, to line the jar up behind it
+    Tank.pushPlane()
+    local sx0, sy0 = love.graphics.transformPoint(v[1], v[2])
+    local sx1 = love.graphics.transformPoint(v[3], v[2])
+    love.graphics.pop()
+    local a = w / (sx1 - sx0)
+    love.graphics.setCanvas(Render.canvas("far"))
+    love.graphics.clear(0, 0, 0, 0)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(Render.canvas("scene"))
+    local soft, k = Render.blur("far", blur or 3)
+
+    local plane = canvas('plate', w, h, true)
+    love.graphics.setCanvas(plane)
+    love.graphics.clear(0, 0, 0, 1)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(soft, -sx0 * a, -sy0 * a, 0, a * k, a * k)
+    love.graphics.push()
+    love.graphics.scale(w / (v[3] - v[1]))
+    love.graphics.translate(-v[1], -v[2])
+    Render.beginObjects(light, { w / 2, w * 0.45 })
+    Scenery.draw(light, world.time)
+    Moss.draw(world.moss, light, world.time, world.creatures)
+    drawCreatures(1, light)
+    love.graphics.pop()
+    love.graphics.setShader()
+
+    love.graphics.setCanvas(target)
+    love.graphics.clear(0, 0, 0, 1)
+    composite(plane, w, h, world.time)
+    love.graphics.setCanvas()
+    return target
+end
+
+-- Terrarium: a portrait of creature `c` for the family book (#32): a plate
+-- of it where it stands, in the warm light of a lamp-lit afternoon whatever
+-- the hour, so every page is lit alike. It's drawing; the World never knows.
+-- Into `into`, its last portrait, if it has one.
+local PORTRAIT_HOUR = DayCycle.presets.afternoon
+local function sit(c, into)
+    local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(c:interp_points()) do
+        x0, y0 = math.min(x0, p.x), math.min(y0, p.y)
+        x1, y1 = math.max(x1, p.x), math.max(y1, p.y)
+    end
+    local P = Pages.PORTRAIT
+    local aspect = P.h / P.w
+    local span = math.max(x1 - x0, (y1 - y0) / aspect, 40) * 2.1 + 40
+    local cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    local v = { cx - span / 2, cy - span * aspect * 0.64, cx + span / 2, cy + span * aspect * 0.36 }
+    return plate(into or love.graphics.newCanvas(P.w * 2, P.h * 2), v, DayCycle.evaluate(PORTRAIT_HOUR), 2.2)
+end
+
+-- Whoever is due a portrait sits for it now (one at a time, now and then)
+function sitting()
+    local n, c = pages:sitting()
+    if n then pages:hang(n, sit(c, pages.portraits[n])) end
+end
+
 -- --replay in a window: each run's jar drawn every WATCH steps, the way
 -- love.draw draws it, in the style. Watching a jar must change nothing in it.
 local WATCH = 30
@@ -573,13 +679,7 @@ end
 -- only moves when the script steps it and frames render offscreen, so a
 -- capture is exact: the same script gives the same jar on any machine.
 function scriptApi()
-    local api = { STEP = STEP, Genome = Genome, World = World, room = room, args = args }
-    local canvases = {}
-    local function canvas(name, w, h, hdr)
-        local key = name .. w .. 'x' .. h
-        canvases[key] = canvases[key] or love.graphics.newCanvas(w, h, hdr and { format = 'rgba16f' } or nil)
-        return canvases[key]
-    end
+    local api = { STEP = STEP, Genome = Genome, World = World, room = room, args = args, Book = Book }
 
     -- Open a jar from `seed` at `hour` (a number or a preset name such as
     -- 'midday'), in the jar's room or in `level`. Its composition is the seed's.
@@ -639,51 +739,50 @@ function scriptApi()
         local v = opts.view
         if not v then
             drawScene(light)
-            love.graphics.setCanvas(target)
+            love.graphics.setCanvas({ target, stencil = true })
             love.graphics.clear(0, 0, 0, 1)
             love.graphics.push()
             love.graphics.scale(w / C.W, h / C.H)
             composite(nil, nil, nil, world.time)
+            if pages then pages:draw() end
             love.graphics.pop()
             love.graphics.setCanvas()
             capture.last = target
             return target
         end
 
-        drawScene(light, false)
-        -- The view's corners in the window's frame, to line the jar up behind it
-        Tank.pushPlane()
-        local sx0, sy0 = love.graphics.transformPoint(v[1], v[2])
-        local sx1 = love.graphics.transformPoint(v[3], v[2])
-        love.graphics.pop()
-        local a = w / (sx1 - sx0)
-        love.graphics.setCanvas(Render.canvas("far"))
-        love.graphics.clear(0, 0, 0, 0)
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(Render.canvas("scene"))
-        local soft, k = Render.blur("far", opts.blur or 3)
-
-        local plate = canvas('plate', w, h, true)
-        love.graphics.setCanvas(plate)
-        love.graphics.clear(0, 0, 0, 1)
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(soft, -sx0 * a, -sy0 * a, 0, a * k, a * k)
-        love.graphics.push()
-        love.graphics.scale(w / (v[3] - v[1]))
-        love.graphics.translate(-v[1], -v[2])
-        Render.beginObjects(light, { w / 2, w * 0.45 })
-        Scenery.draw(light, world.time)
-        Moss.draw(world.moss, light, world.time, world.creatures)
-        drawCreatures(1, light)
-        love.graphics.pop()
-        love.graphics.setShader()
-
-        love.graphics.setCanvas(target)
-        love.graphics.clear(0, 0, 0, 1)
-        composite(plate, w, h, world.time)
-        love.graphics.setCanvas()
-        capture.last = target
+        capture.last = plate(target, v, light, opts.blur)
         return target
+    end
+
+    -- Terrarium: the family book (#32). `api.book()` is the jar's, and
+    -- `api.portraits()` sits everyone due a portrait now, as live play does
+    -- between frames; call it as the jar goes on, or the book has no faces.
+    -- `api.page(spread)` opens the book at that spread (1 is the title and
+    -- what happened while you were away) and `api.page(nil)` closes it; an
+    -- open book is drawn over api.render's whole frame. `api.page(spread, t)`
+    -- is its leaf `t` of the way through turning over to the next.
+    function api.book() return book end
+    function api.portraits()
+        pages.clock = world.time
+        while true do
+            local n, c = pages:sitting(true)
+            if not n then break end
+            pages:hang(n, sit(c, pages.portraits[n]))
+        end
+    end
+    function api.page(spread, turning)
+        if spread then
+            pages:show(true)
+            pages.spread, pages.shown, pages.turn = math.max(1, math.min(pages:spreads(), spread)), 1, nil
+            if turning then
+                pages.turn = { from = pages.spread, to = pages.spread + 1, t = turning }
+                pages.spread = pages.spread + 1
+            end
+        else
+            pages:show(false)
+            pages.shown = 0
+        end
     end
 
     -- Save a canvas as a PNG in the save directory
@@ -712,6 +811,12 @@ function love.draw()
     -- Render reads the jar's clock; it never moves it
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     composite(nil, nil, nil, nil, view)
+    if pages and pages.shown > 0 then
+        -- the family book, open over the jar (#32)
+        Screen.push(view)
+        pages:draw()
+        love.graphics.pop()
+    end
     touch:draw()
     if bench and bench.warm <= 0 then bench.draw[#bench.draw + 1] = love.timer.getTime() - t0 end
     if shown then
@@ -753,7 +858,7 @@ function love.mousepressed(x, y, button, istouch)
         touch:press('mouse', x, y)
     elseif button == 1 then
         followAt(x, y)
-    elseif button == 2 then
+    elseif button == 2 and not (pages and pages.open) then
         pinchAt(x, y)
     end
 end
@@ -782,6 +887,7 @@ end
 
 function love.keypressed(key)
     if args.frame then return end -- the frame has no keys; Easel ends it with SIGTERM
+    if pages and pages:key(key) then return end -- b opens the family book; Escape closes it
     if key == "escape" then love.event.quit() end
     if key == "m" and synth then synth:mute(not synth.muted) end
     if key == "tab" and not capture then

@@ -1,578 +1,276 @@
--- book.lua: the jar remembers (#30).
+-- Terrarium: the family book (#32). Everyone who has lived in the jar, in the
+-- order they came: the founders who came with it, and each one hatched since,
+-- with its parents, its children, the day it came and the day it went back to
+-- the moss. It names them too (#29): a jar's own names come from its seed and
+-- the order they came in, by a hash, so naming moves no stream.
 --
--- A jar is its seed plus its history, so its book keeps both: the seed the
--- jar was composed from, and everything its life since has made of it. That's
--- every creature's genome, body, mind and name, the moss grid, the crumbs and
--- the eggs, the hour, the sim stream, and the family's log (world.history,
--- which the family book, #32, reads). Quitting writes it, and so does every
--- EVERY seconds of jar, and reopening reads it back. The jar goes on as if it
--- had never been closed: it opens with the state hash it was saved with.
+-- It listens to what the World says happened (`laid`, `hatched`, `dying`,
+-- `returned`) and never writes to it, so a jar with a book hashes the same as
+-- one without. An entry is plain data (numbers, strings and lists of entry
+-- numbers), so the book can be saved as it stands (#30); the living creature
+-- each page belongs to is kept apart, in `alive`.
 --
--- The World is written whole, as the graph of tables it is, so nothing it
--- remembers has to be listed here. Each table is a record, and a table seen
--- twice is written once and pointed at, so a graph's nodes are still the ones
--- a controller's path runs through. Three kinds of table aren't data:
---   a class (a body's metatable, a Mover's, a Mind's) is written by its
---     module's name and found again by requiring it;
---   a module's own table (a profile, a nav profile, the room's level) is
---     written by its path from the module, and is the same table when read,
---     so a bucket's graph is still found by its nav profile. A cache that's
---     empty in a new process gets the saved table put back where it was;
---   a nav graph still being built a slice at a time (NavGraph.Builder) is a
---     coroutine, so it's written as how many slices it had done, and read by
---     building that many again. The work is counted, so it ends up the same.
--- What's only drawn (meshes, the marks a body glowed, the render snapshots)
--- isn't kept, and is made again the first time it's drawn. What listens to
--- the World (its closures) listens again: World:revive.
---
--- Some of what the jar remembers lives beside the World: the flora's fronds
--- (jar/plants.lua) and the motes in the air (jar/motes.lua, which draw from
--- rng.look as the creatures' eyes do). They're passed in as `around`, each a
--- module with state() and restore(), and a resumed jar composes them again
--- from the seed and then restores them. The scape, glass and scenery are the
--- seed's alone, and are only composed again.
---
--- The format is text, one record a line: `#<id>;` then `t` (a table: its
--- class or `-`, then its keys and values), `p` (a module's table: the module,
--- the path's length and keys, then `c` and its contents if a cache may need
--- them, else `.`) or `k` (a table a codec packed: its class, then the packed
--- keys and values). Values are `n<number>;`, `s<length>:<bytes>`, `T`, `F` or
--- `@<id>;`. A table's pairs end with `.`. The first line names the format and
--- its VERSION: a book of another version isn't read, and is kept aside. A
--- change that would leave an old book's World wrong in the new code (a field
--- renamed, a meaning changed) moves VERSION on, so the jar starts over instead.
+-- `seen` is the jar time you last closed the book. What came and went after it
+-- happened while you were away.
 
-local statehash = require('core.statehash')
-local rng = require('core.rng')
-local log = require('core.log')
+local World = require('jar.world')
+local Genome = require('genome')
 
 local Book = {}
+Book.__index = Book
 
-Book.VERSION = 1
-Book.FILE = 'jar.book'
-Book.EVERY = 300 -- seconds of jar between saves, so a power cut loses no more
-local MAGIC = 'terrarium book '
-
--- Fields that are drawn and drawn again, never remembered, and the World's
--- closures, which World:revive makes again
-local DROP = {
-    mesh = true, glow_mesh = true,                       -- draw buffers
-    marks = true, local_marks = true, mark_frame = true, -- what a body drew last, for its glow
-    listeners = true,                                    -- who hears the World's events
-    light_dir = true,                                    -- the lamp's direction, a closure
+-- Gentle names, for the jar to give out. One is chosen for each newcomer by a
+-- hash of the jar's seed and its place in the book; a name already given goes
+-- to the next one free, so a family has few twins. And now and then a child
+-- of a family that has lost someone is named for them, and is the Second.
+Book.NAMES = {
+    'Alder', 'Aster', 'Barley', 'Bay', 'Birch', 'Bramble', 'Briar', 'Brook', 'Bryony', 'Burdock',
+    'Calla', 'Campion', 'Cedar', 'Clary', 'Clover', 'Cobble', 'Cress', 'Dill', 'Dock', 'Dune',
+    'Elder', 'Elm', 'Ember', 'Fennel', 'Fern', 'Finch', 'Flax', 'Furze', 'Gorse', 'Hazel',
+    'Heath', 'Holly', 'Hops', 'Ivy', 'Juniper', 'Larch', 'Lark', 'Laurel', 'Lichen', 'Linden',
+    'Lovage', 'Madder', 'Mallow', 'Maple', 'Marram', 'Meadow', 'Medlar', 'Mint', 'Moss', 'Mullein',
+    'Myrtle', 'Nettle', 'Oak', 'Oat', 'Orris', 'Pebble', 'Peat', 'Pine', 'Poppy', 'Quince',
+    'Rain', 'Reed', 'Robin', 'Rowan', 'Rue', 'Rush', 'Saffron', 'Sage', 'Sedge', 'Sloe',
+    'Spruce', 'Starling', 'Tarn', 'Teasel', 'Thistle', 'Thyme', 'Tide', 'Tinder', 'Vale', 'Vetch',
+    'Willow', 'Wren', 'Yarrow', 'Yew', 'Bracken', 'Catkin', 'Dapple', 'Drizzle', 'Eddy', 'Fallow',
+    'Gale', 'Hollow', 'Kelp', 'Loam', 'Mire', 'Nook', 'Oriel', 'Puddle', 'Quill', 'Rill',
+    'Shale', 'Sorrel', 'Tansy', 'Umber', 'Wick', 'Whorl', 'Dew', 'Bead', 'Fleck', 'Pip',
 }
--- and the World's render interpolation (a springtail's `snap` is its furcula's)
-local DROP_WORLD = {snap = true, saved = true}
+Book.NAMED_FOR = 4 -- one child in this many, of a family with someone gone, is named for them
 
--- The standard libraries and LÖVE's own: never the jar's
-local function foreign(name, m)
-    return _G[name] == m or name:match('^love') or name:match('^jit') or name == 'ffi' or name == '_G'
+local WORDS = {'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen',
+    'nineteen', 'twenty'}
+local ORDINALS = {'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth',
+    'tenth', 'eleventh', 'twelfth', 'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth',
+    'seventeenth', 'eighteenth', 'nineteenth', 'twentieth'}
+local TENS = {[20] = 'twent', [30] = 'thirt', [40] = 'fort', [50] = 'fift'}
+
+-- A count in words: "three", "twelve", and past twenty "twenty-three"
+function Book.words(n)
+    if n <= 20 then return WORDS[n] or 'no' end
+    local tens = n - n % 10
+    if n < 60 then return TENS[tens] .. 'y' .. (n % 10 > 0 and '-' .. WORDS[n % 10] or '') end
+    return tostring(n)
 end
 
-local TYPE_ORDER = {boolean = 1, number = 2, string = 3}
-local function key_less(a, b)
-    local ta, tb = type(a), type(b)
-    if ta ~= tb then return TYPE_ORDER[ta] < TYPE_ORDER[tb] end
-    if ta == 'boolean' then return (not a) and b end
-    return a < b
+-- An ordinal in words: "third", "twenty-first"
+function Book.ordinal(n)
+    if n <= 20 then return ORDINALS[n] end
+    local tens = n - n % 10
+    if n < 60 then return n % 10 == 0 and TENS[tens] .. 'ieth' or TENS[tens] .. 'y-' .. ORDINALS[n % 10] end
+    local suffix = (n % 10 == 1 and 'st') or (n % 10 == 2 and 'nd') or (n % 10 == 3 and 'rd') or 'th'
+    if n % 100 >= 11 and n % 100 <= 13 then suffix = 'th' end
+    return n .. suffix
 end
 
-local function sorted_keys(t)
-    local keys = {}
-    for k in pairs(t) do
-        if TYPE_ORDER[type(k)] then keys[#keys + 1] = k end
-    end
-    table.sort(keys, key_less)
-    return keys
+-- A list in words: "Fen", "Fen and Moss", "Fen, Moss and Ivo"
+function Book.list(names)
+    if #names <= 1 then return names[1] or '' end
+    return table.concat(names, ', ', 1, #names - 1) .. ' and ' .. names[#names]
 end
 
--- What the loaded modules hold, as names: `classes` (a module, or a field of
--- one with an __index, by `module` or `module:field`) and `paths` (every
--- table reachable from a module through tables with no metatable, by
--- {module, key, ...})
-local function registry()
-    local names = {}
-    for name, m in pairs(package.loaded) do
-        if type(m) == 'table' and not foreign(name, m) then names[#names + 1] = name end
-    end
-    table.sort(names)
-    local classes, paths = {}, {}
-    for _, name in ipairs(names) do
-        local m = package.loaded[name]
-        classes[m] = classes[m] or name
-        for _, k in ipairs(sorted_keys(m)) do
-            local v = rawget(m, k)
-            if type(k) == 'string' and type(v) == 'table' and rawget(v, '__index') ~= nil then
-                classes[v] = classes[v] or (name .. ':' .. k)
+-- So many days, in words: "less than a day", "a day", "four and a half days"
+function Book.days(d)
+    if d < 0.75 then return 'less than a day' end
+    local whole = math.floor(d + 0.25)
+    local half = d - whole >= 0.25
+    if whole == 1 then return half and 'a day and a half' or 'a day' end
+    return Book.words(whole) .. (half and ' and a half' or '') .. ' days'
+end
+
+function Book.new(world, seed)
+    local self = setmetatable({}, Book)
+    self.world = world
+    self.seed = seed or 0
+    self.entries = {} -- everyone, in the order they came
+    self.clutches = {} -- {at, parents = {n, n}, count}, as they were laid
+    self.seen = 0      -- the jar time the book was last closed
+    self.alive = {}    -- entry number -> its creature, while it lives (never saved)
+    self.of = setmetatable({}, {__mode = 'k'})    -- creature -> its entry
+    self.laid = setmetatable({}, {__mode = 'k'})  -- egg -> its parents' entries
+    for i, c in ipairs(world.creatures) do self:arrive(c, world.lives[i], nil, true) end
+    world.events:on(function(ev) self:hear(ev) end)
+    return self
+end
+
+-- Everyone's names so far, and how many have borne each
+local function names_given(self)
+    local given = {}
+    for _, e in ipairs(self.entries) do given[e.name] = (given[e.name] or 0) + 1 end
+    return given
+end
+
+-- The ancestors of entry numbers `parents` who have gone back to the moss, nearest first
+local function gone_before(self, parents)
+    local out, seen, gen = {}, {}, parents or {}
+    for _ = 1, 2 do -- parents, then grandparents
+        local next_gen = {}
+        for _, n in ipairs(gen) do
+            local e = self.entries[n]
+            if e and not seen[n] then
+                seen[n] = true
+                if e.gone then out[#out + 1] = e end
+                for _, p in ipairs(e.parents or {}) do next_gen[#next_gen + 1] = p end
             end
         end
+        gen = next_gen
     end
-    local function visit(t, path)
-        for _, k in ipairs(sorted_keys(t)) do
-            local v = rawget(t, k)
-            if type(v) == 'table' and not paths[v] and getmetatable(v) == nil then
-                local p = {unpack(path)}
-                p[#p + 1] = k
-                paths[v] = p
-                visit(v, p)
-            end
-        end
-    end
-    for _, name in ipairs(names) do
-        local m = package.loaded[name]
-        paths[m] = paths[m] or {name}
-    end
-    for _, name in ipairs(names) do
-        local m = package.loaded[name]
-        if paths[m][1] == name then visit(m, {name}) end
-    end
-    return classes, paths
+    return out
 end
 
--- The class called `name`, requiring its module if it isn't loaded yet
-local function class_named(name)
-    local mod, field = name:match('^([^:]+):?(.*)$')
-    local ok, m = pcall(require, mod)
-    if not ok or type(m) ~= 'table' then return nil end
-    if field == '' then return m end
-    return rawget(m, field)
+-- A name for the `n`th to come, whose parents are `parents`
+function Book:name_for(n, parents)
+    local h = World.hash(tostring(self.seed) .. ':name:' .. n)
+    local given = names_given(self)
+    local forebears = gone_before(self, parents)
+    if #forebears > 0 and h % Book.NAMED_FOR == 0 then
+        local e = forebears[(math.floor(h / Book.NAMED_FOR) % #forebears) + 1]
+        return e.name, (given[e.name] or 0) + 1, e.n
+    end
+    local count = #Book.NAMES
+    local k = h % count
+    for step = 0, count - 1 do
+        local name = Book.NAMES[(k + step) % count + 1]
+        if not given[name] then return name end
+    end
+    local name = Book.NAMES[k + 1]
+    return name, given[name] + 1
 end
 
--- The live table at `path`, or nil
-local function at_path(path)
-    local ok, t = pcall(require, path[1])
-    if not ok then return nil end
-    for i = 2, #path do
-        if type(t) ~= 'table' then return nil end
-        t = rawget(t, path[i])
-    end
-    return type(t) == 'table' and t or nil
-end
-
--- Tables written as what made them, and made again when read
-local CODECS = {
-    ['nav.navgraph:Builder'] = {
-        pack = function(b)
-            return {level = b.graph.level, profile = b.graph.profile, slice = b.slice, slices = b.slices,
-                nav = b.nav, key = b.key}
-        end,
-        unpack = function(t)
-            local NavGraph = require('nav.navgraph')
-            local b = NavGraph.builder(t.level, t.profile, t.slice)
-            for _ = 1, t.slices do assert(not b:step(), 'book: a graph finished sooner than it did') end
-            local nav, key = t.nav, t.key
-            for k in pairs(t) do t[k] = nil end
-            for k, v in pairs(b) do t[k] = v end
-            t.nav, t.key = nav, key
-            return setmetatable(t, getmetatable(b))
-        end,
-    },
-}
-
---------------------------------------------------------------------------------
--- Writing
---------------------------------------------------------------------------------
-
-local function number(v)
-    if v ~= v then return 'nnan;' end
-    if v == math.huge then return 'ninf;' end
-    if v == -math.huge then return 'n-inf;' end
-    return 'n' .. string.format('%.17g', v) .. ';'
-end
-
--- `root` (a table) as a book's text
-function Book.encode(root)
-    local classes, paths = registry()
-    local ids, order = {}, {}
-    local from = {} -- table -> {parent, key}, to say where something unwritable was
-    local out = {MAGIC .. Book.VERSION .. '\n'}
-
-    local function where(t, key)
-        local parts = {tostring(key)}
-        while from[t] do
-            local f = from[t]
-            table.insert(parts, 1, tostring(f[2]))
-            t = f[1]
-        end
-        return table.concat(parts, '.')
-    end
-
-    local function id_of(t, parent, key)
-        local id = ids[t]
-        if not id then
-            id = #order + 1
-            ids[t], order[id] = id, t
-            from[t] = parent and {parent, key} or nil
-        end
-        return id
-    end
-
-    local function value(v, parent, key)
-        local ty = type(v)
-        if ty == 'number' then return number(v) end
-        if ty == 'string' then return 's' .. #v .. ':' .. v end
-        if ty == 'boolean' then return v and 'T' or 'F' end
-        if ty == 'table' then return '@' .. id_of(v, parent, key) .. ';' end
-        return nil
-    end
-
-    -- t's pairs, without the dropped and the unwritable (which are errors)
-    local World = require('jar.world')
-    -- t's keys: its plain ones in order, then those that are tables (the
-    -- World's graphs by nav profile) in the order they were first written
-    local function keys_of(t)
-        local keys, tables = sorted_keys(t), {}
-        for k in pairs(t) do
-            if type(k) == 'table' then
-                id_of(k, t, '(a key)')
-                tables[#tables + 1] = k
-            end
-        end
-        table.sort(tables, function(a, b) return ids[a] < ids[b] end)
-        for _, k in ipairs(tables) do keys[#keys + 1] = k end
-        return keys
-    end
-
-    local function pairs_of(t, buf, owner)
-        local world = getmetatable(t) == World
-        for _, k in ipairs(keys_of(t)) do
-            local v = rawget(t, k)
-            if not (DROP[k] or (world and DROP_WORLD[k])) then
-                local kv, vv = value(k, owner, k), value(v, owner, k)
-                if not vv then
-                    error(string.format('book: %s is a %s, which a book can\'t keep', where(owner, k), type(v)), 0)
-                end
-                buf[#buf + 1] = kv
-                buf[#buf + 1] = vv
-            end
-        end
-        buf[#buf + 1] = '.'
-    end
-
-    local function has_function(t)
-        for _, v in pairs(t) do
-            if type(v) == 'function' then return true end
-        end
-        return false
-    end
-
-    id_of(root)
-    local i = 1
-    while order[i] do
-        local t = order[i]
-        local buf = {'#', i, ';'}
-        local path, mt = paths[t], getmetatable(t)
-        if path then
-            buf[#buf + 1] = 'p'
-            buf[#buf + 1] = number(#path)
-            for _, k in ipairs(path) do buf[#buf + 1] = value(k) end
-            if mt == nil and not has_function(t) then
-                buf[#buf + 1] = 'c'
-                pairs_of(t, buf, t)
-            else
-                buf[#buf + 1] = '.'
-            end
-        else
-            local name = mt and classes[mt]
-            if mt and not name then
-                error(string.format('book: %s has a metatable no module holds', where(t, '')), 0)
-            end
-            local codec = name and CODECS[name]
-            if codec then
-                buf[#buf + 1] = 'k'
-                buf[#buf + 1] = value(name)
-                pairs_of(codec.pack(t), buf, t)
-            else
-                buf[#buf + 1] = 't'
-                buf[#buf + 1] = name and value(name) or '-'
-                pairs_of(t, buf, t)
-            end
-        end
-        buf[#buf + 1] = '\n'
-        out[#out + 1] = table.concat(buf)
-        i = i + 1
-    end
-    return table.concat(out)
-end
-
---------------------------------------------------------------------------------
--- Reading
---------------------------------------------------------------------------------
-
-local byte, sub, find = string.byte, string.sub, string.find
-local N, S, AT, T, F, DOT = byte('n'), byte('s'), byte('@'), byte('T'), byte('F'), byte('.')
-
--- The token at s[i]: its value (a ref as its id, with `true` second) and
--- where the next one starts
-local function token(s, i)
-    local c = byte(s, i)
-    if not c then error('book: it ends too soon', 0) end
-    if c == N then
-        local j = find(s, ';', i, true)
-        if not j then error('book: it ends too soon', 0) end
-        local x = sub(s, i + 1, j - 1)
-        local v = tonumber(x)
-        if not v then
-            if x == 'inf' then v = math.huge elseif x == '-inf' then v = -math.huge elseif x == 'nan' then v = 0 / 0
-            else error('book: a bad number at ' .. i, 0) end
-        end
-        return v, false, j + 1
-    elseif c == S then
-        local j = find(s, ':', i, true)
-        local len = j and tonumber(sub(s, i + 1, j - 1))
-        if not len or j + len > #s then error('book: it ends too soon', 0) end
-        return sub(s, j + 1, j + len), false, j + len + 1
-    elseif c == AT then
-        local j = find(s, ';', i, true)
-        if not j then error('book: it ends too soon', 0) end
-        return tonumber(sub(s, i + 1, j - 1)), true, j + 1
-    elseif c == T then
-        return true, false, i + 1
-    elseif c == F then
-        return false, false, i + 1
-    end
-    error('book: unreadable at ' .. i, 0)
-end
-
--- Step over pairs from s[i] to their `.`; where the next record starts
-local function skip_pairs(s, i)
-    while byte(s, i) ~= DOT do
-        local _
-        _, _, i = token(s, i)
-    end
-    return i + 1
-end
-
--- The root table from a book's text, or nil and why it can't be read
-function Book.decode(s)
-    local first = s:match('^[^\n]*')
-    local version = tonumber(first:match('^' .. MAGIC .. '(%d+)$') or '')
-    if not version then return nil, 'not a book' end
-    if version ~= Book.VERSION then return nil, 'a book of version ' .. version .. ', not ' .. Book.VERSION end
-
-    local recs, objs = {}, {}
-    local _
-    local i = #first + 2
-    -- 1: every record's table, found (a module's) or new
-    while i <= #s do
-        local c = byte(s, i)
-        if c == 10 or c == 13 then
-            i = i + 1
-        else
-            local j = find(s, ';', i, true)
-            local id = tonumber(sub(s, i + 1, j - 1))
-            local kind = sub(s, j + 1, j + 1)
-            local r = {kind = kind}
-            i = j + 2
-            if kind == 'p' then
-                local n
-                n, _, i = token(s, i)
-                local path = {}
-                for k = 1, n do path[k], _, i = token(s, i) end
-                r.path = path
-                local live = at_path(path)
-                if byte(s, i) == byte('c') then
-                    r.at = i + 1
-                    i = skip_pairs(s, i + 1)
-                else
-                    i = i + 1
-                end
-                if live then
-                    objs[id], r.at = live, nil
-                elseif r.at then
-                    objs[id], r.install = {}, true
-                else
-                    return nil, 'the book names ' .. table.concat(path, '.') .. ', which isn\'t here'
-                end
-            else
-                if byte(s, i) == byte('-') then
-                    i = i + 1
-                else
-                    r.class, _, i = token(s, i)
-                end
-                r.at = i
-                i = skip_pairs(s, i)
-                objs[id] = {}
-            end
-            recs[id] = r
-        end
-    end
-    -- 2: their contents
-    for id, r in ipairs(recs) do
-        if r.at then
-            local t, k, v, ref = objs[id], nil, nil, nil
-            i = r.at
-            while byte(s, i) ~= DOT do
-                k, ref, i = token(s, i)
-                if ref then k = objs[k] end
-                v, ref, i = token(s, i)
-                if ref then v = objs[v] end
-                rawset(t, k, v)
-            end
-        end
-    end
-    -- 3: classes, and caches put back where they were, shortest path first
-    local installs = {}
-    for id, r in ipairs(recs) do
-        if r.class and r.kind == 't' then
-            local mt = class_named(r.class)
-            if not mt then return nil, 'the book names a class ' .. r.class .. ', which isn\'t here' end
-            setmetatable(objs[id], mt)
-        elseif r.install then
-            installs[#installs + 1] = id
-        end
-    end
-    table.sort(installs, function(a, b) return #recs[a].path < #recs[b].path or (#recs[a].path == #recs[b].path and a < b) end)
-    for _, id in ipairs(installs) do
-        local path = recs[id].path
-        local parent = at_path({unpack(path, 1, #path - 1)})
-        if not parent then return nil, 'the book names ' .. table.concat(path, '.') .. ', which isn\'t here' end
-        rawset(parent, path[#path], objs[id])
-    end
-    -- 4: what codecs packed, made again
-    for id, r in ipairs(recs) do
-        if r.kind == 'k' then
-            local codec = CODECS[r.class]
-            if not codec then return nil, 'the book names a codec ' .. r.class .. ', which isn\'t here' end
-            codec.unpack(objs[id])
-        end
-    end
-    return objs[1]
-end
-
---------------------------------------------------------------------------------
--- The jar's book
---------------------------------------------------------------------------------
-
--- The flora's fronds, which the state hash takes beside the World
-local function fronds(around)
-    return around and around.flora and around.flora.all()
-end
-
--- The book of `world` as text, with what's `around` it ({flora = Plants,
--- motes = Motes}: modules with state() and restore()). `extra` is kept beside
--- it as it is (main.lua keeps who the lantern follows).
-function Book.write(world, around, extra)
-    local kept = {}
-    for name, m in pairs(around or {}) do kept[name] = m.state() end
-    local root = {
-        version = Book.VERSION,
-        seed = rng.jar,
-        saved = os.time(), -- the wall clock, for catching up on time away (#31)
-        time = world.time,
-        hash = statehash.of(world, fronds(around)).total,
-        world = world,
-        around = kept,
-        streams = {sim = rng.sim:getState(), look = rng.look:getState()},
-        extra = extra,
+-- A creature's page: `c` has come, living `life` (World.lives), a child of
+-- entries `parents`, or with the jar
+function Book:arrive(c, life, parents, founder)
+    local n = #self.entries + 1
+    local name, ordinal, named_for = self:name_for(n, parents)
+    local e = {
+        n = n, key = c.key, name = name, ordinal = ordinal, named_for = named_for,
+        genome = Genome.serialise(c.genome),
+        parents = parents, children = {},
+        came = self.world.time, born = life.born, founder = founder or nil,
     }
-    return Book.encode(root)
-end
-
--- A book's text read back: {world, seed, hash, saved, extra, ...} with its
--- World revived, or nil and why. Call Book.resume once the jar around it is
--- composed again from its seed.
-function Book.read(s)
-    local ok, root, err = pcall(Book.decode, s)
-    if not ok then return nil, tostring(root) end
-    if not root then return nil, err end
-    if type(root.world) ~= 'table' or type(root.around) ~= 'table' then return nil, 'a book with no jar in it' end
-    root.world:revive()
-    return root
-end
-
--- The rest of a jar read back, once what's `around` it is composed again
--- from `book.seed` (which reseeds the streams): what's around it as it was,
--- then, last, the streams. Returns whether it hashes as it did, and its hash.
-function Book.resume(book, around)
-    for name, m in pairs(around or {}) do
-        if book.around[name] then m.restore(book.around[name]) end
+    self.entries[n] = e
+    self.alive[n], self.of[c] = c, e
+    for _, p in ipairs(parents or {}) do
+        local pe = self.entries[p]
+        pe.children[#pe.children + 1] = n
     end
-    rng.sim:setState(book.streams.sim)
-    rng.look:setState(book.streams.look)
-    local now = statehash.of(book.world, fronds(around)).total
-    return now == book.hash, now
+    return e
 end
 
--- Where the book is kept: beside Easel's other data for this jar if the frame
--- launched it ($EASEL_DATA), else in LÖVE's save directory
-function Book.dir()
-    local easel = os.getenv('EASEL_DATA')
-    if easel and easel ~= '' then return easel end
-    love.filesystem.createDirectory('') -- (LÖVE makes the save directory on its first write)
-    return love.filesystem.getSaveDirectory()
-end
-
-local function slurp(file)
-    local f = io.open(file, 'rb')
-    if not f then return nil end
-    local s = f:read('*a')
-    f:close()
-    return s
-end
-
--- os.rename, tried again a little later if it's refused (on Windows a file
--- just written can be held a moment by whatever scans it)
-local function rename(from, to)
-    local ok, err
-    for _ = 1, 5 do
-        ok, err = os.rename(from, to)
-        if ok then return true end
-        love.timer.sleep(0.02)
-    end
-    return nil, err
-end
-
--- Write `text` to the book at `file`. It's written beside it first (`.new`)
--- and moved into place, and the last book is kept as `file`.old, so a quit
--- in the middle of a write (a SIGTERM, a power cut) never leaves no book.
-function Book.store(text, file)
-    file = file or (Book.dir() .. '/' .. Book.FILE)
-    local new = file .. '.new'
-    local f, err = io.open(new, 'wb')
-    if not f then return nil, err end
-    local ok, werr = f:write(text)
-    f:close()
-    if not ok then return nil, werr end
-    os.remove(file .. '.old')
-    rename(file, file .. '.old')
-    local moved, merr = rename(new, file)
-    if not moved then return nil, merr end
-    return true
-end
-
--- Save `world`'s book to `file` (by default, Book.FILE in Book.dir()).
--- Returns the seconds it took, or nil and why.
-function Book.save(world, around, extra, file)
-    local t0 = love.timer.getTime()
-    local ok, text = pcall(Book.write, world, around, extra)
-    if not ok then return nil, text end
-    local stored, err = Book.store(text, file)
-    if not stored then return nil, err end
-    return love.timer.getTime() - t0, #text
-end
-
--- Open the book at `file`, or if that can't be read, one written but never
--- moved into place, or the one before it. A book that can't be read is moved
--- aside (to `.unread`), never deleted.
--- Returns the book (see Book.read), or nil and why.
-function Book.open(file)
-    file = file or (Book.dir() .. '/' .. Book.FILE)
-    local why
-    for _, f in ipairs({file, file .. '.new', file .. '.old'}) do
-        local s = slurp(f)
-        if s then
-            local book, err = Book.read(s)
-            if book then return book, f end
-            log.info('book', '%s: %s; kept aside as %s.unread', f, err, f)
-            os.remove(f .. '.unread')
-            os.rename(f, f .. '.unread')
-            why = why or err
+function Book:hear(ev)
+    local world = self.world
+    if ev.kind == 'laid' then
+        local a, b = self.of[ev.who], self.of[ev.with]
+        local parents = a and b and {a.n, b.n} or nil
+        for _, egg in ipairs(ev.eggs) do self.laid[egg] = parents end
+        if parents and #ev.eggs > 0 then
+            self.clutches[#self.clutches + 1] = {at = world.time, parents = parents, count = #ev.eggs}
+        end
+    elseif ev.kind == 'hatched' then
+        local i = world:index_of(ev.who)
+        if i and not self.of[ev.who] then
+            local parents = ev.egg and self.laid[ev.egg]
+            self:arrive(ev.who, world.lives[i], parents, not parents)
+        end
+    elseif ev.kind == 'dying' then
+        local e = self.of[ev.who]
+        if e then e.dying = world.time end
+    elseif ev.kind == 'became' then
+        -- (catch-up, #31: a body became a token, or a token its body again)
+        local e = self.of[ev.was]
+        if e then self.alive[e.n], self.of[ev.who] = ev.who, e end
+    elseif ev.kind == 'returned' then
+        local e = self.of[ev.who]
+        if e then
+            e.gone = world.time
+            self.alive[e.n] = nil
         end
     end
-    return nil, why or 'no book yet'
 end
 
-log.always.book = true
+-- The entry of creature `c`, if the book knows it
+function Book:entry_of(c)
+    return self.of[c]
+end
+
+-- Entry `n`'s living creature and its index in the World, if it's alive
+function Book:creature(n)
+    local c = self.alive[n]
+    return c, c and self.world:index_of(c)
+end
+
+-- A name as the book writes it: "Fen", or "Fen the Second"
+function Book.named(e)
+    if not e.ordinal or e.ordinal < 2 then return e.name end
+    local ord = Book.ordinal(e.ordinal)
+    return e.name .. ' the ' .. ord:sub(1, 1):upper() .. ord:sub(2)
+end
+
+-- The jar's day at jar time `t`: 1 on the day it was opened
+function Book:day_of(t)
+    local L = self.world:day_length()
+    return math.floor((self.world.start_hour / 24 * L + t) / L) + 1
+end
+
+-- How many days entry `e` has lived (or had, if it's gone)
+function Book:lived(e)
+    return ((e.gone or self.world.time) - e.born) / self.world:day_length()
+end
+
+-- What happened after jar time `t`, oldest first: {at, kind = 'born'|'gone'|'laid', entry|clutch}
+function Book:since(t)
+    local out = {}
+    for _, e in ipairs(self.entries) do
+        if not e.founder and e.came > t then out[#out + 1] = {at = e.came, kind = 'born', entry = e} end
+        if e.gone and e.gone > t then out[#out + 1] = {at = e.gone, kind = 'gone', entry = e} end
+    end
+    for _, k in ipairs(self.clutches) do
+        if k.at > t then out[#out + 1] = {at = k.at, kind = 'laid', clutch = k} end
+    end
+    table.sort(out, function(a, b)
+        if a.at ~= b.at then return a.at < b.at end
+        if a.kind ~= b.kind then return a.kind < b.kind end
+        return (a.entry and a.entry.n or 0) < (b.entry and b.entry.n or 0)
+    end)
+    return out
+end
+
+-- Is there anything you haven't seen?
+function Book:news()
+    return #self:since(self.seen) > 0
+end
+
+-- You've read it, now: what's happened so far isn't news
+function Book:close()
+    self.seen = self.world.time
+end
+
+-- What the jar's book (#30, keep.lua) keeps of this one: the entries, the
+-- clutches, when it was last closed, and who each living page belongs to
+-- (creatures and eggs, written in the same graph as the World, so they read
+-- back as the World's own). Plain tables: the weak ones are made again.
+function Book:state()
+    local laid = {}
+    for egg, parents in pairs(self.laid) do laid[egg] = parents end
+    return {entries = self.entries, clutches = self.clutches, seen = self.seen, alive = self.alive, laid = laid}
+end
+
+-- This book as it was kept, over the one composed for the jar read back
+function Book:restore(s)
+    self.entries, self.clutches, self.seen = s.entries, s.clutches, s.seen
+    self.alive = s.alive
+    self.of = setmetatable({}, {__mode = 'k'})
+    for n, c in pairs(self.alive) do self.of[c] = self.entries[n] end
+    self.laid = setmetatable({}, {__mode = 'k'})
+    for egg, parents in pairs(s.laid or {}) do self.laid[egg] = parents end
+end
+
+-- How many live in the jar now
+function Book:living()
+    local n = 0
+    for _ in pairs(self.alive) do n = n + 1 end
+    return n
+end
 
 return Book

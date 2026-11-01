@@ -4,7 +4,7 @@
 --   lovec . --selftest                    nav integrity, arrival, determinism, replay
 --   lovec . --test <name>[,<name>]        Terrarium: just these self-tests (graphs, trips,
 --                                         framerate, lantern, day, replay, genome, worm, blob, spider,
---                                         hatch, crowd, ranges, moss, audio, styles, or all;
+--                                         hatch, crowd, ranges, moss, food, book, audio, styles, or all;
 --                                         --seed <n> reseeds the day, month and others;
 --                                         --day <sec> shortens the month's days)
 --   lovec . --selftest --skip <name>[,..] Terrarium: all but these (CI runs the month apart)
@@ -1626,19 +1626,131 @@ test('food', function(j, results)
     log.info('selftest', 'food         %d pinches a day, one back every %.0f s of a %d s day', Food.PINCHES, wait, DAY)
 end)
 
+-- Terrarium: 3c. The family book (#32), the gate. A coarse jar of 900-second
+-- days is left BOOK_DAYS with a book beside it, and another from the same
+-- seed without one, and they hash the same: the book only listens. Everyone
+-- who ever lived is in it once, in the order they came: the founders with the
+-- jar, every hatchling with the two who laid it, each parent with it among
+-- their children, and everyone gone with when, and how long they lived. The
+-- living are named apart. Shut at dawn on the third day, it says what came
+-- and went after, and nothing from before. And its words are words.
+local BOOK_DAYS = 6
+test('book', function(j, results)
+    local World, level_data = j.World, j.level_data
+    local DayCycle = require('jar.daycycle')
+    local Book = require('book')
+    local statehash = require('core.statehash')
+    local seed = j.seed or 20261018
+    local function open()
+        rng.seed(seed)
+        return World.new(level_data, {cast = CLASSIC, wander = true, selected = 0, hour = DayCycle.presets.lampon, day = DAY,
+            coarse = true})
+    end
+    local dt, steps = World.COARSE, math.floor(BOOK_DAYS * DAY / World.COARSE + 0.5)
+    -- (one jar after the other: they'd share rng.sim side by side)
+    local bare = open()
+    for _ = 1, steps do bare:step(dt) end
+    local unread = statehash.of(bare)
+    local w = open()
+    local book = Book.new(w, seed)
+    local founders = #w.creatures
+    local hatched, returned = {}, {}
+    w.events:on(function(ev)
+        if ev.kind == 'hatched' then hatched[#hatched + 1] = ev.who
+        elseif ev.kind == 'returned' then returned[#returned + 1] = ev.who end
+    end)
+    local shut = 2 * DAY - (DayCycle.presets.lampon - 6) / 24 * DAY -- (dawn on the third day)
+    local twins = 0
+    for _ = 1, steps do
+        w:step(dt)
+        if book.seen == 0 and w.time >= shut then book:close() end
+        local named = {}
+        for n in pairs(book.alive) do
+            local name = Book.named(book.entries[n])
+            if named[name] then twins = twins + 1 end
+            named[name] = true
+        end
+    end
+    local where = statehash.diverged(statehash.of(w), unread)
+    check(results, where == nil, 'book: a jar with a book went another way than one without, first in %s', tostring(where))
+
+    check(results, #book.entries == founders + #hatched, 'book: %d in the book, but %d came with the jar and %d hatched',
+        #book.entries, founders, #hatched)
+    check(results, #hatched > 0 and #returned > 0, 'book: %d hatched and %d went back to the moss in %d days',
+        #hatched, #returned, BOOK_DAYS)
+    for k = 1, founders do
+        check(results, book.entries[k] and book.entries[k].founder, 'book: page %d is not one who came with the jar', k)
+    end
+    for _, c in ipairs(hatched) do
+        local e = book:entry_of(c)
+        check(results, e and e.parents and #e.parents == 2, 'book: a hatchling has no page, or not two parents')
+        for _, p in ipairs(e and e.parents or {}) do
+            local listed = false
+            for _, n in ipairs(book.entries[p].children) do listed = listed or n == e.n end
+            check(results, listed, 'book: %s is not among %s\'s children', Book.named(e), Book.named(book.entries[p]))
+            check(results, book.entries[p].key == e.key and p < e.n, 'book: %s has a parent of another kind, or a younger one', Book.named(e))
+        end
+    end
+    for _, c in ipairs(returned) do
+        local e = book:entry_of(c)
+        check(results, e and e.gone and not book.alive[e.n], 'book: one who went back to the moss is still alive in the book')
+        check(results, e and book:lived(e) > 0.5, 'book: %s lived only %.2f days', e and Book.named(e) or '?', e and book:lived(e) or 0)
+    end
+    check(results, book:living() == #w.creatures, 'book: %d alive in the book, %d in the jar', book:living(), #w.creatures)
+    for i, c in ipairs(w.creatures) do
+        local e = book:entry_of(c)
+        check(results, e and not e.gone and select(2, book:creature(e.n)) == i, 'book: creature %d has no living page', i)
+    end
+    check(results, twins == 0, 'book: two of the living shared a name %d times', twins)
+    -- (catch-up, #31, makes each body a token and back: the book keeps up)
+    for _, change in ipairs({'embody', 'coarsen'}) do
+        w[change](w)
+        for i, c in ipairs(w.creatures) do
+            local e = book:entry_of(c)
+            check(results, e and select(2, book:creature(e.n)) == i, 'book: after %s, creature %d has no living page', change, i)
+        end
+    end
+
+    -- What happened while you were away is what came and went after you shut it
+    local away, births, gone = book:since(book.seen), 0, 0
+    for _, h in ipairs(away) do
+        check(results, h.at > book.seen, 'book: something from before it was shut is news')
+        if h.kind == 'born' then births = births + 1 elseif h.kind == 'gone' then gone = gone + 1 end
+    end
+    local want_births, want_gone = 0, 0
+    for _, e in ipairs(book.entries) do
+        if not e.founder and e.came > book.seen then want_births = want_births + 1 end
+        if e.gone and e.gone > book.seen then want_gone = want_gone + 1 end
+    end
+    check(results, births == want_births and gone == want_gone and births + gone > 0,
+        'book: while you were away, %d born and %d gone; wanted %d and %d', births, gone, want_births, want_gone)
+
+    -- In words
+    for _, case in ipairs({{Book.days(0.4), 'less than a day'}, {Book.days(1.1), 'a day'}, {Book.days(1.6), 'a day and a half'},
+        {Book.days(4.4), 'four and a half days'}, {Book.ordinal(3), 'third'}, {Book.ordinal(21), 'twenty-first'},
+        {Book.words(34), 'thirty-four'}, {Book.list({'Fen', 'Moss', 'Ivo'}), 'Fen, Moss and Ivo'},
+        {Book.named({name = 'Fen', ordinal = 2}), 'Fen the Second'}}) do
+        check(results, case[1] == case[2], 'book: wrote %q for %q', case[1], case[2])
+    end
+    local named_for = 0
+    for _, e in ipairs(book.entries) do named_for = named_for + (e.named_for and 1 or 0) end
+    log.info('selftest', 'book         %d days of seed %d: %d came with the jar, %d hatched, %d gone, %d named for one gone; '
+        .. 'while you were away, %d born and %d gone', BOOK_DAYS, seed, founders, #hatched, #returned, named_for, births, gone)
+end)
+
 -- Terrarium: 3d. Replay. The whole jar (scape, plants, creatures) opened
 -- twice from one seed is the same jar after ten minutes of its life.
 test('replay', function(j, results)
     check(results, dev.replay(j.open_jar, 7, 600, j.fixed_dt, j.step), 'replay: two runs of seed 7 diverged')
 end)
 
--- Terrarium: 3h. The book (#30), the gate. A jar written to its book and read
+-- Terrarium: 3h. The jar's book (#30, keep.lua), the gate. A jar written to its book and read
 -- back goes on exactly as it would have. In a jar of 900-second days from
 -- lamp-on, of each cast (between them they hold every kind), the book is
 -- written a step or two after the first clutch is laid, while the clutch's
 -- graphs are still being built a slice at a time. The jar it's read back into,
 -- composed again from its seed, hashes as the written one did, keeps its
--- names, ids and family log, draws without touching the sim, and hashes as
+-- names, ids and family log, and the family book's record (#32), draws without touching the sim, and hashes as
 -- the written one does after another minute of both. A book of another
 -- version, or one cut short, isn't read; on disk, one that can't be read is
 -- kept aside and the book before it is read instead.
@@ -1667,8 +1779,8 @@ local function first_difference(a, b, path, seen)
         end
     end
 end
-test('book', function(j, results)
-    local Book = require('book')
+test('keep', function(j, results)
+    local Keep = require('keep')
     local statehash = require('core.statehash')
     local Plants = require('jar.plants')
     local DayCycle = require('jar.daycycle')
@@ -1684,8 +1796,11 @@ test('book', function(j, results)
             j.step(w)
             steps = steps + 1
         end
-        check(results, laid, 'book: no clutch in a day of seed %d (%s)', seed, jar.name)
-        text = Book.write(w, {flora = Plants, motes = require('jar.motes')})
+        check(results, laid, 'keep: no clutch in a day of seed %d (%s)', seed, jar.name)
+        text = Keep.write(w, j.around())
+        local family = j.around().family.state()
+        local pages = {}
+        for n, e in ipairs(family.entries) do pages[n] = e.name .. ' ' .. e.key .. (e.gone and ' gone' or '') end
         local written = statehash.of(w, Plants.all()).total
         local who, building, logged = {}, #w.building, #w.history
         -- (the graphs it has, by nav profile: keys a state hash doesn't see)
@@ -1701,21 +1816,33 @@ test('book', function(j, results)
         for _ = 1, math.floor(BOOK_AFTER / dt + 0.5) do j.step(w) end
         local went_on = statehash.of(w, Plants.all())
 
-        local book, err = Book.read(text)
-        check(results, book, 'book: the book of seed %d (%s) can\'t be read: %s', seed, jar.name, tostring(err))
+        local book, err = Keep.read(text)
+        check(results, book, 'keep: the book of seed %d (%s) can\'t be read: %s', seed, jar.name, tostring(err))
         if book then
             local r, same, hash = j.resume_jar(book)
-            check(results, same and hash == written, 'book: seed %d (%s) reads back as %s, written as %s', seed,
+            check(results, same and hash == written, 'keep: seed %d (%s) reads back as %s, written as %s', seed,
                 jar.name, hash, written)
             local names = 0
             for i, c in ipairs(r.creatures) do
                 if who[i] == string.format('%s %s #%d', c.key, tostring(c.name), c.id) then names = names + 1 end
             end
-            check(results, names == #who and #r.creatures == #who, 'book: seed %d (%s) read back %d of %d by name and id',
+            check(results, names == #who and #r.creatures == #who, 'keep: seed %d (%s) read back %d of %d by name and id',
                 seed, jar.name, names, #who)
             check(results, #r.history == logged and r.history[1] and r.history[1].kind == 'arrived',
-                'book: seed %d (%s) read back %d of the log\'s %d', seed, jar.name, #r.history, logged)
-            check(results, graphs(r) == built, 'book: seed %d (%s) read back %d of its %d graphs by nav profile', seed,
+                'keep: seed %d (%s) read back %d of the log\'s %d', seed, jar.name, #r.history, logged)
+            local back = j.around().family.state()
+            local same_pages = #back.entries == #pages
+            for n, e in ipairs(back.entries) do
+                same_pages = same_pages and pages[n] == e.name .. ' ' .. e.key .. (e.gone and ' gone' or '')
+            end
+            local living = 0
+            for n, c in pairs(back.alive) do
+                if r:index_of(c) and back.entries[n] then living = living + 1 end
+            end
+            check(results, same_pages and living == #r.creatures and #back.clutches == #family.clutches,
+                'keep: seed %d (%s) read back %d of the family book's %d pages, %d of %d living, %d of %d clutches',
+                seed, jar.name, #back.entries, #pages, living, #r.creatures, #back.clutches, #family.clutches)
+            check(results, graphs(r) == built, 'keep: seed %d (%s) read back %d of its %d graphs by nav profile', seed,
                 jar.name, graphs(r), built)
             -- (drawn as main.lua draws it, which makes its meshes again)
             local ctx = {light_dir = r.light_dir, light = {glow = 1}}
@@ -1727,41 +1854,41 @@ test('book', function(j, results)
                 end
                 Eggs.draw(r, ctx.light)
             end)
-            check(results, drew, 'book: seed %d (%s) read back won\'t draw: %s', seed, jar.name, tostring(derr))
-            check(results, statehash.of(r, Plants.all()).total == written, 'book: drawing seed %d (%s) changed it', seed,
+            check(results, drew, 'keep: seed %d (%s) read back won\'t draw: %s', seed, jar.name, tostring(derr))
+            check(results, statehash.of(r, Plants.all()).total == written, 'keep: drawing seed %d (%s) changed it', seed,
                 jar.name)
             for _ = 1, math.floor(BOOK_AFTER / dt + 0.5) do j.step(r) end
             local where = statehash.diverged(went_on, statehash.of(r, Plants.all()))
-            check(results, not where, 'book: a minute after seed %d (%s) was read back it drifted, first in %s (%s)',
+            check(results, not where, 'keep: a minute after seed %d (%s) was read back it drifted, first in %s (%s)',
                 seed, jar.name, tostring(where), where and tostring(first_difference(w, r)) or '')
-            log.info('selftest', 'book   seed %-9d %d KB at %.0fs, %d creatures, %d eggs, %d graphs building: %s (%s)',
+            log.info('selftest', 'keep   seed %-9d %d KB at %.0fs, %d creatures, %d eggs, %d graphs building: %s (%s)',
                 seed, #text / 1024, book.time, #r.creatures, #r.eggs, building, where and 'FAIL' or 'the same',
                 jar.name)
         end
     end
 
     -- What isn't a book of this one's, isn't read
-    local other = text:gsub('^[^\n]*', 'terrarium book ' .. (Book.VERSION + 1), 1)
-    local book, err = Book.read(other)
-    check(results, not book and tostring(err):find('version'), 'book: a book of another version was read (%s)', tostring(err))
-    book = Book.read(text:sub(1, math.floor(#text / 2)))
-    check(results, not book, 'book: a book cut in half was read')
+    local other = text:gsub('^[^\n]*', 'terrarium book ' .. (Keep.VERSION + 1), 1)
+    local book, err = Keep.read(other)
+    check(results, not book and tostring(err):find('version'), 'keep: a book of another version was read (%s)', tostring(err))
+    book = Keep.read(text:sub(1, math.floor(#text / 2)))
+    check(results, not book, 'keep: a book cut in half was read')
     -- On disk: written beside itself and moved into place, the last one kept;
     -- one that can't be read is kept aside, and the one before it read
     love.filesystem.createDirectory('booktest')
     local file = love.filesystem.getSaveDirectory() .. '/booktest/jar.book'
     for _, f in ipairs({file, file .. '.old', file .. '.unread', file .. '.new'}) do os.remove(f) end
-    local stored, serr = Book.store(text, file)
-    if stored then stored, serr = Book.store(text, file) end
-    check(results, stored, 'book: a book couldn\'t be written: %s', tostring(serr))
+    local stored, serr = Keep.store(text, file)
+    if stored then stored, serr = Keep.store(text, file) end
+    check(results, stored, 'keep: a book couldn\'t be written: %s', tostring(serr))
     local torn = io.open(file, 'wb')
     torn:write(text:sub(1, 1000))
     torn:close()
-    local back, from = Book.open(file)
-    check(results, back and from == file .. '.old', 'book: a torn book wasn\'t passed over for the one before (%s)',
+    local back, from = Keep.open(file)
+    check(results, back and from == file .. '.old', 'keep: a torn book wasn\'t passed over for the one before (%s)',
         tostring(from))
     local aside = io.open(file .. '.unread', 'rb')
-    check(results, aside ~= nil, 'book: a torn book wasn\'t kept aside')
+    check(results, aside ~= nil, 'keep: a torn book wasn\'t kept aside')
     if aside then aside:close() end
     for _, f in ipairs({file, file .. '.old', file .. '.unread'}) do os.remove(f) end
 end)
@@ -3371,11 +3498,12 @@ end
 -- Run the tests named in `only` (a comma list; nil or 'all' runs every one).
 -- Returns true when every check passed, or nil and a message for a name it
 -- doesn't know.
-function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day, cast, resume_jar)
+function dev.selftest(World, level_data, fixed_dt, open_jar, step, only, seed, skip, day, cast, resume_jar, around)
     -- (the jars it opens the way the game does hold the classic cast too)
     local function open_classic(s, hour, d, level) return open_jar(s, hour, d, level, CLASSIC) end
     local j = {World = World, level_data = level_data, fixed_dt = fixed_dt, open_jar = open_classic, step = step, seed = seed,
-        day = day, cast = cast, open_cast = open_jar, resume_jar = resume_jar}
+        day = day, cast = cast, open_cast = open_jar, resume_jar = resume_jar,
+        around = around}
     -- Terrarium: the names in a comma list, or nil and a message for one it doesn't know
     local function names(list)
         local out = {}
@@ -3466,8 +3594,8 @@ end
 -- inside one process, a book can't show that it kept what a new process
 -- doesn't have (a cache, a stream, a module's state).
 dev.KEEP_AFTER = 60
-function dev.keep(open_jar, resume_jar, o, seed, fixed_dt, step)
-    local Book = require('book')
+function dev.keep(open_jar, resume_jar, o, seed, fixed_dt, step, around)
+    local Keep = require('keep')
     local statehash = require('core.statehash')
     local Plants = require('jar.plants')
     local DayCycle = require('jar.daycycle')
@@ -3475,8 +3603,8 @@ function dev.keep(open_jar, resume_jar, o, seed, fixed_dt, step)
     if o.keep then
         w = open_jar(o.seed or seed, DayCycle.parseHour(o.hour) or DayCycle.presets.midday, o.day)
         for _ = 1, math.floor((o.keep.seconds or 0) / fixed_dt + 0.5) do step(w) end
-        local text = Book.write(w, {flora = Plants, motes = require('jar.motes')})
-        local ok, err = Book.store(text, o.keep.file)
+        local text = Keep.write(w, around())
+        local ok, err = Keep.store(text, o.keep.file)
         if not ok then
             log.info('dev', 'keep  FAIL the book wasn\'t written: %s', tostring(err))
             return false, '-'
@@ -3487,7 +3615,7 @@ function dev.keep(open_jar, resume_jar, o, seed, fixed_dt, step)
         local f = io.open(o.resume, 'rb')
         local text = f and f:read('*a')
         if f then f:close() end
-        local book, err = Book.read(text or '')
+        local book, err = Keep.read(text or '')
         if not book then
             log.info('dev', 'resume  FAIL %s: %s', o.resume, tostring(err))
             return false, '-'
