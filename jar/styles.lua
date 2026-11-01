@@ -136,8 +136,19 @@ Styles.list = {
     -- creatures (#97, jar/ascii.lua): a glyph a cell by its light, a stroke
     -- where an edge runs through it, inked in the cell's colour. No fringe:
     -- the glass would split a glyph's fine strokes into their colours.
+    -- The whole finished frame is set at once.
     { name = 'ascii', shader = 'styles/ascii', draw = Ascii.draw,
         adjust = Ascii.step, label = Ascii.label, glass = { aberration = 0, grain = 0.010, vignette = 0.40 } },
+    -- The same grid with each thing in the jar set by what it is (#97, after
+    -- pencil-each): every thing is laid in as it is, and marked on a map of
+    -- what's where (`each.lay`), so a cell knows the thing it holds. A
+    -- creature claims a cell from a sliver of it and is set dense in its own
+    -- colour, never the moss's behind it; the moss is grass; a prop is its
+    -- outline, its inside at most two steps of dots; a far thing a faint
+    -- outline; and the ground, the room and the air, all but bare.
+    { name = 'ascii-each', shader = 'styles/ascii', draw = Ascii.draw_each,
+        adjust = Ascii.step, label = Ascii.label, glass = { aberration = 0, grain = 0, vignette = 0.25 },
+        each = { shader = 'styles/ascii_mark', lay = Ascii.lay, begin = Ascii.begin } },
 }
 
 local by_name = {}
@@ -157,7 +168,7 @@ end
 -- What the corner calls style `name` when it's switched to or resized
 function Styles.label(name)
     local s = by_name[name]
-    return s and s.label and s.label() or name
+    return s and s.label and s.label(name) or name
 end
 
 function Styles.names()
@@ -214,6 +225,13 @@ function Styles.each(name)
     return s and s.each and Render.shader(s.each.shader) and true or false
 end
 
+-- A frame (or a plate) begins in the canvas being drawn into: a style that
+-- keeps something of its own per frame starts it afresh (ascii-each's map)
+function Styles.begin(name)
+    local s = by_name[name]
+    if s and s.each and s.each.begin and Styles.each(name) then s.each.begin(love.graphics.getCanvas()) end
+end
+
 -- One thing under a style that draws each on its own (a creature, a stone, a
 -- piece of the scenery): `draw()` draws it, as it would be drawn into the
 -- canvas being drawn into, onto a clear canvas the same size, and that's laid
@@ -234,7 +252,11 @@ Styles.LOOK = {
     prop = { 1, 0.15, 7, 0.74 },
     soil = { 1, 0.1, 16, 0.68 },
     far = { 0.42, 0, 9, 0.74 },
+    moss = { 1, 0.15, 7, 0.74 }, -- (to pencil, a prop; ascii-each sets it as grass)
 }
+-- What each look is called, for a style that sets things by what they are
+Styles.KIND = {}
+for kind, look in pairs(Styles.LOOK) do Styles.KIND[look] = kind end
 local quad
 local MARGIN = 12 -- page px past a thing that its line and shade read
 function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, look, draw)
@@ -261,6 +283,10 @@ function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, look, draw)
 
     quad = quad or love.graphics.newQuad(0, 0, 1, 1, 1, 1)
     quad:setViewport(x0, y0, x1 - x0, y1 - y0, w, h)
+    if s.each.lay then
+        -- (a style that lays its things in its own way: ascii-each)
+        return s.each.lay(alone, quad, x0, y0, Styles.KIND[look or Styles.LOOK.creature], seed)
+    end
     love.graphics.push('all')
     love.graphics.origin()
     love.graphics.setColor(1, 1, 1, 1)

@@ -511,7 +511,7 @@ local function drawProps(light)
         local sx1, sy1 = love.graphics.transformPoint(x1, y1)
         alone(k, function() Scenery.drawPiece(p) end, sx0, sy0, sx1, sy1)
     end
-    alone(3, function() Moss.draw(world.moss, light, world.time, world.creatures) end)
+    alone(3, function() Moss.draw(world.moss, light, world.time, world.creatures) end, nil, nil, nil, nil, Styles.LOOK.moss)
 end
 
 -- Everything in the jar, back to front. The scape behind FAR_D and the room
@@ -523,6 +523,7 @@ local function drawScene(light, plane)
     Scape.drawRoom(light)
     love.graphics.setCanvas(Render.canvas("scene"))
     love.graphics.clear(0, 0, 0, 1)
+    Styles.begin(style) -- (a style that keeps a map of what's where starts it afresh, ascii-each)
     Render.drawSoft("room", 2.6)
 
     local each = Styles.each(style)
@@ -661,6 +662,7 @@ local function plate(target, v, light, blur)
     local plane = canvas('plate', w, h, true)
     love.graphics.setCanvas(plane)
     love.graphics.clear(0, 0, 0, 1)
+    Styles.begin(style)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(soft, -sx0 * a, -sy0 * a, 0, a * k, a * k)
     love.graphics.push()

@@ -3,7 +3,8 @@
 // in it (each a linear tap, so 2 x 2 of the frame's pixels), and beside it,
 // in the second canvas, how its light runs (the right half against the left,
 // the lower against the upper, on light pressed toward 1 so a dim edge counts
-// as much as a bright one), its pressed light, and how much it's the moss.
+// as much as a bright one), and its kind: the moss where it is the moss's
+// green, else the frame set at once (the kinds of ascii_each_cells.glsl).
 extern vec2 grid; // the grid's columns and rows
 extern vec2 span; // a cell's size in the frame's uv
 extern Image frame;
@@ -46,5 +47,7 @@ void effect() {
     }
     vec3 mean = sum / 16.0;
     love_Canvases[0] = vec4(mean, 1.0);
-    love_Canvases[1] = vec4(gx / 8.0, gy / 8.0, pressed(mean), moss(mean));
+    // (its kind, as ascii_each_cells.glsl gives one: 4, the moss, by its
+    // green; else 6, the frame set at once)
+    love_Canvases[1] = vec4(gx / 8.0, gy / 8.0, 1.0, (moss(mean) > 0.5 ? 4.0 : 6.0) / 8.0);
 }

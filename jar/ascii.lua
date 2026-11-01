@@ -68,7 +68,7 @@ function Ascii.step(dir)
     return Ascii.size(s[1], s[2])
 end
 
-function Ascii.label() return ('ascii %d x %d'):format(cell[1], cell[2]) end
+function Ascii.label(name) return ('%s %d x %d'):format(name or 'ascii', cell[1], cell[2]) end
 
 -- The glyph atlas for cw x ch target pixels: the ramp, the edges and the
 -- grass in a row, one cell each, white ink on clear, and the ramp's slots in
@@ -146,11 +146,63 @@ local function canvas(name, w, h, format)
     return canvases[key]
 end
 
+-- ascii-each (after pencil-each, #95): each thing in the jar is laid into the
+-- frame as it is, and marked on a map the frame's size of what's where: r its
+-- kind (KIND, over 7), g its own seed (over 127), so the cells pass can tell
+-- one thing from another and set each cell by the thing it holds. The map
+-- starts afresh with each frame or plate (`begin`, from Styles.begin), and
+-- what's left unmarked is the ground.
+Ascii.KIND = { far = 1, soil = 2, prop = 3, moss = 4, creature = 5 }
+local maps = {}
+
+function Ascii.begin(target)
+    if not target then return end
+    local w, h = target:getDimensions()
+    local key = 'map' .. w .. 'x' .. h
+    maps[target] = canvas(key, w, h, 'rgba8')
+    love.graphics.push('all')
+    love.graphics.setCanvas(maps[target])
+    love.graphics.clear(0, 0, 0, 0)
+    love.graphics.pop()
+end
+
+-- One thing (Styles.body): `alone` holds it, drawn on its own, and `quad`
+-- cuts it out at x0, y0. It goes into the canvas being drawn into as it is,
+-- and onto that canvas's map as `kind` with its `seed`.
+function Ascii.lay(alone, quad, x0, y0, kind, seed)
+    local map = maps[love.graphics.getCanvas()]
+    local mark = Render.shader('styles/ascii_mark')
+    love.graphics.push('all')
+    love.graphics.origin()
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setShader()
+    love.graphics.setColorMask(true, true, true, false)
+    love.graphics.setBlendMode('alpha', 'premultiplied')
+    love.graphics.draw(alone, quad, x0, y0)
+    if map and mark then
+        love.graphics.setCanvas(map)
+        love.graphics.setColorMask(true, true, true, true)
+        love.graphics.setBlendMode('replace')
+        love.graphics.setShader(mark)
+        mark:send('kind', (Ascii.KIND[kind] or Ascii.KIND.creature) / 7)
+        mark:send('seed', (seed or 0) % 127 / 127)
+        love.graphics.draw(alone, quad, x0, y0)
+    end
+    love.graphics.pop()
+end
+
+-- The frame as ascii-each sets it: by its map, if it has one
+function Ascii.draw_each(frame, time, kx, ky)
+    return Ascii.draw(frame, time, kx, ky, maps[frame])
+end
+
 -- The frame as glyphs. `kx`, `ky` are how many of the target's pixels a pixel
--- of the frame will cover. Returns the canvas and the scale to draw it at, or
--- the frame itself at 1 if a shader didn't load.
-function Ascii.draw(frame, time, kx, ky)
-    local glyphs, cells = Render.shader('styles/ascii'), Render.shader('styles/ascii_cells')
+-- of the frame will cover, and `map` what's where in it (ascii-each). Returns
+-- the canvas and the scale to draw it at, or the frame itself at 1 if a
+-- shader didn't load.
+function Ascii.draw(frame, time, kx, ky, map)
+    local glyphs = Render.shader('styles/ascii')
+    local cells = Render.shader(map and 'styles/ascii_each_cells' or 'styles/ascii_cells')
     local eye = Render.shader('styles/ascii_eye')
     if not (glyphs and cells and eye) then return frame, 1, 1 end
     kx, ky = math.max(1, kx or 1), math.max(1, ky or 1)
@@ -174,6 +226,7 @@ function Ascii.draw(frame, time, kx, ky)
     cells:send('grid', { cols, rows })
     cells:send('span', { cw / ow, ch / oh })
     cells:send('frame', frame)
+    if map then cells:send('map', map) end
     love.graphics.draw(frame, 0, 0, 0, cols / w, rows / h)
 
     -- 2. the eye: the frame's mean light, in one texel

@@ -1,14 +1,25 @@
 // Terrarium: ascii (#97), the second pass (jar/ascii.lua). Every pixel finds
-// its cell and inks the glyph the cell's light asks for, in the cell's colour:
-// a glyph off the ramp by how bright it is; the stroke along an edge where
-// one runs through it (| / - \), so outlines read as lines; and where the
-// cell is the moss's green, a roguelike's grass (, ") instead, so a creature,
-// never that green, stands out of it in the ramp's dense glyphs. Dark cells
-// go almost black, with only a breath of their colour behind the glyph, the
-// way a terminal's phosphor glows.
+// its cell and inks the glyph its cell asks for, in the cell's colour. What
+// it asks for comes of the cell's kind (from the first pass):
+//
+//   6  the frame set at once (ascii): a glyph off the ramp by its light, or
+//      the stroke along an edge where its light runs hard across it;
+//   5  a creature (ascii-each): dense, never lighter than the ramp's middle,
+//      in its own colour, so a body reads however small; a sliver of it at
+//      its edge is the stroke along its silhouette;
+//   4  the moss: a roguelike's grass, sparse (,) then thick (");
+//   3  a prop, 2 the soil: its outline in strokes along its silhouette, its
+//      inside at most two steps (. :) and only as its broad light asks;
+//   1  a far thing: a fainter outline and nothing in it;
+//   0  the ground (the room, the air, the jar's far side): all but bare, a
+//      faint dot where it's lit and a faint stroke where its light breaks,
+//      and the ramp only where the lamp's light is strong.
+//
+// Dark cells go almost black, with only a breath of their colour behind the
+// glyph, the way a terminal's phosphor glows.
 extern Image eye;    // one texel: the frame's mean light
 extern Image cells;  // a texel a cell: its colour
-extern Image edges;  // a texel a cell: how its light runs (x, y), its pressed light, how much it's moss
+extern Image edges;  // a texel a cell: how it runs (x, y), its cover, its kind over 8
 extern Image atlas;  // the glyphs, a cell each in a row
 extern vec2 grid;    // columns, rows
 extern vec2 cellPx;  // a cell in the target's pixels
@@ -26,6 +37,9 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     vec2 at = (cell + 0.5) / grid;
     vec3 col = Texel(cells, at).rgb;
     vec4 run = Texel(edges, at);
+    float kind = floor(run.w * 8.0 + 0.5);
+    float cover = run.z;
+    float slope = length(run.xy);
 
     // (by day the jar is a dark room: most of it lies between 0.1 and 0.2, a
     // quiet field of dots, with its moss, creatures and the lamp's pool above,
@@ -35,14 +49,47 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     float y = dot(col, vec3(0.2126, 0.7152, 0.0722));
     float t = pow(clamp((y * open - 0.1) / 0.5, 0.0, 1.0), 0.85);
     float pick = floor(t * (ramp - 1.0) + 0.5);
+    float stroke = ramp + mod(floor(mod(atan(run.y, run.x) + PI, PI) / (PI * 0.25) + 0.5), 4.0);
+    float grass = ramp + 4.0 + (t > 0.12 ? 1.0 : 0.0);
+    float ink = 1.0;
 
-    if (run.w > 0.5 && t > 0.06) {
-        // the moss: sparse grass, then thick
-        pick = ramp + 4.0 + (t > 0.12 ? 1.0 : 0.0);
-    } else if (length(run.xy) > 0.11 && t > 0.05) {
-        // an edge through the cell, if the light runs across it hard enough
-        float a = mod(atan(run.y, run.x) + PI, PI);
-        pick = ramp + mod(floor(a / (PI * 0.25) + 0.5), 4.0);
+    if (kind > 5.5) {
+        // the frame set at once
+        if (slope > 0.11 && t > 0.05) pick = stroke;
+    } else if (kind > 4.5) {
+        // a creature
+        pick = (cover < 0.4 && slope > 0.2) ? stroke : max(pick, floor(ramp * 0.5));
+        ink = 1.15;
+    } else if (kind > 3.5) {
+        // the moss
+        if (t > 0.06) pick = grass;
+        ink = 1.2;
+    } else if (kind > 1.5) {
+        // a prop, or the soil
+        if (cover < 0.85 && slope > 0.25) {
+            pick = stroke;
+            ink = 1.1;
+        } else {
+            // (the soil's light is taken more broadly: it's dark, and
+            // a field of dots is what keeps the jar's mass)
+            float lo = kind > 2.5 ? 0.1 : 0.0, hi = kind > 2.5 ? 0.35 : 0.2;
+            pick = t <= lo ? 0.0 : (t < hi ? 1.0 : 2.0);
+            ink = 0.8;
+        }
+    } else if (kind > 0.5) {
+        // a far thing
+        pick = (cover < 0.85 && slope > 0.25) ? stroke : 0.0;
+        ink = 0.6;
+    } else {
+        // the ground
+        if (slope > 0.14 && t > 0.05) {
+            pick = stroke;
+            ink = 0.6;
+        } else {
+            // (bare but for a dot, except where the lamp's light is strong)
+            pick = t > 0.4 ? pick : min(pick, 1.0);
+            ink = 0.55;
+        }
     }
 
     float s = 0.0;
@@ -57,6 +104,6 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     // A night's ink stays a little dimmer than a day's, opened eye or not.
     vec3 rich = max(mix(vec3(y), col, 1.35), 0.0);
     float lift = min((0.3 + 0.8 * t) * (0.6 + 0.4 / open) / max(y, 0.001), 8.0 * open);
-    vec3 c = rich * lift * mask + col * 0.05;
+    vec3 c = rich * lift * ink * mask + col * (kind > 5.5 ? 0.05 : 0.025);
     return vec4(c, 1.0);
 }
