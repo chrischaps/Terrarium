@@ -1735,22 +1735,27 @@ test('replay', function(j, results)
 end)
 
 -- Terrarium: 3d''. Styles (#94). The jar's looks: none first, the default, and
--- the jar as it always looked; every other one a shader that's there; Tab
--- visits them all and comes round again. (That a jar watched in each hashes
--- the same as one nobody watched is tests/ci.sh's window check: it needs a
--- window to compile them.)
+-- the jar as it always looked; every other one a shader that's there, or a
+-- few passes (#96) whose shaders are all there; Tab visits them all and
+-- comes round again. (That a jar watched in each hashes the same as one
+-- nobody watched is tests/ci.sh's window check: it needs a window to compile
+-- them.)
 test('styles', function(j, results)
     local Styles = require('jar.styles')
     local first = Styles.list[1]
-    check(results, first.name == 'none' and Styles.DEFAULT == 'none' and not first.shader,
+    check(results, first.name == 'none' and Styles.DEFAULT == 'none' and #Styles.passes(first) == 0,
         'styles: none is not the first and default, or it has a shader')
     local seen = {}
     for _, s in ipairs(Styles.list) do
         check(results, not seen[s.name], 'styles: two called %s', s.name)
         seen[s.name] = true
         if s ~= first then
-            check(results, s.shader and love.filesystem.getInfo('shaders/' .. s.shader .. '.glsl'),
-                'styles: %s has no shader in shaders/', s.name)
+            local passes = Styles.passes(s)
+            check(results, #passes > 0, 'styles: %s has no shader', s.name)
+            for i, p in ipairs(passes) do
+                check(results, p.shader and love.filesystem.getInfo('shaders/' .. p.shader .. '.glsl'),
+                    'styles: %s has no shader in shaders/ for its pass %d', s.name, i)
+            end
         end
     end
     local name, visits = Styles.DEFAULT, 0
