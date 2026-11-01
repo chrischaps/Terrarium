@@ -12,7 +12,9 @@
 --   the book on the desk, b  open the family book (#32); click a page to turn it, off it to close
 --   m                        hush the jar, or listen again (--mute opens it hushed)
 --   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
+--   lovec . --cell 6x9       ascii's cell, in the view's pixels (#97; 8x12 to begin with)
 --   tab                      the next style
+--   [ ]                      smaller or larger cells, in a style that has them (ascii; --cell 6x9)
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
@@ -170,6 +172,7 @@ function love.load()
         love.event.quit(2)
         return
     end
+    if args.cell then require('jar.ascii').size(args.cell[1], args.cell[2]) end
     if args.selftest then
         local ok, err = dev.selftest(World, room, STEP, openJar, step, args.test, args.seed, args.skip, args.day, args.cast)
         if err then print('[selftest] ' .. err) end
@@ -478,10 +481,15 @@ end
 -- shape.
 local function composite(plate, w, h, time, fit)
     time = time or love.timer.getTime()
-    local frame = Styles.apply(style, plate or Render.canvas("scene"), time)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
     if fit then Screen.push(fit) end
+    -- (how many of the target's pixels a pixel of the frame covers, so a
+    -- style can draw at the target's own and stay sharp: ascii's glyphs, #97)
+    local x0, y0 = love.graphics.transformPoint(0, 0)
+    local x1 = love.graphics.transformPoint(1, 0)
+    local _, y1 = love.graphics.transformPoint(0, 1)
+    local frame, sx, sy = Styles.apply(style, plate or Render.canvas("scene"), time, x1 - x0, y1 - y0)
     if sh then
         love.graphics.setShader(sh)
         local rect = plate and { 0, 0, 0, 0 } or { Glass.frontRect() }
@@ -490,13 +498,13 @@ local function composite(plate, w, h, time, fit)
             for i = 1, 4 do rect[i] = rect[i] * fit.k + (i % 2 == 1 and fit.x or fit.y) end
         end
         sh:send("glassRect", rect)
-        sh:send("aberration", 0.012)
+        sh:send("aberration", 0.012 * Styles.fringe(style))
         sh:send("vignette", 0.40)
         sh:send("grain", 0.010)
         sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
     end
-    love.graphics.draw(frame)
+    love.graphics.draw(frame, 0, 0, 0, sx, sy)
     love.graphics.setShader()
     if fit then love.graphics.pop() end
 end
@@ -646,6 +654,9 @@ function scriptApi()
     -- creatures' plane, in level units, drawn across the canvas's width at full
     -- resolution. Behind it is the window's own frame, enlarged and blurred
     -- (opts.blur), so the plane stands sharp in a shallow depth of field.
+    -- Terrarium: with opts.screen, the frame as a w x h screen shows it, fitted
+    -- and cropped as the window and the Pi frame are (core/screen.lua), not
+    -- stretched to the canvas's shape.
     function api.render(w, h, opts)
         opts = opts or {}
         w, h = w or C.W, h or C.H
@@ -657,9 +668,16 @@ function scriptApi()
             love.graphics.setCanvas({ target, stencil = true })
             love.graphics.clear(0, 0, 0, 1)
             love.graphics.push()
-            love.graphics.scale(w / C.W, h / C.H)
-            composite(nil, nil, nil, world.time)
+            local fit = opts.screen and Screen.fit(w, h, C.W, C.H)
+            if fit then
+                composite(nil, nil, nil, world.time, fit)
+                Screen.push(fit)
+            else
+                love.graphics.scale(w / C.W, h / C.H)
+                composite(nil, nil, nil, world.time)
+            end
             if pages then pages:draw() end
+            if fit then love.graphics.pop() end
             love.graphics.pop()
             love.graphics.setCanvas()
             capture.last = target
@@ -807,7 +825,13 @@ function love.keypressed(key)
     if key == "m" and synth then synth:mute(not synth.muted) end
     if key == "tab" and not capture then
         style = Styles.after(style)
-        shown = { name = style, at = love.timer.getTime() }
+        shown = { name = Styles.label(style), at = love.timer.getTime() }
+    end
+    -- [ and ]: smaller or larger cells, in a style with a size to it (ascii, #97)
+    local s = Styles.get(style)
+    if (key == "[" or key == "]") and s.adjust and not capture then
+        s.adjust(key == "]" and 1 or -1)
+        shown = { name = Styles.label(style), at = love.timer.getTime() }
     end
 end
 

@@ -10,11 +10,21 @@
 -- was. `setup` sends the shader what it needs for a w x h frame at `time`.
 -- `none` has no shader: it's the jar as it has always looked, and the default.
 --
+-- A style that needs more than one pass brings `draw(frame, time, kx, ky)`
+-- instead, and returns its canvas and the scale to draw that at. `kx`, `ky`
+-- are how many of the target's pixels a pixel of the frame covers, so it can
+-- draw at the target's own pixels and stay sharp (ascii's glyphs at 1080p).
+-- One with a size to it brings `adjust(dir)` ([ and ] in play) and `label()`,
+-- what the corner says it is. `fringe` scales the colour fringe the front
+-- glass gives the frame's edges (1 if it's not given): fine strokes split
+-- into their colours where a photograph's edges only soften.
+--
 -- A style is drawing only. It sees the frame's pixels and nothing of the
 -- World, so a jar hashes the same under every style (tests/ci.sh watches one
 -- in a window under each of them).
 
 local Render = require('jar.render')
+local Ascii = require('jar.ascii')
 
 local Styles = {}
 
@@ -28,6 +38,11 @@ Styles.list = {
     { name = 'silver', shader = 'styles/silver', setup = function(sh)
         sh:send('tone', 0.6)
     end },
+    -- The jar on a character grid, a moth-eaten roguelike of moss and
+    -- creatures (#97, jar/ascii.lua): a glyph a cell by its light, a stroke
+    -- where an edge runs through it, inked in the cell's colour
+    { name = 'ascii', shader = 'styles/ascii', draw = Ascii.draw,
+        adjust = Ascii.step, label = Ascii.label, fringe = 0 },
 }
 
 local by_name = {}
@@ -37,6 +52,18 @@ for i, s in ipairs(Styles.list) do
 end
 
 function Styles.get(name) return by_name[name] end
+
+-- How much of the glass's colour fringe style `name` keeps
+function Styles.fringe(name)
+    local s = by_name[name]
+    return s and s.fringe or 1
+end
+
+-- What the corner calls style `name` when it's switched to or resized
+function Styles.label(name)
+    local s = by_name[name]
+    return s and s.label and s.label() or name
+end
 
 function Styles.names()
     local out = {}
@@ -61,13 +88,16 @@ local function canvas(w, h)
     return canvases[key]
 end
 
--- The frame in style `name`: `frame` itself for none (or a shader that failed
--- to load), else a canvas of its size drawn through the style's shader. It
--- leaves the caller's canvas, transform and shader as they were.
-function Styles.apply(name, frame, time)
+-- The frame in style `name`, and the scale to draw it at: `frame` itself for
+-- none (or a shader that failed to load), else a canvas of its size drawn
+-- through the style's shader, or what the style's own `draw` makes of it at
+-- `kx` x `ky` of the target's pixels to a frame pixel. It leaves the caller's
+-- canvas, transform and shader as they were.
+function Styles.apply(name, frame, time, kx, ky)
     local s = by_name[name]
+    if s and s.draw then return s.draw(frame, time, kx, ky) end
     local sh = s and s.shader and Render.shader(s.shader)
-    if not sh then return frame end
+    if not sh then return frame, 1, 1 end
     local w, h = frame:getDimensions()
     local out = canvas(w, h)
     love.graphics.push('all')
@@ -79,7 +109,7 @@ function Styles.apply(name, frame, time)
     if s.setup then s.setup(sh, w, h, time) end
     love.graphics.draw(frame)
     love.graphics.pop()
-    return out
+    return out, 1, 1
 end
 
 return Styles

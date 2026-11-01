@@ -30,6 +30,7 @@
 --   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
 --                                         jar/styles.lua; Tab cycles them in play)
 --   lovec . --styles                      Terrarium: list the styles, one a line
+--   lovec . --cell <w>x<h>                Terrarium: ascii's cell in view pixels (#97; 8x12; [ ] in play)
 --   lovec . --interpret                   Terrarium: run with LuaJIT's compiler off (for --replay)
 --   lovec . --cast <kind>,<kind>,...      Terrarium: these kinds live in the jar, not the
 --                                         seed's cast (the self-tests hold the classic one)
@@ -91,6 +92,11 @@ function dev.parse(args)
         elseif a == '--mute' then o.mute = true
         elseif a == '--style' then o.style = args[i + 1]; i = i + 1
         elseif a == '--styles' then o.styles = true
+        -- Terrarium: ascii's cell (#97), w x h view pixels, or w and h half as tall again
+        elseif a == '--cell' then
+            local w, h = (args[i + 1] or ''):match('^(%d+)x?(%d*)$')
+            o.cell = { tonumber(w) or 8, tonumber(h) }
+            i = i + 1
         elseif a == '--interpret' then o.interpret = true
         -- Terrarium: the Pi frame's mode (#90): fullscreen, no cursor, no keys
         elseif a == '--frame' then o.frame = true
@@ -1758,6 +1764,28 @@ test('styles', function(j, results)
         name, visits = Styles.after(name), visits + 1
     until name == Styles.DEFAULT or visits > #Styles.list
     check(results, visits == #Styles.list, 'styles: Tab came round in %d presses, not %d', visits, #Styles.list)
+    -- ascii's cell (#97): [ and ] step along the ladder from any size and stop
+    -- at its ends, and the corner names the size it's at
+    local Ascii = require('jar.ascii')
+    local was = { Ascii.cell() }
+    Ascii.size(8, 12)
+    local up = { Ascii.step(1) }
+    local back = { Ascii.step(-1) }
+    local down = { Ascii.step(-1) }
+    check(results, up[1] == 9 and up[2] == 14 and back[1] == 8 and back[2] == 12 and down[1] == 7 and down[2] == 11,
+        'styles: ascii stepped 8x12 to %dx%d, back to %dx%d and on to %dx%d', up[1], up[2],
+        back[1], back[2], down[1], down[2])
+    Ascii.size(8, 13)
+    local between = { Ascii.step(-1) }
+    check(results, between[1] == 8 and between[2] == 12, 'styles: ascii stepped down from 8x13 to %dx%d',
+        between[1], between[2])
+    for _ = 1, #Ascii.SIZES + 1 do Ascii.step(-1) end
+    local least = { Ascii.cell() }
+    check(results, least[1] == Ascii.SIZES[1][1] and least[2] == Ascii.SIZES[1][2],
+        'styles: ascii went below its smallest cell, to %dx%d', least[1], least[2])
+    check(results, Ascii.size(6) == 6 and select(2, Ascii.cell()) == 9, 'styles: a cell 6 wide is not 6x9')
+    check(results, Styles.label('ascii') == 'ascii 6 x 9', 'styles: ascii 6x9 is called %s', Styles.label('ascii'))
+    Ascii.size(was[1], was[2])
     log.info('selftest', 'styles       %s', table.concat(Styles.names(), ', '))
 end)
 
