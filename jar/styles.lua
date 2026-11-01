@@ -22,9 +22,9 @@ local Styles = {}
 Styles.DEFAULT = 'none'
 
 -- What the front glass does to a frame after its style (main.lua's composite):
--- the colour fringe toward its edges and the film's grain. A style may set its
--- own `glass` (a drawing on paper has neither).
-Styles.GLASS = { aberration = 0.012, grain = 0.010 }
+-- the colour fringe toward its edges, the film's grain and the room's vignette. A
+-- style may set its own `glass` (a drawing on paper has no fringe or grain).
+Styles.GLASS = { aberration = 0.012, grain = 0.010, vignette = 0.40 }
 
 -- A sheet of drawing paper, made once the first time it's asked for: PAPER
 -- px square, tiling, r its tooth (fine, a little long in the grain, as laid
@@ -76,6 +76,11 @@ local function paper()
     return sheet
 end
 
+-- Under pencil-each, how much of the page round the things in the jar is
+-- drawn: a wash of graphite as deep as `wash` where it's darkest, and the
+-- edges there `line` as hard as a thing's own
+Styles.GROUND = { wash = 0.14, line = 0.2 }
+
 -- What both pencil passes are sent (shaders/styles/pencil_common.glsl)
 local function pencil(sh, w, h, time)
     sh:send('paper', paper())
@@ -99,19 +104,24 @@ Styles.list = {
     -- hatching is anchored to the page and holds still; the line boils a
     -- little, as a drawn line does. Paper takes no fringe or film grain.
     -- The whole finished frame is drawn at once.
-    { name = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0 },
+    { name = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.40 },
         setup = function(sh, w, h, time)
             pencil(sh, w, h, time)
             sh:send('masked', 0)
         end },
-    -- The same page with each creature drawn on its own first (#95's A/B):
-    -- its outline from its own silhouette, its hatching riding on its body
-    -- (`each`, a pass main.lua's drawCreatures runs per body), and the rest of
-    -- the frame drawn round them as pencil draws it.
-    { name = 'pencil-each', shader = 'styles/pencil', glass = { aberration = 0, grain = 0 },
+    -- The same page with each thing in the jar drawn on its own first (#95's
+    -- A/B, which it won): every creature, piece of scenery, stone and fern,
+    -- the soil's bed, the moss, and the small things together, each with its
+    -- outline from its own silhouette and its hatching on itself (`each`, a
+    -- pass main.lua runs per thing), a creature's riding with it. What's left
+    -- is the ground they're drawn on: the room, the air and the far side of
+    -- the jar, kept to the paper, a faint wash of graphite where it's dark
+    -- (GROUND.wash) and its edges a faint line (GROUND.line).
+    { name = 'pencil-each', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.12 },
         setup = function(sh, w, h, time)
             pencil(sh, w, h, time)
             sh:send('masked', 1)
+            sh:send('ground', { Styles.GROUND.wash, Styles.GROUND.line })
         end,
         each = { shader = 'styles/pencil_body', setup = pencil } },
 }
@@ -181,12 +191,13 @@ function Styles.each(name)
     return s and s.each and Render.shader(s.each.shader) and true or false
 end
 
--- One body under a style that draws each on its own: `draw()` draws it, as
--- it would be drawn into the canvas being drawn into, onto a clear canvas the
--- same size, and that's laid into the canvas through the style's body pass,
--- which also takes the body out of the canvas's alpha so the frame's own pass
--- leaves it be. x0, y0, x1, y1 bound it and ax, ay is its middle, all in that
--- canvas's px; `seed` is its own. Drawing only, like the style.
+-- One thing under a style that draws each on its own (a creature, a stone, a
+-- piece of the scenery): `draw()` draws it, as it would be drawn into the
+-- canvas being drawn into, onto a clear canvas the same size, and that's laid
+-- into the canvas through the style's body pass, which also takes the thing
+-- out of the canvas's alpha so the frame's own pass leaves it be. x0, y0, x1,
+-- y1 bound it and ax, ay is its middle (the bounds' middle if not given), all
+-- in that canvas's px; `seed` is its own. Drawing only, like the style.
 local quad
 local MARGIN = 8
 function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
@@ -198,6 +209,7 @@ function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
     x0, y0 = math.max(0, math.floor(x0)), math.max(0, math.floor(y0))
     x1, y1 = math.min(w, math.ceil(x1)), math.min(h, math.ceil(y1))
     if x1 <= x0 or y1 <= y0 then return end
+    ax, ay = ax or (x0 + x1) / 2, ay or (y0 + y1) / 2
     local alone = canvas(w, h, 'body')
     love.graphics.push('all')
     love.graphics.setCanvas(alone)

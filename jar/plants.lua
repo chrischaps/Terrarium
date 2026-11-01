@@ -307,6 +307,27 @@ local function drawSpores(p)
     love.graphics.setLineWidth(1)
 end
 
+-- Terrarium: where a plant is drawn, in the frame's px (pencil-each, #95,
+-- draws each on its own): its fronds as they lie now, or its stalks' reach
+function Plants.bounds(p)
+    local k = Tank.k(p.d)
+    if p.leaves then
+        local x0, y0 = Tank.level(p.x, p.y, p.d)
+        local x1, y1 = x0, y0
+        for _, c in ipairs(p.leaves) do
+            for i = 1, c.n do
+                local x, y = Tank.level(c.x[i], c.y[i], p.d)
+                x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x), max(y1, y)
+            end
+        end
+        local pad = 16 * k
+        return x0 - pad, y0 - pad, x1 + pad, y1 + pad
+    end
+    local x0, y0 = Tank.level(p.x - 24, p.y - 40, p.d)
+    local x1, y1 = Tank.level(p.x + 24, p.y + 8, p.d)
+    return x0, y0, x1, y1
+end
+
 function Plants.draw(p)
     Render.useObject(p.d)
     if p.type == "fern" then drawFern(p)

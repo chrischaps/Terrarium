@@ -7,13 +7,15 @@
 // boils, a little, a few times a second, as a drawn line does from one
 // drawing to the next.
 //
-// This draws the whole finished frame at once. Under pencil-each the
-// creatures were drawn already, one at a time (pencil_body.glsl), and the
-// frame's alpha is how much of each pixel is still to draw: 0 on a creature,
-// back up to 1 wherever something in front of the plane covers it. `masked`
-// is 1 then, and 0 for plain pencil, whose frame is opaque throughout.
+// This draws the whole finished frame at once. Under pencil-each the things
+// in the jar were drawn already, one at a time (pencil_body.glsl), and the
+// frame's alpha is how much of each pixel is still to draw: 0 on a thing, 1
+// on the ground round them (the room, the air, the jar's far side). `masked`
+// is 1 then, and that ground is kept to the paper (`ground`); it's 0 for
+// plain pencil, whose frame is opaque and all drawn here.
 #include "pencil_common.glsl"
 extern float masked;
+extern vec2 ground; // under pencil-each: the ground's wash where darkest, and its line
 
 vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     float k = size.y / 1000.0; // screen px a page px
@@ -37,6 +39,10 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     float e = edge(frame, tc + wander(p, k), 1.25 * k / size, 0.02 + 0.35 * light);
     float line = smoothstep(2.2, 4.4, e);
     float shade = shading(p, dark, mottle);
+    // (the ground under pencil-each: no hatching, a wash as uneven as the paper)
+    float wash = smoothstep(0.30, 1.0, dark) * mix(0.55, 1.0, mottle) * ground.x;
+    shade = mix(shade, wash, masked);
+    line *= mix(1.0, ground.y, masked);
 
     // The line gives way in the deepest shade, where the drawing is all tone
     line *= 1.0 - 0.5 * smoothstep(0.75, 0.98, dark);
@@ -47,5 +53,9 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     float cover = 1.0 - (1.0 - shade) * (1.0 - 0.88 * line);
     cover *= mix(0.74, 1.0, tooth);
     vec3 drawn = mix(sheet, LEAD, cover);
-    return vec4(mix(drawn, min(c0.rgb, vec3(1.0)), (1.0 - clamp(c0.a, 0.0, 1.0)) * masked), 1.0);
+    // what was drawn already, kept, but grey on the paper's tint: a glow laid
+    // over it after (the lantern, the moss's capsules) lightens it and no more
+    const vec3 TINT = vec3(1.015, 1.0, 0.959);
+    vec3 kept = min(vec3(dot(max(c0.rgb, 0.0), LUMA)) * TINT, vec3(1.0));
+    return vec4(mix(drawn, kept, (1.0 - clamp(c0.a, 0.0, 1.0)) * masked), 1.0);
 }

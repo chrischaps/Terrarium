@@ -569,6 +569,25 @@ function Scape.drawRoom(light)
 end
 
 --- The soil top, lit and hazed per pixel by its depth
+-- Terrarium: where the bed is drawn, and a stone (pencil-each, #95, draws
+-- each on its own), in the frame's px
+function Scape.bedBounds()
+    return 0, 0, bedCanvas:getDimensions()
+end
+function Scape.frontBounds()
+    return 0, 0, frontCanvas:getDimensions()
+end
+function Scape.stoneBounds(s)
+    local sx, sy, k = Tank.project(Tank.wx(s.x), s.y, s.d)
+    if s.canvas then
+        local w, h = s.canvas:getDimensions()
+        local x0, y0 = sx - s.ox * k, sy + 2 * k - s.oy * k
+        return x0, y0, x0 + w * k, y0 + h * k
+    end
+    local rx, ry, cy = s.w * 0.5 * k + 4, s.h * 0.6 * k + 4, sy - s.h * k * 0.4
+    return sx - rx, cy - ry, sx + rx, cy + ry
+end
+
 function Scape.drawBed(light)
     love.graphics.setColor(1, 1, 1, 1)
     Render.useFloor(light)

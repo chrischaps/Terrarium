@@ -405,9 +405,18 @@ local function drawNav()
     end
 end
 
--- Terrarium: under a style that draws each creature on its own (pencil-each,
--- #95), creature i and its glow, through the style's body pass. Its bounds
--- and middle come from its drawn points, PAD over for legs, shell and glow.
+-- Terrarium: under a style that draws each thing on its own (pencil-each,
+-- #95), `draw` through the style's body pass, bounded by x0, y0, x1, y1 in
+-- the canvas's px (or the whole canvas, with none). Anything that isn't
+-- drawn this way is the ground the things stand on.
+local function alone(seed, draw, x0, y0, x1, y1)
+    if not x0 then x0, y0, x1, y1 = -math.huge, -math.huge, math.huge, math.huge end
+    Styles.body(style, world.time, x0, y0, x1, y1, nil, nil, seed, draw)
+end
+
+-- Creature i and its glow, on its own. Its bounds and middle come from its
+-- drawn points, PAD over for legs, shell and glow, and its hatching is
+-- anchored to its middle, so it goes where the creature goes.
 local PAD = 40
 local function drawAlone(i, c, ctx)
     local x0, y0, x1, y1, mx, my, n = math.huge, math.huge, -math.huge, -math.huge, 0, 0, 0
@@ -435,30 +444,70 @@ local function drawCreatures(alpha, light)
     local bodies = not world.coarse
     if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
-    local alone = bodies and Styles.each(style)
-    Render.useObject(C.PLANE_D)
-    for _, c in ipairs(bodies and world.creatures or {}) do
-        if c.draw_trail then c:draw_trail() end
+    local each = Styles.each(style)
+    -- The small things: trails, clutches, what the dead kept, crumbs, and
+    -- spores off the returned (under pencil-each, all on their own together)
+    local function litter()
+        Render.useObject(C.PLANE_D)
+        for _, c in ipairs(bodies and world.creatures or {}) do
+            if c.draw_trail then c:draw_trail() end
+        end
+        Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
+        Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
+        Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
+        if not each then return end
+        love.graphics.setShader()
+        Remains.draw(world)
+        Eggs.draw_emissive(world, light)
+        Food.draw_emissive(world.food, light, world.time, alpha)
     end
-    Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
-    Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
-    Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
+    if each then
+        alone(7, litter)
+        for i, c in ipairs(bodies and world.creatures or {}) do drawAlone(i, c, ctx) end
+        if bodies then world:restore() end
+        return
+    end
+    litter()
     -- (a dying one through Remains, sinking and fading into the moss, #24)
-    for i, c in ipairs(bodies and world.creatures or {}) do
-        if alone then drawAlone(i, c, ctx) else Remains.through(world, i, 'draw', ctx) end
+    for i in ipairs(bodies and world.creatures or {}) do
+        Remains.through(world, i, 'draw', ctx)
     end
     love.graphics.setShader()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
     Food.draw_emissive(world.food, light, world.time, alpha)
-    for i, c in ipairs(not alone and bodies and world.creatures or {}) do
+    for i, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
     if bodies then world:restore() end
 end
 
-local function drawObject(o)
+local function drawObject(o, each)
+    if each then
+        -- (a stone or plant on its own, pencil-each)
+        local x0, y0, x1, y1
+        if o.kind == "plant" then x0, y0, x1, y1 = Plants.bounds(o) else x0, y0, x1, y1 = Scape.stoneBounds(o) end
+        return alone(math.floor(o.x * 7 + o.d * 97) % 101, function() drawObject(o) end, x0, y0, x1, y1)
+    end
     if o.kind == "plant" then Plants.draw(o) else Scape.drawStone(o) end
+end
+
+-- The scenery and the moss on it, in level coordinates; under pencil-each
+-- each piece on its own, and the moss on its own, over what lies under them
+local function drawProps(light)
+    if not Styles.each(style) then
+        Scenery.draw(light, world.time)
+        Moss.draw(world.moss, light, world.time, world.creatures)
+        return
+    end
+    Scenery.drawGround(light, world.time)
+    for k, p in ipairs(Scenery.all()) do
+        local x0, y0, x1, y1 = Scenery.bounds(p)
+        local sx0, sy0 = love.graphics.transformPoint(x0, y0)
+        local sx1, sy1 = love.graphics.transformPoint(x1, y1)
+        alone(k, function() Scenery.drawPiece(p) end, sx0, sy0, sx1, sy1)
+    end
+    alone(3, function() Moss.draw(world.moss, light, world.time, world.creatures) end)
 end
 
 -- Everything in the jar, back to front. The scape behind FAR_D and the room
@@ -472,8 +521,9 @@ local function drawScene(light, plane)
     love.graphics.clear(0, 0, 0, 1)
     Render.drawSoft("room", 2.6)
 
+    local each = Styles.each(style)
     Glass.drawBack(light)
-    Scape.drawBed(light)
+    if each then alone(5, function() Scape.drawBed(light) end, Scape.bedBounds()) else Scape.drawBed(light) end
     Render.beginObjects(light)
 
     love.graphics.setCanvas(Render.canvas("far"))
@@ -488,7 +538,7 @@ local function drawScene(light, plane)
     Render.drawSoft("far", 1.0)
 
     while objects[i] and objects[i].d < C.PLANE_D do
-        drawObject(objects[i])
+        drawObject(objects[i], each)
         i = i + 1
     end
     love.graphics.setShader()
@@ -497,8 +547,7 @@ local function drawScene(light, plane)
     -- The creatures' plane, in level coordinates
     if plane ~= false then
         Tank.pushPlane()
-        Scenery.draw(light, world.time)
-        Moss.draw(world.moss, light, world.time, world.creatures)
+        drawProps(light)
         drawCreatures(accumulator / STEP, light)
         if passing then passing:draw() end
         lantern:draw(light)
@@ -506,12 +555,13 @@ local function drawScene(light, plane)
         love.graphics.pop()
     end
 
-    for j = i, #objects do drawObject(objects[j]) end
+    for j = i, #objects do drawObject(objects[j], each) end
     love.graphics.setShader()
 
     Plants.drawGlow(light)
     Motes.drawFront(light)
-    Scape.drawFront(light)
+    -- (the soil's face against the front glass)
+    if each then alone(6, function() Scape.drawFront(light) end, Scape.frontBounds()) else Scape.drawFront(light) end
     Condensation.draw(light, passing and passing:glass()) -- on the inside of the glass, under its dust
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
@@ -543,7 +593,7 @@ local function composite(plate, w, h, time, fit)
         sh:send("glassRect", rect)
         local glass = Styles.glass(style) -- (a style may want no fringe or grain)
         sh:send("aberration", glass.aberration)
-        sh:send("vignette", 0.40)
+        sh:send("vignette", glass.vignette)
         sh:send("grain", glass.grain)
         sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
@@ -589,8 +639,7 @@ local function plate(target, v, light, blur)
     love.graphics.scale(w / (v[3] - v[1]))
     love.graphics.translate(-v[1], -v[2])
     Render.beginObjects(light, { w / 2, w * 0.45 })
-    Scenery.draw(light, world.time)
-    Moss.draw(world.moss, light, world.time, world.creatures)
+    drawProps(light)
     drawCreatures(1, light)
     love.graphics.pop()
     love.graphics.setShader()
