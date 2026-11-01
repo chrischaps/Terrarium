@@ -13,6 +13,7 @@
 --   m                        hush the jar, or listen again (--mute opens it hushed)
 --   lovec . --style <name>   look at the jar in a style (jar/styles.lua; --styles lists them)
 --   tab                      the next style
+--   lovec . --probes         the matte's probes (#98) join the styles: probe-ink, probe-cut
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
 --                            follows, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
@@ -57,6 +58,7 @@ local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
 local Styles = require('jar.styles')
+local Matte = require('jar.matte')
 local Screen = require('core.screen')
 local Touch = require('core.touch')
 local Book = require('book')
@@ -185,6 +187,7 @@ function love.load()
         end
         args.cast = cast
     end
+    if args.probes then Styles.enable_probes() end -- (#98: the matte's probes)
     if args.styles then
         -- --styles: the looks there are, one a line (tests/ci.sh watches the jar in each)
         print(table.concat(Styles.names(), '\n'))
@@ -412,6 +415,7 @@ local function drawCreatures(alpha, light)
     if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
     Render.useObject(C.PLANE_D)
+    Matte.mark('small', C.PLANE_D) -- (each layer's mark only means anything in the matte, #98)
     for _, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_trail then c:draw_trail() end
     end
@@ -419,10 +423,12 @@ local function drawCreatures(alpha, light)
     Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
     Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
+    Matte.mark('creature', C.PLANE_D + 0.02)
     for i in ipairs(bodies and world.creatures or {}) do
         Remains.through(world, i, 'draw', ctx)
     end
     love.graphics.setShader()
+    Matte.mark()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
     Food.draw_emissive(world.food, light, world.time, alpha)
@@ -433,7 +439,40 @@ local function drawCreatures(alpha, light)
 end
 
 local function drawObject(o)
+    Matte.mark('scape', o.d)
     if o.kind == "plant" then Plants.draw(o) else Scape.drawStone(o) end
+end
+
+-- The creatures' plane in level coordinates (inside Tank.pushPlane(), or a
+-- plate's own transform): the scenery, its moss, and who lives on it
+local function drawPlane(light, alpha)
+    Matte.mark('solid', C.PLANE_D)
+    Scenery.draw(light, world.time)
+    Matte.mark('moss', C.PLANE_D + 0.01)
+    Moss.draw(world.moss, light, world.time, world.creatures)
+    drawCreatures(alpha, light)
+end
+
+-- The matte (#98, jar/matte.lua): the jar again, back to front, each layer
+-- only its shape, for a style that wants to know what it's looking at. The
+-- room, the glass and the light aren't layers, so they're left out.
+local function drawMatte(light, target)
+    return Matte.draw(target, function()
+        Matte.mark('soil', 0)
+        Scape.drawBed(light)
+        Render.beginObjects(light)
+        local i = 1
+        while objects[i] and objects[i].d < C.PLANE_D do
+            drawObject(objects[i])
+            i = i + 1
+        end
+        Tank.pushPlane()
+        drawPlane(light, accumulator / STEP)
+        love.graphics.pop()
+        for j = i, #objects do drawObject(objects[j]) end
+        Matte.mark('soil', 1)
+        Scape.drawFront(light)
+    end)
 end
 
 -- Everything in the jar, back to front. The scape behind FAR_D and the room
@@ -472,9 +511,7 @@ local function drawScene(light, plane)
     -- The creatures' plane, in level coordinates
     if plane ~= false then
         Tank.pushPlane()
-        Scenery.draw(light, world.time)
-        Moss.draw(world.moss, light, world.time, world.creatures)
-        drawCreatures(accumulator / STEP, light)
+        drawPlane(light, accumulator / STEP)
         if passing then passing:draw() end
         lantern:draw(light)
         if args.nav then drawNav() end
@@ -494,6 +531,8 @@ local function drawScene(light, plane)
     -- (the family book lies on the desk in front of the glass, #32)
     if pages and plane ~= false then pages:drawClosed(light) end
     love.graphics.setCanvas()
+    -- (a style that reads the matte gets one of the window's frame, #98)
+    if plane ~= false and Styles.wants_matte(style) then drawMatte(light, Matte.canvas(C.W, C.H)) end
 end
 
 -- The finished frame in the style (#94), then the front glass bends the view
@@ -501,10 +540,11 @@ end
 -- here: the window's, --snap's, a capture script's and the frame's thumb. A
 -- plate brings its own canvas, size and clock, and has no glass in front of
 -- it. A `fit` (core/screen.lua) draws the jar's frame on a screen of another
--- shape.
-local function composite(plate, w, h, time, fit)
+-- shape. `seen` is a plate's matte, for a style that reads one (#98).
+local function composite(plate, w, h, time, fit, seen)
     time = time or love.timer.getTime()
-    local frame = Styles.apply(style, plate or Render.canvas("scene"), time)
+    local frame = Styles.apply(style, plate or Render.canvas("scene"), time,
+        seen or Styles.wants_matte(style) and { matte = Matte.canvas(C.W, C.H) } or nil)
     local sh = Render.shader("composite")
     love.graphics.setColor(1, 1, 1, 1)
     if fit then Screen.push(fit) end
@@ -563,15 +603,23 @@ local function plate(target, v, light, blur)
     love.graphics.scale(w / (v[3] - v[1]))
     love.graphics.translate(-v[1], -v[2])
     Render.beginObjects(light, { w / 2, w * 0.45 })
-    Scenery.draw(light, world.time)
-    Moss.draw(world.moss, light, world.time, world.creatures)
-    drawCreatures(1, light)
+    drawPlane(light, 1)
     love.graphics.pop()
     love.graphics.setShader()
+    -- (and its own matte, for a style that reads one, #98)
+    local matte = Styles.wants_matte(style) and Matte.canvas(w, h)
+    if matte then
+        Matte.draw(matte, function()
+            love.graphics.scale(w / (v[3] - v[1]))
+            love.graphics.translate(-v[1], -v[2])
+            Render.beginObjects(light, { w / 2, w * 0.45 })
+            drawPlane(light, 1)
+        end)
+    end
 
     love.graphics.setCanvas(target)
     love.graphics.clear(0, 0, 0, 1)
-    composite(plane, w, h, world.time)
+    composite(plane, w, h, world.time, nil, matte and { matte = matte, zoom = w / (v[3] - v[1]) / C.S })
     love.graphics.setCanvas()
     return target
 end

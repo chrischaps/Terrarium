@@ -10,6 +10,12 @@
 -- was. `setup` sends the shader what it needs for a w x h frame at `time`.
 -- `none` has no shader: it's the jar as it has always looked, and the default.
 --
+-- A style that says `matte = true` is sent the frame's matte too (#98,
+-- jar/matte.lua): which pixels are a creature, what kind of layer each is, and
+-- how deep. main.lua draws one only for such a style. It's given as `seen`,
+-- {matte, zoom}: zoom is how much nearer than the window a plate is, so a
+-- line drawn round a creature can keep its weight on a portrait.
+--
 -- A style is drawing only. It sees the frame's pixels and nothing of the
 -- World, so a jar hashes the same under every style (tests/ci.sh watches one
 -- in a window under each of them).
@@ -30,10 +36,44 @@ Styles.list = {
     end },
 }
 
+-- The probes (#98, a spike): what a style can do with a matte. They're only
+-- in the list with --probes, so play, Tab and CI's watched styles don't see
+-- them unless asked
+local function sized(sh, w, h, _, seen)
+    sh:send('px', { 1 / w, 1 / h })
+    -- (a plate's lines a little lighter than its zoom, as a pen's are close up)
+    sh:send('scale', seen.zoom and seen.zoom ^ 0.6 or math.max(1, h / 800))
+end
+Styles.probes = {
+    -- the matte itself, in false colour: what a matte style is told
+    { name = 'probe-matte', shader = 'styles/matte_view', matte = true },
+    -- a hand-inked line round the creatures, and round nothing else
+    { name = 'probe-ink', shader = 'styles/ink', matte = true, setup = sized },
+    -- the scenery cut flat from paper in layers, the creatures as they are
+    { name = 'probe-cut', shader = 'styles/cut', matte = true, setup = sized },
+}
+
 local by_name = {}
-for i, s in ipairs(Styles.list) do
-    s.index = i
-    by_name[s.name] = s
+local function index()
+    for i, s in ipairs(Styles.list) do
+        s.index = i
+        by_name[s.name] = s
+    end
+end
+index()
+
+-- --probes: the probes join the list, after the styles
+function Styles.enable_probes()
+    for _, s in ipairs(Styles.probes) do
+        if not by_name[s.name] then Styles.list[#Styles.list + 1] = s end
+    end
+    index()
+end
+
+-- Does style `name` read the matte?
+function Styles.wants_matte(name)
+    local s = by_name[name]
+    return s ~= nil and s.matte == true
 end
 
 function Styles.get(name) return by_name[name] end
@@ -62,12 +102,13 @@ local function canvas(w, h)
 end
 
 -- The frame in style `name`: `frame` itself for none (or a shader that failed
--- to load), else a canvas of its size drawn through the style's shader. It
--- leaves the caller's canvas, transform and shader as they were.
-function Styles.apply(name, frame, time)
+-- to load, or a matte style given no matte), else a canvas of its size drawn
+-- through the style's shader. It leaves the caller's canvas, transform and
+-- shader as they were.
+function Styles.apply(name, frame, time, seen)
     local s = by_name[name]
     local sh = s and s.shader and Render.shader(s.shader)
-    if not sh then return frame end
+    if not sh or (s.matte and not (seen and seen.matte)) then return frame end
     local w, h = frame:getDimensions()
     local out = canvas(w, h)
     love.graphics.push('all')
@@ -76,7 +117,8 @@ function Styles.apply(name, frame, time)
     love.graphics.clear(0, 0, 0, 1)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.setShader(sh)
-    if s.setup then s.setup(sh, w, h, time) end
+    if s.setup then s.setup(sh, w, h, time, seen or {}) end
+    if s.matte then sh:send('matte', seen.matte) end
     love.graphics.draw(frame)
     love.graphics.pop()
     return out

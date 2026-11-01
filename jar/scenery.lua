@@ -12,6 +12,7 @@
 
 local Render = require("jar.render")
 local C = require("jar.config")
+local Matte = require("jar.matte")
 
 local Scenery = {}
 
@@ -606,7 +607,9 @@ end
 -- `time` only animates the water's glints; it's the jar's clock, read not moved.
 function Scenery.draw(light, time)
     Render.useObject(C.PLANE_D)
-    -- Contact shadows where things stand on the soil
+    -- Contact shadows where things stand on the soil (light, not a layer, so
+    -- not in the matte, #98)
+    Matte.mark()
     for _, p in ipairs(pieces) do
         if p.grounded then
             love.graphics.setColor(0, 0, 0, 0.28)
@@ -617,6 +620,7 @@ function Scenery.draw(light, time)
             end
         end
     end
+    Matte.mark('solid', C.PLANE_D)
     if water then drawWater(light, time or 0) end
     love.graphics.setColor(1, 1, 1, 1)
     for _, p in ipairs(pieces) do

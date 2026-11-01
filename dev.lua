@@ -30,6 +30,7 @@
 --   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
 --                                         jar/styles.lua; Tab cycles them in play)
 --   lovec . --styles                      Terrarium: list the styles, one a line
+--   lovec . --probes                      Terrarium: add the matte probes (#98) to the styles
 --   lovec . --interpret                   Terrarium: run with LuaJIT's compiler off (for --replay)
 --   lovec . --cast <kind>,<kind>,...      Terrarium: these kinds live in the jar, not the
 --                                         seed's cast (the self-tests hold the classic one)
@@ -91,6 +92,8 @@ function dev.parse(args)
         elseif a == '--mute' then o.mute = true
         elseif a == '--style' then o.style = args[i + 1]; i = i + 1
         elseif a == '--styles' then o.styles = true
+        -- Terrarium: the styles that read the matte join the list (#98, a spike)
+        elseif a == '--probes' then o.probes = true
         elseif a == '--interpret' then o.interpret = true
         -- Terrarium: the Pi frame's mode (#90): fullscreen, no cursor, no keys
         elseif a == '--frame' then o.frame = true
@@ -1810,6 +1813,13 @@ test('styles', function(j, results)
         name, visits = Styles.after(name), visits + 1
     until name == Styles.DEFAULT or visits > #Styles.list
     check(results, visits == #Styles.list, 'styles: Tab came round in %d presses, not %d', visits, #Styles.list)
+    -- (#98's probes, behind --probes: each has its shader and reads the
+    -- matte, and none is in the list unasked)
+    for _, s in ipairs(Styles.probes) do
+        check(results, love.filesystem.getInfo('shaders/' .. s.shader .. '.glsl') and s.matte
+            and Styles.wants_matte(s.name) == (seen[s.name] == true),
+            'styles: probe %s has no shader, reads no matte, or is in the list unasked', s.name)
+    end
     log.info('selftest', 'styles       %s', table.concat(Styles.names(), ', '))
 end)
 
