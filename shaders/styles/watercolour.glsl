@@ -18,7 +18,8 @@
 extern Image frame; // the jar as drawn, at this pass's size
 extern vec2 px;     // one pixel of the window's frame, in texture coordinates
 
-const vec3 PAPER = vec3(1.0, 0.975, 0.925); // a warm cold-press sheet
+#include "watercolour_common.glsl"
+
 const float KEY = 0.75;     // the painting's key: below 1, lighter than the jar
 const float SATURATE = 1.2; // pigment is richer than light
 const float EDGE = 4.0;     // pigment carried to a wet edge
@@ -27,23 +28,6 @@ const float TIDE = 0.25;   // pigment left at a backrun's rim
 const float GRAIN = 0.8;    // pigment settling into the tooth
 const float TOOTH = 0.06;   // the paper's own relief, in the light
 const float PENCIL = 0.30;  // the underdrawing's weight
-
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-
-float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-
-vec3 pigment(vec3 c, float d) { return c - (c - c * c) * (d - 1.0); }
 
 vec4 effect(vec4 vcolor, Image wash, vec2 tc, vec2 sc) {
     vec2 p = tc / px; // the window's pixels: the paper is fixed to the frame
@@ -61,7 +45,7 @@ vec4 effect(vec4 vcolor, Image wash, vec2 tc, vec2 sc) {
 
     // The paper: a cold-press tooth of hollows a few pixels across, which the
     // pigment settles into
-    float tooth = noise(p / 2.6 + 7.7) * 0.5 + noise(p / 6.0 + 3.1) * 0.3 + noise(p / 15.0) * 0.2;
+    float relief = tooth(p);
     // Where the wash dried unevenly: wide, slow mottling, and in the flat
     // stretches the backruns, frilly tide lines where a wetter patch crept
     // back into a drying one and left its pigment at its rim
@@ -85,9 +69,9 @@ vec4 effect(vec4 vcolor, Image wash, vec2 tc, vec2 sc) {
     float d = 1.0 + edge
         + BLOOM * (bloom - 0.5)
         + TIDE * backrun
-        + GRAIN * (0.5 - tooth) * dark;
+        + GRAIN * (0.5 - relief) * dark;
     c = clamp(pigment(c, d), 0.0, 1.0);
-    c *= PAPER * (1.0 - TOOTH * (0.5 - tooth));
+    c *= PAPER * (1.0 - TOOTH * (0.5 - relief));
 
     // The pencil underneath, where the frame as drawn has an edge
     vec3 o = Texel(frame, tc).rgb;

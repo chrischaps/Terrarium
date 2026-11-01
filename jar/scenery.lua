@@ -604,9 +604,10 @@ end
 
 --- Draw the scenery on the creatures' plane (call inside Tank.pushPlane()).
 -- `time` only animates the water's glints; it's the jar's clock, read not moved.
-function Scenery.draw(light, time)
+-- Terrarium: what lies under the pieces: their contact shadows where they
+-- stand on the soil, and the water
+function Scenery.drawGround(light, time)
     Render.useObject(C.PLANE_D)
-    -- Contact shadows where things stand on the soil
     for _, p in ipairs(pieces) do
         if p.grounded then
             love.graphics.setColor(0, 0, 0, 0.28)
@@ -618,6 +619,22 @@ function Scenery.draw(light, time)
         end
     end
     if water then drawWater(light, time or 0) end
+end
+
+-- Terrarium: one piece, and where it's drawn, in level units (pencil-each,
+-- #95, draws each piece on its own)
+function Scenery.drawPiece(p)
+    Render.useObject(C.PLANE_D)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(p.canvas, p.x0 - PAD, p.y0 - PAD, 0, 1 / SCALE, 1 / SCALE)
+end
+function Scenery.bounds(p)
+    local w, h = p.canvas:getDimensions()
+    return p.x0 - PAD, p.y0 - PAD, p.x0 - PAD + w / SCALE, p.y0 - PAD + h / SCALE
+end
+
+function Scenery.draw(light, time)
+    Scenery.drawGround(light, time)
     love.graphics.setColor(1, 1, 1, 1)
     for _, p in ipairs(pieces) do
         love.graphics.draw(p.canvas, p.x0 - PAD, p.y0 - PAD, 0, 1 / SCALE, 1 / SCALE)

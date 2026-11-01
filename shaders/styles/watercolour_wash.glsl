@@ -14,21 +14,9 @@ const float STEP = 2.5;   // a step, in the window's pixels
 const float BLEED = 2.6;  // how far the colour runs, in the window's pixels
 const float Q = 8.0;      // how hard the calmest sector wins
 const float GLAZES = 7.0; // how many washes build the darkest value
-const float SOFT = 0.18;  // how soft a glaze's edge is (to 0.5)
 const float LAYERED = 0.65; // how far the value is drawn to its glaze
 
-float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
-}
+#include "watercolour_common.glsl"
 
 vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     // the bleed: two octaves of a slow wander, fixed to the frame
@@ -90,12 +78,7 @@ vec4 effect(vec4 vcolor, Image frame, vec2 tc, vec2 sc) {
     // another, so the light falls off in steps, not smoothly. The value
     // (as the eye reads it, near its square root) is drawn toward GLAZES
     // levels, their boundaries wandering with the same fixed noise.
-    float l = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
     vec2 w = p + 9.0 * (vec2(noise(p / 13.0 + 1.3), noise(p / 13.0 + 8.9)) - 0.5);
     float wander = noise(w / 34.0 + 3.7) * 0.75 + noise(w / 10.0 + 6.1) * 0.25;
-    float y = sqrt(l) * GLAZES + (wander - 0.5) * 0.7;
-    float lq = (floor(y) + smoothstep(0.5 - SOFT, 0.5 + SOFT, fract(y))) / GLAZES;
-    lq = mix(sqrt(l), lq, LAYERED);
-    c *= lq * lq / l;
-    return vec4(c, 1.0);
+    return vec4(glaze(c, wander, GLAZES, LAYERED), 1.0);
 }

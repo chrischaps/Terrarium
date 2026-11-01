@@ -21,6 +21,12 @@ function Glass.frontRect()
     return Tank.wx(L), Tank.wy(T), Tank.wx(R), Tank.wy(B)
 end
 
+-- Terrarium: the glass's inside on screen (#110), between its side edges, the
+-- lid's underside and the top of its base: what the frame's screen shows.
+function Glass.innerRect()
+    return Tank.wx(C.GLASS_L), Tank.wy(C.GLASS_T), Tank.wx(C.GLASS_R), Tank.wy(B - C.GLASS_THICK)
+end
+
 local function bakeFilm(gen)
     local x0, y0, x1, y1 = Glass.frontRect()
     film = love.graphics.newCanvas(C.W, C.H)
