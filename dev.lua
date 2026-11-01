@@ -418,7 +418,7 @@ test('lantern', function(j, results)
     log.info('selftest', 'lantern      %s', plain == followed and 'watching changes nothing' or 'MISMATCH')
 end)
 
--- Terrarium: the Pi frame (#90). The 1280 x 800 view fits a 1280 x 720 screen
+-- Terrarium: the Pi frame (#90, #110). In a window, the 1280 x 800 view fits a 1280 x 720 screen
 -- by losing 40 px from its top and bottom, with the lamp's lit rim, the soil
 -- line and the jar's base all still on it; a screen further from 16:10 than
 -- the crop allows gets bars. A finger's tap is a click, holding it still is a
@@ -445,6 +445,57 @@ test('frame', function(_, results)
     end
     local sx, sy = Screen.toView(f, 640, 0)
     check(results, sx == 640 and sy == 40, 'frame: the screen top is (%s, %s) in the view, not (640, 40)', sx, sy)
+
+    -- #110: on the frame the glass's inside covers the screen. Every edge of
+    -- it is inside the glass, its top and bottom INSET in from the lid and the
+    -- base and its sides further, since the tank is wider than 16:9; the soil
+    -- line, the creatures' plane from the lid down and the light through the
+    -- lid are on it, and the lamp's shade, above the lid, is not. Easel's card
+    -- is the same picture at half the size, and a tap lands where it's made.
+    local Glass, Pages = require('jar.glass'), require('jar.pages')
+    local gx0, gy0, gx1, gy1 = Glass.innerRect()
+    local near = function(a, b) return math.abs(a - b) < 1e-6 end
+    for _, size in ipairs({ { 1280, 720 }, { 640, 360 }, { 1920, 1080 }, { 1280, 800 } }) do
+        local w, h = size[1], size[2]
+        local t = Screen.tank(w, h)
+        local x0, y0 = Screen.toView(t, 0, 0)
+        local x1, y1 = Screen.toView(t, w, h)
+        check(results, x0 >= gx0 + Screen.INSET - 1e-6 and y0 >= gy0 + Screen.INSET - 1e-6
+            and x1 <= gx1 - Screen.INSET + 1e-6 and y1 <= gy1 - Screen.INSET + 1e-6,
+            'frame: at %dx%d the screen shows (%.1f, %.1f)-(%.1f, %.1f), past the glass (%.1f, %.1f)-(%.1f, %.1f)',
+            w, h, x0, y0, x1, y1, gx0, gy0, gx1, gy1)
+        local wide = (gx1 - gx0) / (gy1 - gy0) > w / h
+        check(results, wide and near(y0, gy0 + Screen.INSET) and near(y1, gy1 - Screen.INSET)
+            and near(x0 - gx0, gx1 - x1) or not wide and near(x0, gx0 + Screen.INSET),
+            'frame: at %dx%d the glass does not meet the screen evenly', w, h)
+    end
+    local t, card = Screen.tank(1280, 720), Screen.tank(640, 360)
+    check(results, near(card.k * 2, t.k) and near(card.x * 2, t.x) and near(card.y * 2, t.y),
+        "frame: Easel's card (%.4f from %.1f, %.1f) is not the frame's picture at half size", card.k, card.x, card.y)
+    check(results, t.k > 1.1 and t.k < 1.25, 'frame: the jar is drawn at %.3f on the frame', t.k)
+    for _, p in ipairs({ { 'the soil line', Tank.wy(C.SOIL_Y) }, { "the jar's base", Tank.wy(C.GLASS_B - C.GLASS_THICK) },
+        { "the lid's underside", Tank.wy(C.GLASS_T) } }) do
+        local y = p[2] * t.k + t.y
+        check(results, y >= -Screen.INSET * t.k - 1e-6 and y <= 720 + Screen.INSET * t.k + 1e-6,
+            'frame: %s is at %.0f on the frame', p[1], y)
+    end
+    local shade = Scape.lampHang() * t.k + t.y
+    check(results, shade < 0, "frame: the lamp's shade is on the frame, at %.0f", shade)
+    -- a tap on a point of the creatures' plane comes back to that point
+    for _, p in ipairs({ { C.LAMP_X, C.SOIL_Y }, { C.GLASS_L + 120, C.GLASS_T + 40 }, { C.GLASS_R - 120, C.SOIL_Y - 300 } }) do
+        local vx, vy = Tank.level(p[1], p[2])
+        local tx, ty = vx * t.k + t.x, vy * t.k + t.y
+        local lx, ly = Tank.toLevel(Screen.toView(t, tx, ty))
+        check(results, math.abs(lx - p[1]) < 1e-3 and math.abs(ly - p[2]) < 1e-3,
+            'frame: a tap at (%.0f, %.0f) on the plane lands at (%.3f, %.3f)', p[1], p[2], lx, ly)
+    end
+    -- the book's ribbon, where the screen's bottom edge meets it, opens it;
+    -- elsewhere on the glass doesn't
+    local rx, ry = Screen.toView(t, 1280 - Pages.TAB_X, 720)
+    local pages = setmetatable({ tab = { x = rx, y = ry, k = t.k }, shown = 0 }, Pages)
+    check(results, pages:overClosed(Screen.toView(t, 1280 - Pages.TAB_X, 700)), "frame: a tap on the book's ribbon misses it")
+    check(results, not pages:overClosed(Screen.toView(t, 1280 - Pages.TAB_X, 600)) and not pages:overClosed(Screen.toView(t, 640, 700)),
+        "frame: a tap on the glass opens the book")
 
     local function run(events)
         local t, said = Touch.new(), {}
@@ -474,7 +525,8 @@ test('frame', function(_, results)
         local said = run(c[3])
         check(results, said == c[2], 'frame: %s said "%s", not "%s"', c[1], said, c[2])
     end
-    log.info('selftest', 'frame        1280x720 crops (0, %d); taps, holds and slides read', f.y)
+    log.info('selftest', 'frame        1280x720 crops (0, %d) in a window; on the frame the glass fills it at %.3f, '
+        .. 'sides giving way; taps, holds and slides read', f.y, t.k)
 end)
 
 -- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole

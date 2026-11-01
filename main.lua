@@ -84,11 +84,36 @@ local sitting -- a portrait for the family book (#32), defined with the plates b
 local watchReplay -- likewise: --replay in a window draws what it runs
 local style = args.style or Styles.DEFAULT -- the look the finished frame is drawn in (#94)
 local shown, shownFont -- {name, at}: a style just switched to, named in the corner for a moment
-local view = Screen.fit(C.W, C.H, C.W, C.H) -- the jar's view on the window (#90)
+-- How the jar's view goes on a w x h screen (#90): in a window the room shows
+-- round the jar, and on the frame the glass's inside fills it (#110)
+local function fitFor(w, h)
+    return args.frame and Screen.tank(w, h) or Screen.fit(w, h, C.W, C.H)
+end
+local view = fitFor(C.W, C.H) -- the jar's view on the window
+-- The open family book's fit: always the window's, so on the frame it's no
+-- bigger than in a window and none of it is lost off the screen's edges
+local leaf = Screen.fit(C.W, C.H, C.W, C.H)
+
 local touch = Touch.new() -- a finger on the frame's glass
 local book -- the family book (#32): everyone who has lived in the jar
 local pages -- and the book itself, on the desk and open, wherever there's a window
 local passing -- the moment on opening a jar that was left (#31), while it lasts
+
+-- On the frame the closed book is off the screen, below it on the desk, so
+-- it's found by its ribbon, up over the bottom edge (jar/pages.lua)
+local function tabOn(f, w, h)
+    local x, y = Screen.toView(f, w - Pages.TAB_X, h)
+    return { x = x, y = y, k = f.k }
+end
+local function tuck()
+    if pages and args.frame then pages.tab = tabOn(view, love.graphics.getDimensions()) end
+end
+
+-- A point on the screen, in the view's pixels the book is drawn in: the
+-- jar's, or the open book's own
+local function onBook(x, y)
+    return Screen.toView(pages and pages.open and leaf or view, x, y)
+end
 
 -- The hour the jar was opened at and how long its day is. Like the seed, these
 -- are inputs: the hour at any moment is DayCycle.hourAt(startHour, world.time).
@@ -131,6 +156,7 @@ local function openJar(seed, hour, day, level, cast)
     -- (and the family book hears who comes and goes, and keeps their portraits)
     book = Book.new(w, seed)
     pages = not headless.active() and Pages.new(book) or nil
+    tuck()
     -- --crowd <n>: eggs of random genomes where the residents live, until the jar
     -- holds n (they hatch once their graphs are built)
     local homes = World.residents(level or room, w.cast)
@@ -240,7 +266,7 @@ function love.load()
     if not headless.active() then love.resize(love.graphics.getDimensions()) end
     if args.frame then
         love.mouse.setVisible(false)
-        print(string.format('[frame] %dx%d, the jar at %.2f from (%d, %d)', love.graphics.getWidth(),
+        print(string.format("[frame] %dx%d, the jar at %.3f from (%.1f, %.1f)", love.graphics.getWidth(),
             love.graphics.getHeight(), view.k, view.x, view.y))
         io.stdout:flush() -- (a launcher reading this knows the jar is up)
     end
@@ -289,7 +315,7 @@ end
 -- Follow whoever is at a point on the screen with the lantern, or let go.
 -- Terrarium: or, on the family book (#32), open it, turn its pages, close it.
 local function followAt(x, y)
-    if pages and pages:press(Screen.toView(view, x, y)) then return end
+    if pages and pages:press(onBook(x, y)) then return end
     local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
     if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
 end
@@ -341,7 +367,7 @@ function love.update(dt)
     -- A hand over anyone you could follow, or the book
     if love.mouse.isCursorSupported() and not args.frame then
         local vx, vy = Screen.toView(view, love.mouse.getPosition())
-        local over = pages and pages:over(vx, vy)
+        local over = pages and pages:over(onBook(love.mouse.getPosition()))
         if not (pages and pages.open) then
             local lx, ly = Tank.toLevel(vx, vy)
             over = over or Lantern.creatureAt(world, lx, ly)
@@ -382,19 +408,70 @@ local function drawNav()
     end
 end
 
+-- Terrarium: under a style that draws each thing on its own (pencil-each,
+-- #95), `draw` through the style's body pass, bounded by x0, y0, x1, y1 in
+-- the canvas's px (or the whole canvas, with none). Anything that isn't
+-- drawn this way is the ground the things stand on.
+-- `look` is one of Styles.LOOK (a prop's if not given).
+local function alone(seed, draw, x0, y0, x1, y1, look)
+    if not x0 then x0, y0, x1, y1 = -math.huge, -math.huge, math.huge, math.huge end
+    Styles.body(style, world.time, x0, y0, x1, y1, nil, nil, seed, look or Styles.LOOK.prop, draw)
+end
+
+-- Creature i and its glow, on its own. Its bounds and middle come from its
+-- drawn points, PAD over for legs, shell and glow, and its hatching is
+-- anchored to its middle, so it goes where the creature goes.
+local PAD = 40
+local function drawAlone(i, c, ctx)
+    local x0, y0, x1, y1, mx, my, n = math.huge, math.huge, -math.huge, -math.huge, 0, 0, 0
+    for _, p in ipairs(c:interp_points()) do
+        x0, y0 = math.min(x0, p.x), math.min(y0, p.y)
+        x1, y1 = math.max(x1, p.x), math.max(y1, p.y)
+        mx, my, n = mx + p.x, my + p.y, n + 1
+    end
+    if n == 0 then return Remains.through(world, i, 'draw', ctx) end
+    local sx0, sy0 = love.graphics.transformPoint(x0 - PAD, y0 - PAD)
+    local sx1, sy1 = love.graphics.transformPoint(x1 + PAD, y1 + PAD)
+    local ax, ay = love.graphics.transformPoint(mx / n, my / n)
+    local seed = math.floor((c.genome.hue or 0) * 977) % 101
+    Styles.body(style, world.time, sx0, sy0, sx1, sy1, ax, ay, seed, Styles.LOOK.creature, function()
+        Render.useObject(C.PLANE_D)
+        Remains.through(world, i, 'draw', ctx)
+        love.graphics.setShader()
+        if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
+    end)
+end
+
 local function drawCreatures(alpha, light)
     -- Draw between the last two steps; the sim never sees the blended points.
     -- (A jar catching up is only anchors, and the moment draws those, #31.)
     local bodies = not world.coarse
     if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
-    Render.useObject(C.PLANE_D)
-    for _, c in ipairs(bodies and world.creatures or {}) do
-        if c.draw_trail then c:draw_trail() end
+    local each = Styles.each(style)
+    -- The small things: trails, clutches, what the dead kept, crumbs, and
+    -- spores off the returned (under pencil-each, all on their own together)
+    local function litter()
+        Render.useObject(C.PLANE_D)
+        for _, c in ipairs(bodies and world.creatures or {}) do
+            if c.draw_trail then c:draw_trail() end
+        end
+        Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
+        Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
+        Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
+        if not each then return end
+        love.graphics.setShader()
+        Remains.draw(world)
+        Eggs.draw_emissive(world, light)
+        Food.draw_emissive(world.food, light, world.time, alpha)
     end
-    Eggs.draw(world, light) -- Terrarium: clutches in the moss (#23)
-    Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
-    Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
+    if each then
+        alone(7, litter, nil, nil, nil, nil, Styles.LOOK.creature) -- (eggs and crumbs are small; draw them whole)
+        for i, c in ipairs(bodies and world.creatures or {}) do drawAlone(i, c, ctx) end
+        if bodies then world:restore() end
+        return
+    end
+    litter()
     -- (a dying one through Remains, sinking and fading into the moss, #24)
     for i in ipairs(bodies and world.creatures or {}) do
         Remains.through(world, i, 'draw', ctx)
@@ -409,8 +486,32 @@ local function drawCreatures(alpha, light)
     if bodies then world:restore() end
 end
 
-local function drawObject(o)
+-- A stone or a plant; under pencil-each (`each`) on its own, drawn as `look`
+local function drawObject(o, each, look)
+    if each then
+        local x0, y0, x1, y1
+        if o.kind == "plant" then x0, y0, x1, y1 = Plants.bounds(o) else x0, y0, x1, y1 = Scape.stoneBounds(o) end
+        return alone(math.floor(o.x * 7 + o.d * 97) % 101, function() drawObject(o) end, x0, y0, x1, y1, look)
+    end
     if o.kind == "plant" then Plants.draw(o) else Scape.drawStone(o) end
+end
+
+-- The scenery and the moss on it, in level coordinates; under pencil-each
+-- each piece on its own, and the moss on its own, over what lies under them
+local function drawProps(light)
+    if not Styles.each(style) then
+        Scenery.draw(light, world.time)
+        Moss.draw(world.moss, light, world.time, world.creatures)
+        return
+    end
+    Scenery.drawGround(light, world.time)
+    for k, p in ipairs(Scenery.all()) do
+        local x0, y0, x1, y1 = Scenery.bounds(p)
+        local sx0, sy0 = love.graphics.transformPoint(x0, y0)
+        local sx1, sy1 = love.graphics.transformPoint(x1, y1)
+        alone(k, function() Scenery.drawPiece(p) end, sx0, sy0, sx1, sy1)
+    end
+    alone(3, function() Moss.draw(world.moss, light, world.time, world.creatures) end)
 end
 
 -- Everything in the jar, back to front. The scape behind FAR_D and the room
@@ -424,23 +525,38 @@ local function drawScene(light, plane)
     love.graphics.clear(0, 0, 0, 1)
     Render.drawSoft("room", 2.6)
 
+    local each = Styles.each(style)
     Glass.drawBack(light)
-    Scape.drawBed(light)
+    if each then
+        local x0, y0, x1, y1 = Scape.bedBounds()
+        alone(5, function() Scape.drawBed(light) end, x0, y0, x1, y1, Styles.LOOK.soil)
+    else
+        Scape.drawBed(light)
+    end
     Render.beginObjects(light)
 
-    love.graphics.setCanvas(Render.canvas("far"))
-    love.graphics.clear(0, 0, 0, 0)
     local i = 1
-    while objects[i] and objects[i].d < C.FAR_D do
-        drawObject(objects[i])
-        i = i + 1
+    if each then
+        -- (a drawing has no depth of field: the far things are drawn sharp,
+        -- only lighter, as a pencil draws distance)
+        while objects[i] and objects[i].d < C.FAR_D do
+            drawObject(objects[i], true, Styles.LOOK.far)
+            i = i + 1
+        end
+    else
+        love.graphics.setCanvas(Render.canvas("far"))
+        love.graphics.clear(0, 0, 0, 0)
+        while objects[i] and objects[i].d < C.FAR_D do
+            drawObject(objects[i])
+            i = i + 1
+        end
+        love.graphics.setShader()
+        love.graphics.setCanvas(Render.canvas("scene"))
+        Render.drawSoft("far", 1.0)
     end
-    love.graphics.setShader()
-    love.graphics.setCanvas(Render.canvas("scene"))
-    Render.drawSoft("far", 1.0)
 
     while objects[i] and objects[i].d < C.PLANE_D do
-        drawObject(objects[i])
+        drawObject(objects[i], each)
         i = i + 1
     end
     love.graphics.setShader()
@@ -449,8 +565,7 @@ local function drawScene(light, plane)
     -- The creatures' plane, in level coordinates
     if plane ~= false then
         Tank.pushPlane()
-        Scenery.draw(light, world.time)
-        Moss.draw(world.moss, light, world.time, world.creatures)
+        drawProps(light)
         drawCreatures(accumulator / STEP, light)
         if passing then passing:draw() end
         lantern:draw(light)
@@ -458,12 +573,18 @@ local function drawScene(light, plane)
         love.graphics.pop()
     end
 
-    for j = i, #objects do drawObject(objects[j]) end
+    for j = i, #objects do drawObject(objects[j], each) end
     love.graphics.setShader()
 
     Plants.drawGlow(light)
     Motes.drawFront(light)
-    Scape.drawFront(light)
+    -- (the soil's face against the front glass)
+    if each then
+        local x0, y0, x1, y1 = Scape.frontBounds()
+        alone(6, function() Scape.drawFront(light) end, x0, y0, x1, y1, Styles.LOOK.soil)
+    else
+        Scape.drawFront(light)
+    end
     Condensation.draw(light, passing and passing:glass()) -- on the inside of the glass, under its dust
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
@@ -500,7 +621,7 @@ local function composite(plate, w, h, time, fit)
         sh:send("glassRect", rect)
         local glass = Styles.glass(style) -- (a style may want no fringe or grain)
         sh:send("aberration", glass.aberration)
-        sh:send("vignette", 0.40)
+        sh:send("vignette", glass.vignette)
         sh:send("grain", glass.grain)
         sh:send("time", time % 1000)
         sh:send("size", { w or C.W, h or C.H })
@@ -546,8 +667,7 @@ local function plate(target, v, light, blur)
     love.graphics.scale(w / (v[3] - v[1]))
     love.graphics.translate(-v[1], -v[2])
     Render.beginObjects(light, { w / 2, w * 0.45 })
-    Scenery.draw(light, world.time)
-    Moss.draw(world.moss, light, world.time, world.creatures)
+    drawProps(light)
     drawCreatures(1, light)
     love.graphics.pop()
     love.graphics.setShader()
@@ -651,13 +771,14 @@ function scriptApi()
 
     -- Render a frame into a w x h canvas (default the window's size) and return it.
     --
+    -- With opts.fit (core/screen.lua), through that fit, as a w x h screen
+    -- shows it; with opts.frame, as the frame shows it (#110): the glass's
+    -- inside filling it, and the book's ribbon to find it by.
+    --
     -- With opts.view = {x0, y0, x1, y1}, a plate instead: that stretch of the
     -- creatures' plane, in level units, drawn across the canvas's width at full
     -- resolution. Behind it is the window's own frame, enlarged and blurred
     -- (opts.blur), so the plane stands sharp in a shallow depth of field.
-    -- Terrarium: with opts.screen, the frame as a w x h screen shows it, fitted
-    -- and cropped as the window and the Pi frame are (core/screen.lua), not
-    -- stretched to the canvas's shape.
     function api.render(w, h, opts)
         opts = opts or {}
         w, h = w or C.W, h or C.H
@@ -665,22 +786,29 @@ function scriptApi()
         local target = canvas('target', w, h)
         local v = opts.view
         if not v then
+            local fit, tab = opts.frame and Screen.tank(w, h) or opts.fit, pages and pages.tab
+            if pages and opts.frame then pages.tab = tabOn(fit, w, h) end
             drawScene(light)
             love.graphics.setCanvas({ target, stencil = true })
             love.graphics.clear(0, 0, 0, 1)
-            love.graphics.push()
-            local fit = opts.screen and Screen.fit(w, h, C.W, C.H)
             if fit then
+                -- (through a fit, core/screen.lua, as a screen of that shape shows it)
                 composite(nil, nil, nil, world.time, fit)
-                Screen.push(fit)
+                if pages and pages.tab then
+                    Screen.push(fit)
+                    pages:drawTab()
+                    love.graphics.pop()
+                end
+                Screen.push(Screen.fit(w, h, C.W, C.H)) -- (the open book, as on a screen)
             else
+                love.graphics.push()
                 love.graphics.scale(w / C.W, h / C.H)
                 composite(nil, nil, nil, world.time)
             end
             if pages then pages:draw() end
-            if fit then love.graphics.pop() end
             love.graphics.pop()
             love.graphics.setCanvas()
+            if pages then pages.tab = tab end
             capture.last = target
             return target
         end
@@ -745,9 +873,15 @@ function love.draw()
     -- Render reads the jar's clock; it never moves it
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     composite(nil, nil, nil, nil, view)
+    if pages and pages.tab then
+        -- the book's ribbon, on the frame (its desk is off the screen)
+        Screen.push(view)
+        pages:drawTab()
+        love.graphics.pop()
+    end
     if pages and pages.shown > 0 then
         -- the family book, open over the jar (#32)
-        Screen.push(view)
+        Screen.push(leaf)
         pages:draw()
         love.graphics.pop()
     end
@@ -780,7 +914,8 @@ function love.draw()
 end
 
 function love.resize(w, h)
-    view = Screen.fit(w, h, C.W, C.H)
+    view, leaf = fitFor(w, h), Screen.fit(w, h, C.W, C.H)
+    tuck()
 end
 
 -- Click a creature to follow it with the lantern; click anywhere else to let
@@ -844,7 +979,7 @@ local function saveThumb(file)
     drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
     love.graphics.setCanvas(canvas)
     love.graphics.clear(0, 0, 0, 1)
-    composite(nil, nil, nil, world.time, Screen.fit(w, h, C.W, C.H))
+    composite(nil, nil, nil, world.time, fitFor(w, h))
     love.graphics.setCanvas()
     local out, err = io.open(file, 'wb')
     if not out then
