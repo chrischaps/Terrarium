@@ -76,6 +76,16 @@ local function paper()
     return sheet
 end
 
+-- What both pencil passes are sent (shaders/styles/pencil_common.glsl)
+local function pencil(sh, w, h, time)
+    sh:send('paper', paper())
+    sh:send('size', { w, h })
+    sh:send('time', time % 1000)
+    sh:send('boil', 0.5)
+    sh:send('exposure', 6.5)
+    sh:send('contrast', 1.6)
+end
+
 Styles.list = {
     { name = 'none' },
     -- The seam's own test: the jar as a silver gelatin print, its light as
@@ -88,15 +98,22 @@ Styles.list = {
     -- hatched, crossed where it's dark, its light the bare paper. The
     -- hatching is anchored to the page and holds still; the line boils a
     -- little, as a drawn line does. Paper takes no fringe or film grain.
+    -- The whole finished frame is drawn at once.
     { name = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0 },
         setup = function(sh, w, h, time)
-            sh:send('paper', paper())
-            sh:send('size', { w, h })
-            sh:send('time', time % 1000)
-            sh:send('boil', 0.5)
-            sh:send('exposure', 6.5)
-            sh:send('contrast', 1.6)
+            pencil(sh, w, h, time)
+            sh:send('masked', 0)
         end },
+    -- The same page with each creature drawn on its own first (#95's A/B):
+    -- its outline from its own silhouette, its hatching riding on its body
+    -- (`each`, a pass main.lua's drawCreatures runs per body), and the rest of
+    -- the frame drawn round them as pencil draws it.
+    { name = 'pencil-each', shader = 'styles/pencil', glass = { aberration = 0, grain = 0 },
+        setup = function(sh, w, h, time)
+            pencil(sh, w, h, time)
+            sh:send('masked', 1)
+        end,
+        each = { shader = 'styles/pencil_body', setup = pencil } },
 }
 
 local by_name = {}
@@ -126,9 +143,10 @@ function Styles.after(name)
 end
 
 -- One canvas per frame size: the window's, and each size a script renders at
+-- (and another of each for a body drawn on its own)
 local canvases = {}
-local function canvas(w, h)
-    local key = w .. 'x' .. h
+local function canvas(w, h, what)
+    local key = (what or '') .. w .. 'x' .. h
     if not canvases[key] then
         canvases[key] = love.graphics.newCanvas(w, h, { format = 'rgba16f' })
         canvases[key]:setFilter('linear', 'linear')
@@ -155,6 +173,61 @@ function Styles.apply(name, frame, time)
     love.graphics.draw(frame)
     love.graphics.pop()
     return out
+end
+
+-- Whether style `name` draws each creature on its own (pencil-each)
+function Styles.each(name)
+    local s = by_name[name]
+    return s and s.each and Render.shader(s.each.shader) and true or false
+end
+
+-- One body under a style that draws each on its own: `draw()` draws it, as
+-- it would be drawn into the canvas being drawn into, onto a clear canvas the
+-- same size, and that's laid into the canvas through the style's body pass,
+-- which also takes the body out of the canvas's alpha so the frame's own pass
+-- leaves it be. x0, y0, x1, y1 bound it and ax, ay is its middle, all in that
+-- canvas's px; `seed` is its own. Drawing only, like the style.
+local quad
+local MARGIN = 8
+function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
+    local s = by_name[name]
+    local sh = Render.shader(s.each.shader)
+    local target = love.graphics.getCanvas()
+    local w, h
+    if target then w, h = target:getDimensions() else w, h = love.graphics.getDimensions() end
+    x0, y0 = math.max(0, math.floor(x0)), math.max(0, math.floor(y0))
+    x1, y1 = math.min(w, math.ceil(x1)), math.min(h, math.ceil(y1))
+    if x1 <= x0 or y1 <= y0 then return end
+    local alone = canvas(w, h, 'body')
+    love.graphics.push('all')
+    love.graphics.setCanvas(alone)
+    -- (cleared a little past where it's laid in, since the line's samples
+    -- reach over the edge, and the last body drawn alone is still there)
+    local m = MARGIN
+    local cx0, cy0 = math.max(0, x0 - m), math.max(0, y0 - m)
+    love.graphics.setScissor(cx0, cy0, math.min(w, x1 + m) - cx0, math.min(h, y1 + m) - cy0)
+    love.graphics.clear(0, 0, 0, 0)
+    draw()
+    love.graphics.pop()
+
+    quad = quad or love.graphics.newQuad(0, 0, 1, 1, 1, 1)
+    quad:setViewport(x0, y0, x1 - x0, y1 - y0, w, h)
+    love.graphics.push('all')
+    love.graphics.origin()
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setShader(sh)
+    s.each.setup(sh, w, h, time)
+    sh:send('anchor', { ax, ay })
+    sh:send('seed', seed)
+    sh:send('mask', 0)
+    love.graphics.setColorMask(true, true, true, false)
+    love.graphics.setBlendMode('alpha', 'premultiplied')
+    love.graphics.draw(alone, quad, x0, y0)
+    sh:send('mask', 1)
+    love.graphics.setColorMask(false, false, false, true)
+    love.graphics.setBlendMode('multiply', 'premultiplied')
+    love.graphics.draw(alone, quad, x0, y0)
+    love.graphics.pop()
 end
 
 return Styles

@@ -15,8 +15,19 @@ local white, blob
 local currentLight
 local objectHaze = -1
 
+-- Terrarium: a shader may `#include "file.glsl"` another from its own folder
+-- (the two pencil passes share their hatching, #95)
+local function source(path)
+    local code = love.filesystem.read(path)
+    if not code then return path end
+    local dir = path:match("^(.*/)") or ""
+    return (code:gsub('#include%s+"([^"]+)"', function(file)
+        return love.filesystem.read(dir .. file) or error("no " .. dir .. file .. " to include")
+    end))
+end
+
 local function loadShader(name)
-    local ok, result = pcall(love.graphics.newShader, "shaders/" .. name .. ".glsl")
+    local ok, result = pcall(function() return love.graphics.newShader(source("shaders/" .. name .. ".glsl")) end)
     if not ok then
         print("[Terrarium] shader error in " .. name .. ": " .. tostring(result))
         return nil

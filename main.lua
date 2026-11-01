@@ -405,12 +405,37 @@ local function drawNav()
     end
 end
 
+-- Terrarium: under a style that draws each creature on its own (pencil-each,
+-- #95), creature i and its glow, through the style's body pass. Its bounds
+-- and middle come from its drawn points, PAD over for legs, shell and glow.
+local PAD = 40
+local function drawAlone(i, c, ctx)
+    local x0, y0, x1, y1, mx, my, n = math.huge, math.huge, -math.huge, -math.huge, 0, 0, 0
+    for _, p in ipairs(c:interp_points()) do
+        x0, y0 = math.min(x0, p.x), math.min(y0, p.y)
+        x1, y1 = math.max(x1, p.x), math.max(y1, p.y)
+        mx, my, n = mx + p.x, my + p.y, n + 1
+    end
+    if n == 0 then return Remains.through(world, i, 'draw', ctx) end
+    local sx0, sy0 = love.graphics.transformPoint(x0 - PAD, y0 - PAD)
+    local sx1, sy1 = love.graphics.transformPoint(x1 + PAD, y1 + PAD)
+    local ax, ay = love.graphics.transformPoint(mx / n, my / n)
+    local seed = math.floor((c.genome.hue or 0) * 977) % 101
+    Styles.body(style, world.time, sx0, sy0, sx1, sy1, ax, ay, seed, function()
+        Render.useObject(C.PLANE_D)
+        Remains.through(world, i, 'draw', ctx)
+        love.graphics.setShader()
+        if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
+    end)
+end
+
 local function drawCreatures(alpha, light)
     -- Draw between the last two steps; the sim never sees the blended points.
     -- (A jar catching up is only anchors, and the moment draws those, #31.)
     local bodies = not world.coarse
     if bodies then world:interpolate(alpha) end
     local ctx = { light_dir = world.light_dir, light = light }
+    local alone = bodies and Styles.each(style)
     Render.useObject(C.PLANE_D)
     for _, c in ipairs(bodies and world.creatures or {}) do
         if c.draw_trail then c:draw_trail() end
@@ -419,14 +444,14 @@ local function drawCreatures(alpha, light)
     Remains.draw_left(world) -- Terrarium: and what the dead kept, grown over (#77)
     Food.draw(world.food, world.time, alpha, world.moss) -- Terrarium: crumbs you dropped in (#25)
     -- (a dying one through Remains, sinking and fading into the moss, #24)
-    for i in ipairs(bodies and world.creatures or {}) do
-        Remains.through(world, i, 'draw', ctx)
+    for i, c in ipairs(bodies and world.creatures or {}) do
+        if alone then drawAlone(i, c, ctx) else Remains.through(world, i, 'draw', ctx) end
     end
     love.graphics.setShader()
     Remains.draw(world)
     Eggs.draw_emissive(world, light)
     Food.draw_emissive(world.food, light, world.time, alpha)
-    for i, c in ipairs(bodies and world.creatures or {}) do
+    for i, c in ipairs(not alone and bodies and world.creatures or {}) do
         if c.draw_emissive then Remains.through(world, i, 'draw_emissive', ctx, 'add') end
     end
     if bodies then world:restore() end
