@@ -50,6 +50,8 @@ A style is an entry in `Styles.list` (`jar/styles.lua`) with its shader in `shad
   - `far`: lighter.
 - **`glass = {aberration, grain, vignette}`** on a style sets what the composite lays over its frame. Paper has no colour fringe or film grain. Film grain is per-frame noise and crawls over anything meant to hold still.
 - **`#include "file.glsl"`** works in any shader that `Render.shader` loads, resolved within its own folder. Pencil's two passes share `pencil_common.glsl`.
+- **`each.lay(alone, quad, x0, y0, kind, seed)`** (ascii-each, #97) replaces `Styles.body`'s two draws for a style that lays its things in its own way. `kind` is the look's name (`Styles.KIND`: `creature`, `prop`, `soil`, `far`, `moss`). Ascii lays each thing in as it is and marks it on a map of what's where, so its cells pass can set a cell by the thing it holds. **`each.begin(target)`** (from `Styles.begin`, called where `drawScene` and `plate` clear their canvas) lets a style start such a map afresh each frame.
+- **`Styles.LOOK.moss`** is the moss's own look. To pencil it's the same four numbers as a prop. Ascii sets it as grass.
 - **The A/B harness:** `lovec . --script scripts/pencil_ab.lua` films the creature that moves furthest, with the camera held still, two styles side by side. Copy it and change the two names to A/B your own variants. Chris tested the result in play, flipping with Tab.
 
 ## Watercolour on the same seam (#96)
