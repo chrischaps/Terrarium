@@ -85,9 +85,10 @@ fi
 
 if [ -n "${WINDOW:-}" ]; then
     echo "== a jar watched in a window, in every style, against a jar with none"
+    # (--probes: the matte's probes too, #98, since a matte draws the jar twice)
     h=$(hash_of "$LOVE" "$GAME" --replay 60)
-    for style in $("$LOVE" "$GAME" --styles | tr -d '\r'); do
-        w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --style "$style")
+    for style in $("$LOVE" "$GAME" --probes --styles | tr -d '\r'); do
+        w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --probes --style "$style")
         if [ -n "$w" ] && [ "$w" = "$h" ]; then
             echo "window: watched in $style and unwatched both hash $w"
         else
