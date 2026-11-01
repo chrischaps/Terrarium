@@ -409,9 +409,10 @@ end
 -- #95), `draw` through the style's body pass, bounded by x0, y0, x1, y1 in
 -- the canvas's px (or the whole canvas, with none). Anything that isn't
 -- drawn this way is the ground the things stand on.
-local function alone(seed, draw, x0, y0, x1, y1)
+-- `look` is one of Styles.LOOK (a prop's if not given).
+local function alone(seed, draw, x0, y0, x1, y1, look)
     if not x0 then x0, y0, x1, y1 = -math.huge, -math.huge, math.huge, math.huge end
-    Styles.body(style, world.time, x0, y0, x1, y1, nil, nil, seed, draw)
+    Styles.body(style, world.time, x0, y0, x1, y1, nil, nil, seed, look or Styles.LOOK.prop, draw)
 end
 
 -- Creature i and its glow, on its own. Its bounds and middle come from its
@@ -430,7 +431,7 @@ local function drawAlone(i, c, ctx)
     local sx1, sy1 = love.graphics.transformPoint(x1 + PAD, y1 + PAD)
     local ax, ay = love.graphics.transformPoint(mx / n, my / n)
     local seed = math.floor((c.genome.hue or 0) * 977) % 101
-    Styles.body(style, world.time, sx0, sy0, sx1, sy1, ax, ay, seed, function()
+    Styles.body(style, world.time, sx0, sy0, sx1, sy1, ax, ay, seed, Styles.LOOK.creature, function()
         Render.useObject(C.PLANE_D)
         Remains.through(world, i, 'draw', ctx)
         love.graphics.setShader()
@@ -462,7 +463,7 @@ local function drawCreatures(alpha, light)
         Food.draw_emissive(world.food, light, world.time, alpha)
     end
     if each then
-        alone(7, litter)
+        alone(7, litter, nil, nil, nil, nil, Styles.LOOK.creature) -- (eggs and crumbs are small; draw them whole)
         for i, c in ipairs(bodies and world.creatures or {}) do drawAlone(i, c, ctx) end
         if bodies then world:restore() end
         return
@@ -482,12 +483,12 @@ local function drawCreatures(alpha, light)
     if bodies then world:restore() end
 end
 
-local function drawObject(o, each)
+-- A stone or a plant; under pencil-each (`each`) on its own, drawn as `look`
+local function drawObject(o, each, look)
     if each then
-        -- (a stone or plant on its own, pencil-each)
         local x0, y0, x1, y1
         if o.kind == "plant" then x0, y0, x1, y1 = Plants.bounds(o) else x0, y0, x1, y1 = Scape.stoneBounds(o) end
-        return alone(math.floor(o.x * 7 + o.d * 97) % 101, function() drawObject(o) end, x0, y0, x1, y1)
+        return alone(math.floor(o.x * 7 + o.d * 97) % 101, function() drawObject(o) end, x0, y0, x1, y1, look)
     end
     if o.kind == "plant" then Plants.draw(o) else Scape.drawStone(o) end
 end
@@ -523,19 +524,33 @@ local function drawScene(light, plane)
 
     local each = Styles.each(style)
     Glass.drawBack(light)
-    if each then alone(5, function() Scape.drawBed(light) end, Scape.bedBounds()) else Scape.drawBed(light) end
+    if each then
+        local x0, y0, x1, y1 = Scape.bedBounds()
+        alone(5, function() Scape.drawBed(light) end, x0, y0, x1, y1, Styles.LOOK.soil)
+    else
+        Scape.drawBed(light)
+    end
     Render.beginObjects(light)
 
-    love.graphics.setCanvas(Render.canvas("far"))
-    love.graphics.clear(0, 0, 0, 0)
     local i = 1
-    while objects[i] and objects[i].d < C.FAR_D do
-        drawObject(objects[i])
-        i = i + 1
+    if each then
+        -- (a drawing has no depth of field: the far things are drawn sharp,
+        -- only lighter, as a pencil draws distance)
+        while objects[i] and objects[i].d < C.FAR_D do
+            drawObject(objects[i], true, Styles.LOOK.far)
+            i = i + 1
+        end
+    else
+        love.graphics.setCanvas(Render.canvas("far"))
+        love.graphics.clear(0, 0, 0, 0)
+        while objects[i] and objects[i].d < C.FAR_D do
+            drawObject(objects[i])
+            i = i + 1
+        end
+        love.graphics.setShader()
+        love.graphics.setCanvas(Render.canvas("scene"))
+        Render.drawSoft("far", 1.0)
     end
-    love.graphics.setShader()
-    love.graphics.setCanvas(Render.canvas("scene"))
-    Render.drawSoft("far", 1.0)
 
     while objects[i] and objects[i].d < C.PLANE_D do
         drawObject(objects[i], each)
@@ -561,7 +576,12 @@ local function drawScene(light, plane)
     Plants.drawGlow(light)
     Motes.drawFront(light)
     -- (the soil's face against the front glass)
-    if each then alone(6, function() Scape.drawFront(light) end, Scape.frontBounds()) else Scape.drawFront(light) end
+    if each then
+        local x0, y0, x1, y1 = Scape.frontBounds()
+        alone(6, function() Scape.drawFront(light) end, x0, y0, x1, y1, Styles.LOOK.soil)
+    else
+        Scape.drawFront(light)
+    end
     Condensation.draw(light, passing and passing:glass()) -- on the inside of the glass, under its dust
     -- (the glass shifts as the cursor does; the frame has none, so it's still)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)

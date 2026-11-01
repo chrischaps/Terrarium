@@ -197,10 +197,24 @@ end
 -- into the canvas through the style's body pass, which also takes the thing
 -- out of the canvas's alpha so the frame's own pass leaves it be. x0, y0, x1,
 -- y1 bound it and ax, ay is its middle (the bounds' middle if not given), all
--- in that canvas's px; `seed` is its own. Drawing only, like the style.
+-- in that canvas's px; `seed` is its own, and `look` how it's drawn (one of
+-- Styles.LOOK; a creature's if not given). Drawing only, like the style.
+--
+-- LOOK: {weight, detail, softness, deepest} (pencil_body.glsl). A creature is
+-- drawn whole, every marking a trait; a prop mostly as its outline, its shade
+-- from its broad tone and not its texture, and never past two layers of
+-- hatching; the soil the same, its tone taken more broadly still (its
+-- pebbles); a far thing lighter, as a pencil draws distance, in place of the
+-- depth of field's blur.
+Styles.LOOK = {
+    creature = { 1, 1, 0, 1 },
+    prop = { 1, 0.15, 7, 0.74 },
+    soil = { 1, 0.1, 16, 0.68 },
+    far = { 0.42, 0, 9, 0.74 },
+}
 local quad
-local MARGIN = 8
-function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
+local MARGIN = 12 -- page px past a thing that its line and shade read
+function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, look, draw)
     local s = by_name[name]
     local sh = Render.shader(s.each.shader)
     local target = love.graphics.getCanvas()
@@ -215,7 +229,7 @@ function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
     love.graphics.setCanvas(alone)
     -- (cleared a little past where it's laid in, since the line's samples
     -- reach over the edge, and the last body drawn alone is still there)
-    local m = MARGIN
+    local m = math.ceil(MARGIN * h / 1000) + 2
     local cx0, cy0 = math.max(0, x0 - m), math.max(0, y0 - m)
     love.graphics.setScissor(cx0, cy0, math.min(w, x1 + m) - cx0, math.min(h, y1 + m) - cy0)
     love.graphics.clear(0, 0, 0, 0)
@@ -231,6 +245,7 @@ function Styles.body(name, time, x0, y0, x1, y1, ax, ay, seed, draw)
     s.each.setup(sh, w, h, time)
     sh:send('anchor', { ax, ay })
     sh:send('seed', seed)
+    sh:send('look', look or Styles.LOOK.creature)
     sh:send('mask', 0)
     love.graphics.setColorMask(true, true, true, false)
     love.graphics.setBlendMode('alpha', 'premultiplied')
