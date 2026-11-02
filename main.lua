@@ -8,6 +8,7 @@
 --   lovec . --day <sec>      a time-compressed day, e.g. --day 120 to watch one pass
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
+--   click a creature         and the view comes in close on it (#120); click anything else to go out
 --   right-click              drop a pinch of food into the jar there (a few a day)
 --   the book on the desk, b  open the family book (#32); click a page to turn it, off it to close
 --   m                        hush the jar, or listen again (--mute opens it hushed)
@@ -16,7 +17,7 @@
 --   tab                      the next style
 --   [ ]                      smaller or larger cells, in a style that has them (ascii; --cell 6x9)
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
---                            follows, a long press drops food, and SIGTERM quits
+--                            follows and comes in close, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
 --   love . --away <time>     come back to a jar left that long ago: 90m, 36h, 2d (jar days)
 --                            or seconds, lived on the coarse step while the glass is fogged
@@ -55,6 +56,7 @@ local Condensation = require('jar.condensation')
 local Catchup = require('jar.catchup')
 local Passing = require('jar.passing')
 local Lantern = require('jar.lantern')
+local Camera = require('jar.camera')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
@@ -76,6 +78,7 @@ local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
 local lantern = Lantern.new() -- you watch with it; the World never knows it's there
+local camera = Camera.new() -- and it brings the view in on whoever it follows (#120)
 local synth -- the jar heard through its glass (#28), only while you watch it live
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
@@ -105,8 +108,16 @@ local function tabOn(f, w, h)
     local x, y = Screen.toView(f, w - Pages.TAB_X, h)
     return { x = x, y = y, k = f.k }
 end
+-- (a close view has lost the desk too, in a window: past this far in, the book
+-- is found the same way there, #120)
+local TUCK = 0.5
 local function tuck()
-    if pages and args.frame then pages.tab = tabOn(view, love.graphics.getDimensions()) end
+    if not pages then return end
+    if args.frame or camera:amount() > TUCK then
+        pages.tab = tabOn(view, love.graphics.getDimensions())
+    else
+        pages.tab = nil
+    end
 end
 
 -- A point on the screen, in the view's pixels the book is drawn in: the
@@ -276,6 +287,14 @@ function love.load()
         end
         lantern:update(10, world) -- already up to full brightness
     end
+    if args.close then
+        -- (close up already, on the one followed or the first, #120)
+        lantern.who = lantern.who or 1
+        lantern:update(10, world)
+        camera:hold()
+        camera:update(Camera.EASE, lantern:following(world))
+        tuck()
+    end
     if args.script then
         local chunk, err = love.filesystem.load(args.script)
         if not chunk then error(err) end
@@ -314,16 +333,28 @@ end
 
 -- Follow whoever is at a point on the screen with the lantern, or let go.
 -- Terrarium: or, on the family book (#32), open it, turn its pages, close it.
+-- Terrarium: and the view comes in on whoever it finds, and lets go on no one
+-- or on the book (#120).
 local function followAt(x, y)
-    if pages and pages:press(onBook(x, y)) then return end
-    local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
-    if lantern:pick(world, lx, ly) and synth then synth:chime(lx) end
+    if pages and pages:press(onBook(x, y)) then
+        camera:letGo()
+        return
+    end
+    local w, h = love.graphics.getDimensions()
+    local lx, ly = camera:toLevel(view, w, h, x, y)
+    if lantern:pick(world, lx, ly, camera:reach(view, w, h)) then
+        if not passing then camera:hold() end -- (a fogged glass has no close view)
+        if synth then synth:chime(lx) end
+    else
+        camera:letGo()
+    end
 end
 
 -- Drop a pinch of food in at a point on the screen, if it's over the jar and
 -- there's one left to give (#25)
 local function pinchAt(x, y)
-    local lx, ly = Tank.toLevel(Screen.toView(view, x, y))
+    local w, h = love.graphics.getDimensions()
+    local lx, ly = camera:toLevel(view, w, h, x, y)
     return lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B and world:pinch(lx)
 end
 
@@ -351,6 +382,9 @@ function love.update(dt)
         accumulator = accumulator - STEP
     end
     lantern:update(dt, world)
+    if pages and pages.open then camera:letGo() end -- (the book takes the whole view)
+    camera:update(dt, lantern:following(world))
+    if pages and not args.frame and (pages.tab ~= nil) ~= (camera:amount() > TUCK) then tuck() end
     if synth then synth:update(dt, world, lantern:following(world)) end
 
     -- A finger held still on the frame's glass drops a pinch of food there
@@ -366,11 +400,12 @@ function love.update(dt)
 
     -- A hand over anyone you could follow, or the book
     if love.mouse.isCursorSupported() and not args.frame then
-        local vx, vy = Screen.toView(view, love.mouse.getPosition())
         local over = pages and pages:over(onBook(love.mouse.getPosition()))
         if not (pages and pages.open) then
-            local lx, ly = Tank.toLevel(vx, vy)
-            over = over or Lantern.creatureAt(world, lx, ly)
+            local w, h = love.graphics.getDimensions()
+            local mx, my = love.mouse.getPosition()
+            local lx, ly = camera:toLevel(view, w, h, mx, my)
+            over = over or Lantern.creatureAt(world, lx, ly, camera:reach(view, w, h))
         end
         love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
@@ -591,7 +626,8 @@ local function drawScene(light, plane)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
     -- (the family book lies on the desk in front of the glass, #32)
-    if pages and plane ~= false then pages:drawClosed(light) end
+    -- (its ribbon's light is wanted however the frame is drawn, close views too)
+    if pages and (plane ~= false or pages.tab) then pages:drawClosed(light) end
     love.graphics.setCanvas()
 end
 
@@ -644,7 +680,11 @@ end
 -- x1, y1}, in level units, drawn across the target's width at full
 -- resolution. Behind it is the window's own frame, enlarged and blurred
 -- (`blur`), so the plane stands sharp in a shallow depth of field.
-local function plate(target, v, light, blur)
+-- Terrarium: `live` is for a plate that's part of the jar's own picture (the
+-- close view, #120), where a portrait is its own: drawn between the last two
+-- steps at the frame's `live.alpha`, lit by the lamp where the lamp really is,
+-- and with the lantern's pool on the plane.
+local function plate(target, v, light, blur, live)
     local w, h = target:getDimensions()
     drawScene(light, false)
     -- The view's corners in the window's frame, to line the jar up behind it
@@ -658,6 +698,16 @@ local function plate(target, v, light, blur)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(Render.canvas("scene"))
     local soft, k = Render.blur("far", blur or 3)
+    if live then
+        -- (enlarged this far, the gaps between the blur's taps show as bars where
+        -- the lid and the glass are, so it's gone over once more, finely)
+        love.graphics.setCanvas(Render.canvas("far"))
+        love.graphics.clear(0, 0, 0, 0)
+        love.graphics.setBlendMode("alpha", "premultiplied")
+        love.graphics.draw(soft, 0, 0, 0, k, k)
+        love.graphics.setBlendMode("alpha")
+        soft, k = Render.blur("far", 0.7)
+    end
 
     local plane = canvas('plate', w, h, true)
     love.graphics.setCanvas(plane)
@@ -668,9 +718,11 @@ local function plate(target, v, light, blur)
     love.graphics.push()
     love.graphics.scale(w / (v[3] - v[1]))
     love.graphics.translate(-v[1], -v[2])
-    Render.beginObjects(light, { w / 2, w * 0.45 })
+    Render.beginObjects(light, live and { (Tank.wx(C.LAMP_X) - sx0) * a, C.LAMP_CONE.bottom * C.S * a }
+        or { w / 2, w * 0.45 })
     drawProps(light)
-    drawCreatures(1, light)
+    drawCreatures(live and live.alpha or 1, light)
+    if live then lantern:draw(light) end
     love.graphics.pop()
     love.graphics.setShader()
 
@@ -700,6 +752,42 @@ local function sit(c, into)
     return plate(into or love.graphics.newCanvas(P.w * 2, P.h * 2), v, DayCycle.evaluate(PORTRAIT_HOUR), 2.2)
 end
 
+-- Terrarium: the close view (#120), onto `out` (the screen, if nil): what
+-- `base` would show on a w x h screen, as far in as the camera is. The whole
+-- finished frame goes onto a canvas of the screen's size, as a style and the
+-- glass make it, and is scaled by the camera; a plate of what the camera now
+-- shows, in the same place to the pixel, fades in over it, and once it has
+-- come up it's all there is. A frame comes through the seams of the jar's
+-- picture and a portrait's, so it's right in every style.
+local CLOSE_BLUR = 3
+local function drawClose(light, w, h, base, time, out)
+    local f = camera:fit(base, w, h)
+    local a = camera:sharp()
+    local whole, sharp
+    if a < 1 then
+        whole = canvas('whole', w, h)
+        drawScene(light)
+        love.graphics.setCanvas(whole)
+        love.graphics.clear(0, 0, 0, 1)
+        composite(nil, nil, nil, time, base)
+    end
+    if a > 0 then
+        sharp = plate(canvas('close', w, h), Camera.stretch(f, w, h), light, CLOSE_BLUR, { alpha = accumulator / STEP })
+    end
+    love.graphics.setCanvas(out)
+    love.graphics.setShader()
+    if whole then
+        local r = f.k / base.k
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(whole, f.x - r * base.x, f.y - r * base.y, 0, r, r)
+    end
+    if sharp then
+        love.graphics.setColor(1, 1, 1, a)
+        love.graphics.draw(sharp)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
 -- Whoever is due a portrait sits for it now (one at a time, now and then)
 function sitting()
     local n, c = pages:sitting()
@@ -716,8 +804,24 @@ function watchReplay(w, s)
         world, accumulator = w, 0
         startHour, daySeconds = DayCycle.presets.midday, C.DAY_SECONDS
         furnish()
+        camera:reset()
     end
-    drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, w.time, daySeconds)))
+    local light = DayCycle.evaluate(DayCycle.hourAt(startHour, w.time, daySeconds))
+    if args.close then
+        -- --close (#120): close up on each in turn, and all the way out between,
+        -- so it's watched coming in, held and going out
+        local turn = math.floor(s / 600)
+        lantern.who = turn % 3 < 2 and (turn % #w.creatures + 1) or nil
+        if lantern.who then camera:hold() end
+        lantern:update(WATCH * STEP, w)
+        camera:update(WATCH * STEP, lantern:following(w))
+        local width, height = love.graphics.getDimensions()
+        if camera:amount() > 0 then
+            drawClose(light, width, height, fitFor(width, height), w.time)
+            return
+        end
+    end
+    drawScene(light)
     composite(nil, nil, nil, w.time)
 end
 
@@ -737,6 +841,7 @@ function scriptApi()
         world = openJar(seed, startHour, daySeconds, level, cast)
         furnish()
         accumulator = 0
+        camera:reset()
         return world
     end
 
@@ -748,9 +853,29 @@ function scriptApi()
         return name
     end
 
+    -- Terrarium: a tap (#120). Come in close on creature `who` (an index or
+    -- the creature itself), the lantern with it, or with nil let go and ease
+    -- out. It eases as api.step moves the jar's time, so a capture is exact;
+    -- api.render shows it, whichever fit it's given.
+    local zoomed = false
+    function api.zoom(who)
+        zoomed = true
+        if who == nil then
+            lantern.who = nil
+            camera:letGo()
+            return
+        end
+        lantern.who = type(who) == 'table' and world:index_of(who) or who
+        camera:hold()
+    end
+
     -- Advance the jar by `seconds` of fixed steps
     function api.step(seconds)
         for _ = 1, math.max(1, math.floor(seconds / STEP + 0.5)) do step() end
+        if zoomed then
+            lantern:update(seconds, world)
+            camera:update(seconds, lantern:following(world))
+        end
     end
 
     -- Terrarium: come back to the open jar `seconds` after it was left (#31).
@@ -789,11 +914,24 @@ function scriptApi()
         local v = opts.view
         if not v then
             local fit, tab = opts.frame and Screen.tank(w, h) or opts.fit, pages and pages.tab
-            if pages and opts.frame then pages.tab = tabOn(fit, w, h) end
-            drawScene(light)
-            love.graphics.setCanvas({ target, stencil = true })
-            love.graphics.clear(0, 0, 0, 1)
-            if fit then
+            local close = camera:amount() > 0
+            if close then fit = fit or Screen.fit(w, h, C.W, C.H) end -- (a close view is always through one)
+            if pages and (opts.frame or camera:amount() > TUCK) then pages.tab = tabOn(fit, w, h) end
+            if close then
+                drawClose(light, w, h, fit, world.time, { target, stencil = true })
+            else
+                drawScene(light)
+                love.graphics.setCanvas({ target, stencil = true })
+                love.graphics.clear(0, 0, 0, 1)
+            end
+            if close then
+                if pages and pages.tab then
+                    Screen.push(fit)
+                    pages:drawTab()
+                    love.graphics.pop()
+                end
+                Screen.push(Screen.fit(w, h, C.W, C.H)) -- (the open book, as on a screen)
+            elseif fit then
                 -- (through a fit, core/screen.lua, as a screen of that shape shows it)
                 composite(nil, nil, nil, world.time, fit)
                 if pages and pages.tab then
@@ -873,8 +1011,13 @@ function love.draw()
     if not world then return end
     local t0 = bench and love.timer.getTime()
     -- Render reads the jar's clock; it never moves it
-    drawScene(DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds)))
-    composite(nil, nil, nil, nil, view)
+    local light = DayCycle.evaluate(DayCycle.hourAt(startHour, world.time + accumulator, daySeconds))
+    if camera:amount() > 0 and not passing then
+        drawClose(light, love.graphics.getWidth(), love.graphics.getHeight(), view)
+    else
+        drawScene(light)
+        composite(nil, nil, nil, nil, view)
+    end
     if pages and pages.tab then
         -- the book's ribbon, on the frame (its desk is off the screen)
         Screen.push(view)
@@ -920,8 +1063,8 @@ function love.resize(w, h)
     tuck()
 end
 
--- Click a creature to follow it with the lantern; click anywhere else to let
--- go. Right-click in the jar to drop in a pinch of food there (#25). On the
+-- Click a creature to follow it with the lantern and come in close; click
+-- anywhere else to let go and go out. Right-click in the jar to drop in a pinch of food there (#25). On the
 -- frame, the left button is a finger too: a touchscreen may come as a pointer.
 function love.mousepressed(x, y, button, istouch)
     if not world or capture or istouch or (passing and passing:catching()) then return end
@@ -942,7 +1085,7 @@ function love.mousereleased(x, y, button, istouch)
     if button == 1 and not istouch and touch:release('mouse', x, y) == 'tap' then followAt(x, y) end
 end
 
--- A tap follows, as a click does; a long press is a pinch (Touch:update)
+-- A tap follows and comes in close, as a click does; a long press is a pinch (Touch:update)
 function love.touchpressed(id, x, y)
     if world and not capture and not (passing and passing:catching()) then touch:press(id, x, y) end
 end
