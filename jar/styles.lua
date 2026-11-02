@@ -1,16 +1,21 @@
--- Terrarium: the jar's looks (#93, #94). A style is one pass over the finished
--- frame: the whole jar drawn, then the style, then the front glass bending it
--- and the room vignetting it (main.lua's composite). The window, --snap and a
--- capture script's frames and plates all go through it, so a capture shows
--- what the window shows.
+-- Terrarium: the jar's looks (#93, #94). A style is a pass over the finished
+-- frame, or a few: the whole jar drawn, then the style, then the front glass
+-- bending it and the room vignetting it (main.lua's composite). The window,
+-- --snap and a capture script's frames and plates all go through it, so a
+-- capture shows what the window shows.
 --
--- A style is {name, shader, setup(sh, w, h, time)}. `shader` is a file in
--- shaders/ (styles live in shaders/styles/), loaded through Render.shader, so
--- one that doesn't compile prints its error and the frame goes through as it
--- was. `setup` sends the shader what it needs for a w x h frame at `time`.
--- `none` has no shader: it's the jar as it has always looked, and the default.
+-- A style is {name, shader, setup(sh, w, h, time, frame)}. `shader` is a
+-- file in shaders/ (styles live in shaders/styles/), loaded through
+-- Render.shader, so one that doesn't compile prints its error and the frame
+-- goes through as it was. `setup` sends the shader what it needs for a w x h
+-- frame at `time`. A style that takes more than one pass lists them instead,
+-- `passes = {{shader, setup, scale}, ...}` (#96): each draws the one before
+-- it (the first draws the frame) onto a canvas `scale` times the frame's size
+-- (1 if absent), and `frame`, handed to every setup, is the jar as it was
+-- drawn. `none` has no shader: it's the jar as it has always looked, and the
+-- default.
 --
--- A style that needs more than one pass brings `draw(frame, time, kx, ky)`
+-- A style that draws its own way brings `draw(frame, time, kx, ky)`
 -- instead, and returns its canvas and the scale to draw that at. `kx`, `ky`
 -- are how many of the target's pixels a pixel of the frame covers, so it can
 -- draw at the target's own pixels and stay sharp (ascii's glyphs at 1080p).
@@ -19,15 +24,21 @@
 --
 -- A style is drawing only. It sees the frame's pixels and nothing of the
 -- World, so a jar hashes the same under every style (tests/ci.sh watches one
--- in a window under each of them).
+-- in a window under each of them). Nor does it read the clock for anything
+-- that moves: a still jar is a still picture.
 
 local Render = require('jar.render')
+local W = require('jar.config').W
 local Ascii = require('jar.ascii')
 local bit = require('bit')
 
 local Styles = {}
 
 Styles.DEFAULT = 'none'
+
+-- One pixel of the window's frame (C.W wide) in texture coordinates of a
+-- w x h frame, so a style looks the same at every size a script renders at
+function Styles.px(w, h) return { 1 / W, w / (W * h) } end
 
 -- What the front glass does to a frame after its style (main.lua's composite):
 -- the colour fringe toward its edges, the film's grain and the room's vignette. A
@@ -89,6 +100,11 @@ end
 -- edges there `line` as hard as a thing's own
 Styles.GROUND = { wash = 0.14, line = 0.2 }
 
+-- Under watercolour-each, how much the ground round the things in the jar is
+-- painted: a wash `deep` at most where it's darkest (0 is bare paper), and
+-- how hard its own wet edges are
+Styles.WASH = { deep = 0.38, edge = 1 }
+
 -- What both pencil passes are sent (shaders/styles/pencil_common.glsl)
 local function pencil(sh, w, h, time)
     sh:send('paper', paper())
@@ -107,6 +123,41 @@ Styles.list = {
     { name = 'silver', shader = 'styles/silver', setup = function(sh)
         sh:send('tone', 0.6)
     end },
+    -- The jar painted (#96). Its washes are the frame flattened at half size
+    -- (a Kuwahara filter: each pixel takes the calmest of the eight sectors
+    -- round it), bled a little past their lines. Then they're laid on paper:
+    -- pooled dark at their wet edges, mottled where the pigment dried
+    -- unevenly, settled into the paper's tooth where they're thick, over a
+    -- faint pencil underdrawing, with the lights left as paper and the glows
+    -- still glowing. All its noise is fixed to the frame.
+    -- (Paper takes no colour fringe or film grain, as pencil found.)
+    { name = 'watercolour', glass = { aberration = 0, grain = 0, vignette = 0.40 }, passes = {
+        { shader = 'styles/watercolour_wash', scale = 0.5, setup = function(sh, w, h)
+            sh:send('px', Styles.px(w, h))
+        end },
+        { shader = 'styles/watercolour', setup = function(sh, w, h, _, frame)
+            sh:send('frame', frame)
+            sh:send('px', Styles.px(w, h))
+        end },
+    } },
+    -- The jar painted a thing at a time (#96, after pencil-each won #95's
+    -- A/B): each creature, piece of scenery, stone, fern, the soil and the
+    -- moss painted on its own (`each`), its wash, glazes, blooms and
+    -- granulation anchored to it and its wet edge from its own silhouette,
+    -- so a creature carries its paint with it; a creature keeps every
+    -- marking and its eyes, a prop is a flat wash of its broad tone with a
+    -- rim, a far thing a paler wash. What's left is the ground, kept close
+    -- to the paper (WASH).
+    { name = 'watercolour-each', shader = 'styles/watercolour_ground',
+        glass = { aberration = 0, grain = 0, vignette = 0.12 },
+        setup = function(sh, w, h)
+            sh:send('px', Styles.px(w, h))
+            sh:send('ground', { Styles.WASH.deep, Styles.WASH.edge })
+        end,
+        each = { shader = 'styles/watercolour_body', setup = function(sh, w, h)
+            sh:send('size', { w, h })
+            sh:send('px', Styles.px(w, h))
+        end } },
     -- A sketchbook page (#95): the jar's edges in graphite, its shade
     -- hatched, crossed where it's dark, its light the bare paper. The
     -- hatching is anchored to the page and holds still; the line boils a
@@ -151,6 +202,13 @@ Styles.list = {
         each = { shader = 'styles/ascii_mark', lay = Ascii.lay, begin = Ascii.begin } },
 }
 
+-- A style's passes: its own list, or its one shader as a list of one
+function Styles.passes(s)
+    if s.passes then return s.passes end
+    if s.shader then return { { shader = s.shader, setup = s.setup } } end
+    return {}
+end
+
 local by_name = {}
 for i, s in ipairs(Styles.list) do
     s.index = i
@@ -184,7 +242,7 @@ function Styles.after(name)
 end
 
 -- One canvas per frame size: the window's, and each size a script renders at
--- (and another of each for a body drawn on its own)
+-- (another of each for each pass of a style, and one for a body drawn on its own)
 local canvases = {}
 local function canvas(w, h, what)
     local key = (what or '') .. w .. 'x' .. h
@@ -196,27 +254,38 @@ local function canvas(w, h, what)
 end
 
 -- The frame in style `name`, and the scale to draw it at: `frame` itself for
--- none (or a shader that failed to load), else a canvas of its size drawn
--- through the style's shader, or what the style's own `draw` makes of it at
--- `kx` x `ky` of the target's pixels to a frame pixel. It leaves the caller's
--- canvas, transform and shader as they were.
+-- none (or a style with a shader that failed to load), else a canvas of its
+-- size drawn through the style's passes, or what the style's own `draw` makes
+-- of it at `kx` x `ky` of the target's pixels to a frame pixel. It leaves the
+-- caller's canvas, transform and shader as they were.
 function Styles.apply(name, frame, time, kx, ky)
     local s = by_name[name]
     if s and s.draw then return s.draw(frame, time, kx, ky) end
-    local sh = s and s.shader and Render.shader(s.shader)
-    if not sh then return frame, 1, 1 end
+    local passes, shaders = s and Styles.passes(s) or {}, {}
+    if #passes == 0 then return frame, 1, 1 end
+    for i, p in ipairs(passes) do
+        shaders[i] = Render.shader(p.shader)
+        if not shaders[i] then return frame, 1, 1 end
+    end
     local w, h = frame:getDimensions()
-    local out = canvas(w, h)
+    local src = frame
     love.graphics.push('all')
-    love.graphics.setCanvas(out)
     love.graphics.origin()
-    love.graphics.clear(0, 0, 0, 1)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.setShader(sh)
-    if s.setup then s.setup(sh, w, h, time) end
-    love.graphics.draw(frame)
+    for i, p in ipairs(passes) do
+        local k = p.scale or 1
+        local out = canvas(math.floor(w * k + 0.5), math.floor(h * k + 0.5), 'pass' .. i)
+        local ow, oh = out:getDimensions()
+        local sw, sh = src:getDimensions()
+        love.graphics.setCanvas(out)
+        love.graphics.clear(0, 0, 0, 1)
+        love.graphics.setShader(shaders[i])
+        if p.setup then p.setup(shaders[i], w, h, time, frame) end
+        love.graphics.draw(src, 0, 0, 0, ow / sw, oh / sh)
+        src = out
+    end
     love.graphics.pop()
-    return out, 1, 1
+    return src, 1, 1
 end
 
 -- Whether style `name` draws each creature on its own (pencil-each)
