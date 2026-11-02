@@ -27,6 +27,8 @@
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to the first of a plan
 --   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
+--   lovec . --follow <who> --close        Terrarium: open close up on them (#120), for --bench and --snap;
+--                                         with --replay and --window, watch the jar's runs close up
 --   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
 --                                         jar/styles.lua; Tab cycles them in play)
 --   lovec . --styles                      Terrarium: list the styles, one a line
@@ -89,6 +91,7 @@ function dev.parse(args)
         elseif a == '--hour' then o.hour = args[i + 1]; i = i + 1
         elseif a == '--day' then o.day = tonumber(args[i + 1]); i = i + 1
         elseif a == '--follow' then o.follow = args[i + 1]; i = i + 1
+        elseif a == '--close' then o.close = true
         elseif a == '--mute' then o.mute = true
         elseif a == '--style' then o.style = args[i + 1]; i = i + 1
         elseif a == '--styles' then o.styles = true
@@ -527,6 +530,166 @@ test('frame', function(_, results)
     end
     log.info('selftest', 'frame        1280x720 crops (0, %d) in a window; on the frame the glass fills it at %.3f, '
         .. 'sides giving way; taps, holds and slides read', f.y, t.k)
+end)
+
+-- Terrarium: a closer look (#120). The camera is a fit and nothing else, so all
+-- of this is arithmetic and needs no window: it comes in over about half a
+-- second, from exactly the whole jar to a close fit with the creature in the
+-- middle of it; a tap at a creature's drawn position picks it and a pinch lands
+-- under the finger, in every fit and all the way through the ease; a tap on
+-- another moves to it, a tap beside one is away from it, and one going back to
+-- the moss leaves it easing out. Watching close up changes nothing in a jar.
+test('zoom', function(j, results)
+    local C, Screen, Tank = require('jar.config'), require('core.screen'), require('jar.tank')
+    local Camera, Lantern = require('jar.camera'), require('jar.lantern')
+    local statehash = require('core.statehash')
+    local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
+
+    -- Two bodies side by side, and a third up in the far corner
+    local function body(x, y, r)
+        local pts = {}
+        for k = 1, 6 do
+            local a = k / 6 * 2 * math.pi
+            pts[k] = { x = x + r * math.cos(a), y = y + r * math.sin(a) }
+        end
+        return { interp_points = function() return pts end, x = x, y = y }
+    end
+    local world = { creatures = { body(600, 700, 24), body(680, 700, 24), body(1800, 200, 24) } }
+    local function drawn(f, lx, ly)
+        local vx, vy = Tank.level(lx, ly)
+        return vx * f.k + f.x, vy * f.k + f.y
+    end
+    local near = function(a, b, by) return math.abs(a - b) < (by or 1e-6) end
+
+    local shapes = {
+        { 'a window', 1280, 800, Screen.fit(1280, 800, C.W, C.H) },
+        { 'a 1080p window', 1920, 1080, Screen.fit(1920, 1080, C.W, C.H) },
+        { 'a window with bars', 1280, 1024, Screen.fit(1280, 1024, C.W, C.H) },
+        { 'the frame', 1280, 720, Screen.tank(1280, 720) },
+    }
+    local closest = 0
+    for _, shape in ipairs(shapes) do
+        local name, w, h, base = shape[1], shape[2], shape[3], shape[4]
+        local cam, lantern = Camera.new(), Lantern.new()
+        local function tap(x, y)
+            local lx, ly = cam:toLevel(base, w, h, x, y)
+            if lantern:pick(world, lx, ly, cam:reach(base, w, h)) then cam:hold() else cam:letGo() end
+        end
+        check(results, cam:fit(base, w, h) == base, 'zoom: on %s it starts somewhere other than the whole jar', name)
+
+        -- a tap at where the first is drawn picks it, and it's all the way in by half a second
+        tap(drawn(base, world.creatures[1].x + 24, world.creatures[1].y))
+        check(results, lantern.who == 1 and cam.on, 'zoom: on %s a tap on a creature did not pick it', name)
+        local t, last, onward = 0, base.k, true
+        while cam.z < 1 and t < 2 do
+            cam:update(1 / 60, lantern:following(world))
+            t = t + 1 / 60
+            local f = cam:fit(base, w, h)
+            onward = onward and f.k >= last - 1e-9
+            last = f.k
+            -- (and all the way through the ease, the jar is under the finger)
+            local sx, sy = drawn(f, 610, 690)
+            local lx, ly = cam:toLevel(base, w, h, sx, sy)
+            check(results, near(lx, 610) and near(ly, 690),
+                'zoom: on %s at %.2f in, a tap on (610, 690) lands at (%.3f, %.3f)', name, cam.z, lx, ly)
+        end
+        check(results, onward, 'zoom: on %s the view backed away as it came in', name)
+        check(results, t > 0.4 and t < 0.65, 'zoom: on %s it took %.2f s to come in', name, t)
+
+        -- in close: the creature in the middle, much bigger, the frame all round it
+        local f = cam:fit(base, w, h)
+        closest = math.max(closest, f.k / base.k)
+        check(results, f.k > base.k * 4, 'zoom: on %s it only comes in %.1f times', name, f.k / base.k)
+        local cx, cy = drawn(f, cam.x, cam.y)
+        check(results, near(cx, w / 2, 1) and near(cy, h * Camera.LOW, 1),
+            'zoom: on %s the creature stands at (%.0f, %.0f)', name, cx, cy)
+        local x0, y0 = Screen.toView(f, 0, 0)
+        local x1, y1 = Screen.toView(f, w, h)
+        check(results, x0 >= -1e-6 and y0 >= -1e-6 and x1 <= C.W + 1e-6 and y1 <= C.H + 1e-6,
+            'zoom: on %s the close view shows (%.0f, %.0f)-(%.0f, %.0f), past the frame', name, x0, y0, x1, y1)
+        local v = Camera.stretch(f, w, h)
+        check(results, near((v[3] - v[1]) / (v[4] - v[2]), w / h),
+            "zoom: on %s the plate's stretch is not the screen's shape", name)
+        local vx, vy = Tank.level(v[1], v[2])
+        check(results, near(vx * f.k + f.x, 0) and near(vy * f.k + f.y, 0),
+            "zoom: on %s the plate's corner isn't the screen's", name)
+
+        -- close up, it stays with them as they walk
+        local mover = world.creatures[1]
+        for _, p in ipairs(mover.interp_points()) do p.x = p.x + 30 end
+        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+        check(results, near(cam.x, 630, 0.1), 'zoom: on %s it stayed at %.1f, not with them at 630', name, cam.x)
+        for _, p in ipairs(mover.interp_points()) do p.x = p.x - 30 end
+        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+
+        -- a tap in its middle is on it (a blob's points are all on its rim)
+        f = cam:fit(base, w, h)
+        local lx, ly = cam:toLevel(base, w, h, drawn(f, 600, 700))
+        check(results, Lantern.creatureAt(world, lx, ly, cam:reach(base, w, h)) == 1,
+            'zoom: on %s a tap on the middle of a body misses it', name)
+
+        -- a pinch falls under the finger, and a tap on the other moves to it
+        check(results, near(cam:toLevel(base, w, h, drawn(f, 640, 650)), 640),
+            'zoom: on %s a pinch at x 640 falls elsewhere', name)
+        local sx, sy = drawn(f, 680 - 24, 700)
+        check(results, sx > 0 and sx < w and sy > 0 and sy < h,
+            'zoom: on %s the next one along (at %.0f) is off the close view', name, sx)
+        tap(sx, sy)
+        check(results, lantern.who == 2 and cam.on, 'zoom: on %s a tap on another creature picked %s', name, tostring(lantern.who))
+        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+        check(results, near(cam.x, 680, 0.1), 'zoom: on %s it stayed at %.1f, not with the new one at 680', name, cam.x)
+
+        -- a tap on nothing lets go; the whole jar again in half a second, and exactly
+        f = cam:fit(base, w, h)
+        v = Camera.stretch(f, w, h)
+        local ax, ay = Tank.level(cam.x, cam.y - (v[4] - v[2]) * 0.45)
+        tap(ax * f.k + f.x, ay * f.k + f.y)
+        check(results, not cam.on and lantern.who == nil, 'zoom: on %s a tap on empty glass did not let go', name)
+        for _ = 1, 31 do cam:update(1 / 60, lantern:following(world)) end
+        check(results, cam:fit(base, w, h) == base, 'zoom: on %s a tap away did not come back to the whole jar', name)
+
+        -- going back to the moss: the one looked at lets go and it eases out
+        -- from where it was, and one before it being taken out changes nothing
+        tap(drawn(base, 1800 - 24, 200))
+        check(results, lantern.who == 3, 'zoom: on %s the far one was not picked', name)
+        for _ = 1, 40 do cam:update(1 / 60, lantern:following(world)) end
+        lantern:forget(1)
+        check(results, lantern.who == 2, 'zoom: on %s the followed one was not kept up with', name)
+        lantern:forget(2)
+        cam:update(1 / 60, lantern:following(world))
+        check(results, not cam.on and cam.z > 0.9 and near(cam.x, 1800, 1),
+            'zoom: on %s one going back to the moss left it at %.2f on %.0f', name, cam.z, cam.x or -1)
+        for _ = 1, 31 do cam:update(1 / 60, nil) end
+        check(results, cam:fit(base, w, h) == base, 'zoom: on %s it did not ease out after a return to the moss', name)
+    end
+
+    -- Watching close up, every body in turn, changes nothing in a real jar
+    local function watched(close)
+        rng.seed(42)
+        local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
+        local lantern, cam = Lantern.new(), Camera.new()
+        local base = Screen.tank(1280, 720)
+        for s = 1, 2400 do
+            w:step(fixed_dt)
+            if close and s % 2 == 0 then
+                if s % 600 == 0 then
+                    local x, y = w.creatures[s / 600 % #w.creatures + 1]:anchor()
+                    if lantern:pick(w, x, y) then cam:hold() else cam:letGo() end
+                end
+                lantern:update(1 / 60, w)
+                cam:update(1 / 60, lantern:following(w))
+                local f = cam:fit(base, 1280, 720)
+                check(results, f.k == f.k and f.x == f.x and f.y == f.y, 'zoom: a live jar gave the camera a NaN at step %d', s)
+            end
+        end
+        return statehash.of(w).total, cam.z
+    end
+    local plain = watched(false)
+    local looked, z = watched(true)
+    check(results, z > 0, 'zoom: the camera never came in on a live jar')
+    check(results, plain == looked, 'zoom: looking closer changed the jar, %s vs %s', plain, looked)
+    log.info('selftest', 'zoom         in and out in %.1f s, up to %.1f times; taps and pinches land under the finger in every fit; '
+        .. 'watching changes nothing', Camera.EASE, closest)
 end)
 
 -- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole
