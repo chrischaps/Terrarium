@@ -54,6 +54,18 @@ A style is an entry in `Styles.list` (`jar/styles.lua`) with its shader in `shad
 - **`Styles.LOOK.moss`** is the moss's own look. To pencil it's the same four numbers as a prop. Ascii sets it as grass.
 - **The A/B harness:** `lovec . --script scripts/pencil_ab.lua` films the creature that moves furthest, with the camera held still, two styles side by side. Copy it and change the two names to A/B your own variants. Chris tested the result in play, flipping with Tab.
 
+## Watercolour on the same seam (#96)
+
+Watercolour started as a filter on the whole frame (`watercolour`). After Chris's review asked for the per-thing approach pencil settled on, it gained `watercolour-each`, built on this seam rather than beside it. What carried over, and what a paint look needed on top:
+
+- **The paint rides on the thing.** `watercolour_body.glsl` anchors everything that belongs to the pigment to the thing's middle, as pencil's hatching is: the bleed (its outline moved by noise, so colour runs past the line), the glazes, the blooms and the granulation. Only the paper's own tooth stays on the page.
+- **The wet edge comes from the thing's own alpha.** It is a ring of its coverage a few px in, not an edge filter on the frame, so a creature's rim is always closed and never doubled by what's behind it.
+- **A prop's broad tone needs a real average.** Eight taps of a pebbly texture still read as pebbles. `broad` takes 16 taps on a sunflower spiral, turned by noise on the thing, so what it misses reads as uneven pigment, not texture.
+- **A wash is opaque where it lies.** A soft or translucent edge (the blob's jelly) is taken whole (`smoothstep(0.03, 0.4, a)`), which also keeps the photo from leaking through partial alpha.
+- **The ground stays paper at night too,** as in pencil-each. A steep night wash only on dark ground made a dark frame round a pale jar, because the room is darker than the jar's air. A pale wash of the night's own colour, deeper by up to 1.8×, reads as night and stays quiet.
+- **Partially covered pixels belong to the thing.** The ground pass reads the ground's colour only from wholly-ground pixels (`smoothstep(0.85, 1, a)`). Otherwise every thing gets a pale halo of its own paint.
+- **The two watercolours share `watercolour_common.glsl`** (paper, noise, pigment, glazes). `scripts/watercolour_ab.lua` is pencil's A/B harness with the two names changed.
+
 ## Traps
 
 > **Partial alpha leaks the photo.** Wherever the frame's alpha is between 0 and 1, the frame pass mixes its drawing with the photo underneath. A blurred layer (the depth of field) or a soft-edged sprite drawn over a per-thing body leaves grey smudges. Draw such layers on their own too, or sharp, or not at all.
@@ -66,7 +78,7 @@ A style is an entry in `Styles.list` (`jar/styles.lua`) with its shader in `shad
 
 > **LÖVE throws on `send` to a uniform the compiler removed.** A debug early-`return` in a shader then crashes the style's `setup`. Blend the probe in instead (`probe + 0.001 * normal`), so every uniform stays live.
 
-> **GLSL builtins:** `noise1`/`noise2` are reserved names, so name your own differently.
+> **GLSL builtins:** `noise1`/`noise2` are reserved names, so name your own differently. A local variable with the same name as an included function (`tooth`) hides it, so rename one.
 
 > **Nothing from the clock that should hold still.** Pencil's hatching never reads `time`, and only the line boils (4 drawings a second). Check it the way #95 did: style one frame at several jar times and count the changed pixels. Within one drawing, none should change.
 
@@ -76,4 +88,4 @@ A style is an entry in `Styles.list` (`jar/styles.lua`) with its shader in `shad
 - `lovec . --replay 60` and `lovec . --replay 60 --window --style <yours>` print the same hash, because watching must change nothing. CI checks every style this way.
 - `lovec . --script scripts/styles.lua` (day, night, close-up) and `lovec . --style <yours> --script scripts/lineup.lua`: the five families must still be told apart.
 - `none` and the other styles still render byte for byte as before. Script captures are deterministic, so compare the PNGs.
-- `--bench 10` against `--style none`. Per-thing drawing costs a pass per thing: pencil-each runs about 2.5 ms over none on the desktop, and the Pi is unmeasured.
+- `--bench 10` against `--style none`. Per-thing drawing costs a pass per thing: pencil-each runs about 2.5 ms over none on the desktop, and the Pi is unmeasured. On a shared machine `--bench` swings with what else is running. A script that renders one moment in each style in turn and reads a pixel back after each gives steadier numbers: on the RTX 5070 Laptop, watercolour-each ran about 2.2 ms over none and pencil-each about 0.8 ms.
