@@ -98,7 +98,7 @@ if [ -n "${WINDOW:-}" ]; then
     done
 
     echo "== a jar watched close up, against a jar with none (#120)"
-    for style in none pencil-each ascii-each; do
+    for style in none pencil-each ascii-each watercolour-each; do
         w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --close --style "$style")
         if [ -n "$w" ] && [ "$w" = "$h" ]; then
             echo "window: watched close up in $style and unwatched both hash $w"
