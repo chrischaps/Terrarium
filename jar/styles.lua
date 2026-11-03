@@ -22,6 +22,9 @@
 -- One with a size to it brings `adjust(dir)` ([ and ] in play) and `label()`,
 -- what the corner says it is.
 --
+-- `ring` is the hand the loupe's rings are drawn in over a style's frame
+-- (jar/loupe.lua, #122): `brass` if absent, or `pencil`, `wash` or `type`.
+--
 -- A style is drawing only. It sees the frame's pixels and nothing of the
 -- World, so a jar hashes the same under every style (tests/ci.sh watches one
 -- in a window under each of them). Nor does it read the clock for anything
@@ -131,7 +134,7 @@ Styles.list = {
     -- faint pencil underdrawing, with the lights left as paper and the glows
     -- still glowing. All its noise is fixed to the frame.
     -- (Paper takes no colour fringe or film grain, as pencil found.)
-    { name = 'watercolour', glass = { aberration = 0, grain = 0, vignette = 0.40 }, passes = {
+    { name = 'watercolour', ring = 'wash', glass = { aberration = 0, grain = 0, vignette = 0.40 }, passes = {
         { shader = 'styles/watercolour_wash', scale = 0.5, setup = function(sh, w, h)
             sh:send('px', Styles.px(w, h))
         end },
@@ -148,7 +151,7 @@ Styles.list = {
     -- marking and its eyes, a prop is a flat wash of its broad tone with a
     -- rim, a far thing a paler wash. What's left is the ground, kept close
     -- to the paper (WASH).
-    { name = 'watercolour-each', shader = 'styles/watercolour_ground',
+    { name = 'watercolour-each', ring = 'wash', shader = 'styles/watercolour_ground',
         glass = { aberration = 0, grain = 0, vignette = 0.12 },
         setup = function(sh, w, h)
             sh:send('px', Styles.px(w, h))
@@ -163,7 +166,7 @@ Styles.list = {
     -- hatching is anchored to the page and holds still; the line boils a
     -- little, as a drawn line does. Paper takes no fringe or film grain.
     -- The whole finished frame is drawn at once.
-    { name = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.40 },
+    { name = 'pencil', ring = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.40 },
         setup = function(sh, w, h, time)
             pencil(sh, w, h, time)
             sh:send('masked', 0)
@@ -176,7 +179,7 @@ Styles.list = {
     -- is the ground they're drawn on: the room, the air and the far side of
     -- the jar, kept to the paper, a faint wash of graphite where it's dark
     -- (GROUND.wash) and its edges a faint line (GROUND.line).
-    { name = 'pencil-each', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.12 },
+    { name = 'pencil-each', ring = 'pencil', shader = 'styles/pencil', glass = { aberration = 0, grain = 0, vignette = 0.12 },
         setup = function(sh, w, h, time)
             pencil(sh, w, h, time)
             sh:send('masked', 1)
@@ -188,7 +191,7 @@ Styles.list = {
     -- where an edge runs through it, inked in the cell's colour. No fringe:
     -- the glass would split a glyph's fine strokes into their colours.
     -- The whole finished frame is set at once.
-    { name = 'ascii', shader = 'styles/ascii', draw = Ascii.draw,
+    { name = 'ascii', ring = 'type', shader = 'styles/ascii', draw = Ascii.draw,
         adjust = Ascii.step, label = Ascii.label, glass = { aberration = 0, grain = 0.010, vignette = 0.40 } },
     -- The same grid with each thing in the jar set by what it is (#97, after
     -- pencil-each): every thing is laid in as it is, and marked on a map of
@@ -197,7 +200,7 @@ Styles.list = {
     -- colour, never the moss's behind it; the moss is grass; a prop is its
     -- outline, its inside at most two steps of dots; a far thing a faint
     -- outline; and the ground, the room and the air, all but bare.
-    { name = 'ascii-each', shader = 'styles/ascii', draw = Ascii.draw_each,
+    { name = 'ascii-each', ring = 'type', shader = 'styles/ascii', draw = Ascii.draw_each,
         adjust = Ascii.step, label = Ascii.label, glass = { aberration = 0, grain = 0, vignette = 0.25 },
         each = { shader = 'styles/ascii_mark', lay = Ascii.lay, begin = Ascii.begin } },
 }
@@ -221,6 +224,12 @@ function Styles.get(name) return by_name[name] end
 function Styles.glass(name)
     local s = by_name[name]
     return s and s.glass or Styles.GLASS
+end
+
+-- The hand the loupe's rings are drawn in over style `name` (jar/loupe.lua)
+function Styles.ring(name)
+    local s = by_name[name]
+    return s and s.ring or 'brass'
 end
 
 -- What the corner calls style `name` when it's switched to or resized

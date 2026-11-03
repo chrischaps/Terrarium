@@ -27,8 +27,8 @@
 --   lovec . --day <sec>                   Terrarium: a day lasts <sec> (time-compressed)
 --   lovec . --follow <who>                Terrarium: hold the lantern up to the first of a plan
 --   lovec . --mute                        Terrarium: open the jar hushed (m to listen)
---   lovec . --follow <who> --close        Terrarium: open close up on them (#120), for --bench and --snap;
---                                         with --replay and --window, watch the jar's runs close up
+--   lovec . --follow <who> --close        Terrarium: open with the loupe on them (#120), for --bench and --snap;
+--                                         with --replay and --window, watch the jar's runs through it
 --   lovec . --style <name>                Terrarium: draw the finished frame in a style (#94,
 --                                         jar/styles.lua; Tab cycles them in play)
 --   lovec . --styles                      Terrarium: list the styles, one a line
@@ -532,20 +532,23 @@ test('frame', function(_, results)
         .. 'sides giving way; taps, holds and slides read', f.y, t.k)
 end)
 
--- Terrarium: a closer look (#120). The camera is a fit and nothing else, so all
--- of this is arithmetic and needs no window: it comes in over about half a
--- second, from exactly the whole jar to a close fit with the creature in the
--- middle of it; a tap at a creature's drawn position picks it and a pinch lands
--- under the finger, in every fit and all the way through the ease; a tap on
--- another moves to it, a tap beside one is away from it, and one going back to
--- the moss leaves it easing out. Watching close up changes nothing in a jar.
+-- Terrarium: a closer look (#120, #122). The loupe is numbers and nothing else, so
+-- all of this needs no window. It opens over about half a second, growing out of
+-- a ring on the creature, to a lens in a corner of what the screen shows, across
+-- the jar's middle from them and clear of the book and its ribbon; the ring holds
+-- what the lens shows, enlarged, and two lines touch both. The view never moves,
+-- so a tap at a creature's drawn position picks it, anywhere in the jar and all
+-- the way through the ease, and a pinch lands under the finger. It stays with
+-- them, crosses to the other corner when they cross the middle, with no jump and
+-- no dither; a tap on the lens lets go, whoever is behind it, and so does a tap on
+-- nothing, or one going back to the moss. Watching changes nothing in a jar.
 test('zoom', function(j, results)
     local C, Screen, Tank = require('jar.config'), require('core.screen'), require('jar.tank')
-    local Camera, Lantern = require('jar.camera'), require('jar.lantern')
+    local Camera, Lantern, Pages = require('jar.camera'), require('jar.lantern'), require('jar.pages')
     local statehash = require('core.statehash')
     local World, level_data, fixed_dt = j.World, j.level_data, j.fixed_dt
 
-    -- Two bodies side by side, and a third up in the far corner
+    -- Two bodies side by side low on the left, and a third up on the right
     local function body(x, y, r)
         local pts = {}
         for k = 1, 6 do
@@ -554,12 +557,35 @@ test('zoom', function(j, results)
         end
         return { interp_points = function() return pts end, x = x, y = y }
     end
-    local world = { creatures = { body(600, 700, 24), body(680, 700, 24), body(1800, 200, 24) } }
+    local world = { creatures = { body(600, 700, 24), body(680, 700, 24), body(1800, 560, 24) } }
     local function drawn(f, lx, ly)
         local vx, vy = Tank.level(lx, ly)
         return vx * f.k + f.x, vy * f.k + f.y
     end
     local near = function(a, b, by) return math.abs(a - b) < (by or 1e-6) end
+    local function apart(ax, ay, bx, by) return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2) end
+    local function run(cam, lantern, seconds)
+        for _ = 1, math.floor(seconds * 60 + 0.5) do cam:update(1 / 60, lantern:following(world)) end
+    end
+
+    -- The two lines touch both circles, and each stands square to the radius it meets
+    for _, q in ipairs({ { x = 900, y = 100, r = 120 }, { x = 100, y = 90, r = 120 }, { x = 330, y = 520, r = 60 } }) do
+        local p = { x = 300, y = 500, r = 40 }
+        local a1x, a1y, a2x, a2y, b1x, b1y, b2x, b2y = Camera.tangents(p, q)
+        check(results, a1x ~= nil, 'zoom: two circles apart had no lines')
+        if a1x then
+            for _, l in ipairs({ { a1x, a1y, a2x, a2y }, { b1x, b1y, b2x, b2y } }) do
+                check(results, near(apart(l[1], l[2], p.x, p.y), p.r) and near(apart(l[3], l[4], q.x, q.y), q.r),
+                    'zoom: a line does not meet both rings')
+                check(results, near((l[3] - l[1]) * (l[1] - p.x) + (l[4] - l[2]) * (l[2] - p.y), 0, 1e-6)
+                    and near((l[3] - l[1]) * (l[3] - q.x) + (l[4] - l[2]) * (l[4] - q.y), 0, 1e-6),
+                    'zoom: a line crosses a ring instead of touching it')
+            end
+            check(results, near(a1x, b1x) == false or near(a1y, b1y) == false, 'zoom: the two lines are one line')
+        end
+    end
+    check(results, Camera.tangents({ x = 0, y = 0, r = 100 }, { x = 5, y = 0, r = 10 }) == nil,
+        'zoom: a circle inside another has lines to it')
 
     local shapes = {
         { 'a window', 1280, 800, Screen.fit(1280, 800, C.W, C.H) },
@@ -567,92 +593,175 @@ test('zoom', function(j, results)
         { 'a window with bars', 1280, 1024, Screen.fit(1280, 1024, C.W, C.H) },
         { 'the frame', 1280, 720, Screen.tank(1280, 720) },
     }
-    local closest = 0
+    local nearest, widest = math.huge, 0
     for _, shape in ipairs(shapes) do
         local name, w, h, base = shape[1], shape[2], shape[3], shape[4]
         local cam, lantern = Camera.new(), Lantern.new()
+        -- (as main.lua's followAt)
         local function tap(x, y)
-            local lx, ly = cam:toLevel(base, w, h, x, y)
-            if lantern:pick(world, lx, ly, cam:reach(base, w, h)) then cam:hold() else cam:letGo() end
+            if cam:over(base, w, h, x, y) then
+                lantern.who = nil
+                cam:letGo()
+            elseif lantern:pick(world, Tank.toLevel(Screen.toView(base, x, y))) then
+                cam:hold()
+            else
+                cam:letGo()
+            end
         end
-        check(results, cam:fit(base, w, h) == base, 'zoom: on %s it starts somewhere other than the whole jar', name)
+        local function jarAt(x, y) return Tank.toLevel(Screen.toView(base, x, y)) end
+        -- What the screen shows of the picture
+        local px0, py0 = math.max(0, base.x), math.max(0, base.y)
+        local px1, py1 = math.min(w, base.x + C.W * base.k), math.min(h, base.y + C.H * base.k)
+        check(results, cam:amount() == 0 and not cam:over(base, w, h, w / 2, h / 2),
+            'zoom: on %s it starts open', name)
 
-        -- a tap at where the first is drawn picks it, and it's all the way in by half a second
+        -- a tap at where the first is drawn picks it, and it's all the way open by half a second
         tap(drawn(base, world.creatures[1].x + 24, world.creatures[1].y))
         check(results, lantern.who == 1 and cam.on, 'zoom: on %s a tap on a creature did not pick it', name)
-        local t, last, onward = 0, base.k, true
+        cam:update(1e-3, lantern:following(world))
+        local inset = cam:inset(base, w, h)
+        check(results, near(inset.lens.x, inset.ring.x, 1) and near(inset.lens.y, inset.ring.y, 1)
+            and near(inset.lens.r, inset.ring.r, 1), 'zoom: on %s the lens did not start as the ring', name)
+        local t, last, onward = 0, inset.lens.r, true
         while cam.z < 1 and t < 2 do
             cam:update(1 / 60, lantern:following(world))
             t = t + 1 / 60
-            local f = cam:fit(base, w, h)
-            onward = onward and f.k >= last - 1e-9
-            last = f.k
-            -- (and all the way through the ease, the jar is under the finger)
-            local sx, sy = drawn(f, 610, 690)
-            local lx, ly = cam:toLevel(base, w, h, sx, sy)
+            inset = cam:inset(base, w, h)
+            onward = onward and inset.lens.r >= last - 1e-9
+            last = inset.lens.r
+            -- (and all the way through, the jar is under the finger, and the ring on the creature)
+            local lx, ly = jarAt(drawn(base, 610, 690))
             check(results, near(lx, 610) and near(ly, 690),
-                'zoom: on %s at %.2f in, a tap on (610, 690) lands at (%.3f, %.3f)', name, cam.z, lx, ly)
+                'zoom: on %s at %.2f open, a tap on (610, 690) lands at (%.3f, %.3f)', name, cam.z, lx, ly)
+            local rx, ry = drawn(base, cam.x, cam.y)
+            check(results, near(inset.ring.x, rx) and near(inset.ring.y, ry),
+                'zoom: on %s at %.2f open, the ring has left the creature', name, cam.z)
         end
-        check(results, onward, 'zoom: on %s the view backed away as it came in', name)
-        check(results, t > 0.4 and t < 0.65, 'zoom: on %s it took %.2f s to come in', name, t)
+        check(results, onward, 'zoom: on %s the lens shrank as it opened', name)
+        check(results, t > 0.4 and t < 0.65, 'zoom: on %s it took %.2f s to open', name, t)
 
-        -- in close: the creature in the middle, much bigger, the frame all round it
-        local f = cam:fit(base, w, h)
-        closest = math.max(closest, f.k / base.k)
-        check(results, f.k > base.k * 4, 'zoom: on %s it only comes in %.1f times', name, f.k / base.k)
-        local cx, cy = drawn(f, cam.x, cam.y)
-        check(results, near(cx, w / 2, 1) and near(cy, h * Camera.LOW, 1),
-            'zoom: on %s the creature stands at (%.0f, %.0f)', name, cx, cy)
-        local x0, y0 = Screen.toView(f, 0, 0)
-        local x1, y1 = Screen.toView(f, w, h)
-        check(results, x0 >= -1e-6 and y0 >= -1e-6 and x1 <= C.W + 1e-6 and y1 <= C.H + 1e-6,
-            'zoom: on %s the close view shows (%.0f, %.0f)-(%.0f, %.0f), past the frame', name, x0, y0, x1, y1)
-        local v = Camera.stretch(f, w, h)
-        check(results, near((v[3] - v[1]) / (v[4] - v[2]), w / h),
-            "zoom: on %s the plate's stretch is not the screen's shape", name)
-        local vx, vy = Tank.level(v[1], v[2])
-        check(results, near(vx * f.k + f.x, 0) and near(vy * f.k + f.y, 0),
-            "zoom: on %s the plate's corner isn't the screen's", name)
+        -- open: the lens at its corner, across the middle from them, whole, and not too big
+        inset = cam:inset(base, w, h)
+        local lens, ring = inset.lens, inset.ring
+        local short = math.min(px1 - px0, py1 - py0)
+        check(results, near(lens.x, inset.corner.x) and near(lens.y, inset.corner.y) and near(lens.r, inset.R),
+            'zoom: on %s open, the lens is not at its corner', name)
+        check(results, lens.x - lens.r >= px0 and lens.x + lens.r <= px1 and lens.y - lens.r >= py0 and lens.y + lens.r <= py1,
+            'zoom: on %s the lens (%.0f, %.0f r %.0f) is off what the screen shows', name, lens.x, lens.y, lens.r)
+        check(results, 2 * lens.r <= short * 0.34, 'zoom: on %s the lens is %.0f across, on a picture %.0f high', name, 2 * lens.r, short)
+        check(results, (lens.x > w / 2) ~= (ring.x > w / 2), 'zoom: on %s the lens is on the same side as the creature', name)
 
-        -- close up, it stays with them as they walk
+        -- what it shows: the ring's stretch, square and centred on them, and enlarged
+        local v = inset.view
+        check(results, near(v[3] - v[1], v[4] - v[2]) and near((v[1] + v[3]) / 2, cam.x) and near((v[2] + v[4]) / 2, cam.y),
+            "zoom: on %s the plate's stretch isn't square on the creature", name)
+        local ax = drawn(base, v[1], cam.y)
+        check(results, near(ring.x - ax, ring.r), "zoom: on %s the ring doesn't hold what the lens shows", name)
+        nearest = math.min(nearest, inset.R / ring.r)
+        widest = math.max(widest, inset.R / ring.r)
+        check(results, inset.R / ring.r >= Camera.POWER - 1e-6, 'zoom: on %s it only enlarges %.2f times', name, inset.R / ring.r)
+        check(results, inset.size == 2 * inset.R and inset.R == math.floor(inset.R), "zoom: on %s the lens's plate isn't a whole size", name)
+
+        -- a long worm laid out still shows enlarged, running off the lens
+        local long = setmetatable({ on = true, z = 1, side = 1, swing = 1, x = 600, y = 700, bw = 900, bh = 40 }, Camera)
+        local li = long:inset(base, w, h)
+        check(results, near(li.R / li.ring.r, Camera.POWER), 'zoom: on %s a long body is shown %.2f times', name, li.R / li.ring.r)
+
+        -- clear of the closed book and the ribbon on a finger's room round it
+        local tab = { x = w - Pages.TAB_X, y = h - 100 }
+        check(results, lens.y + lens.r < tab.y or lens.x + lens.r < tab.x - 44,
+            "zoom: on %s the lens is on the book's ribbon", name)
+        local b0x, b0y = Pages.closedRect()
+        check(results, lens.y + lens.r < b0y * base.k + base.y, 'zoom: on %s the lens is on the closed book', name)
+
+        -- it stays with them as they walk
         local mover = world.creatures[1]
-        for _, p in ipairs(mover.interp_points()) do p.x = p.x + 30 end
-        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+        local function shift(dx)
+            for _, p in ipairs(mover.interp_points()) do p.x = p.x + dx end
+        end
+        shift(30)
+        run(cam, lantern, 2)
         check(results, near(cam.x, 630, 0.1), 'zoom: on %s it stayed at %.1f, not with them at 630', name, cam.x)
-        for _, p in ipairs(mover.interp_points()) do p.x = p.x - 30 end
-        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+
+        -- pottering about in the middle doesn't send it back and forth
+        local home = cam:inset(base, w, h).corner.x
+        shift(1000 - 630)
+        run(cam, lantern, 2)
+        local c = cam:inset(base, w, h).corner.x
+        check(results, near(c, home), 'zoom: on %s a creature on the middle moved the lens', name)
+
+        -- crossing it, the lens goes to the other corner, with no jump
+        shift(400)
+        local was, far, moved = cam:inset(base, w, h).lens.x, 0, 0
+        for _ = 1, 120 do
+            cam:update(1 / 60, lantern:following(world))
+            local x = cam:inset(base, w, h).lens.x
+            far = math.max(far, math.abs(x - was))
+            moved = moved + math.abs(x - was)
+            was = x
+        end
+        inset = cam:inset(base, w, h)
+        check(results, (inset.lens.x > w / 2) ~= (inset.ring.x > w / 2),
+            'zoom: on %s they crossed the middle and the lens stayed (%.0f, them at %.0f)', name, inset.lens.x, inset.ring.x)
+        check(results, moved > (px1 - px0) * 0.4, 'zoom: on %s the lens barely moved', name)
+        check(results, far < w * 0.05, 'zoom: on %s the lens jumped %.0f px in a frame', name, far)
+        shift(-400)
+        run(cam, lantern, 2)
+        shift(-(1000 - 600))
+        run(cam, lantern, 2)
+        inset = cam:inset(base, w, h)
+        check(results, (inset.lens.x > w / 2) ~= (inset.ring.x > w / 2), 'zoom: on %s it did not cross back', name)
 
         -- a tap in its middle is on it (a blob's points are all on its rim)
-        f = cam:fit(base, w, h)
-        local lx, ly = cam:toLevel(base, w, h, drawn(f, 600, 700))
-        check(results, Lantern.creatureAt(world, lx, ly, cam:reach(base, w, h)) == 1,
+        check(results, Lantern.creatureAt(world, jarAt(drawn(base, 600, 700))) == 1,
             'zoom: on %s a tap on the middle of a body misses it', name)
 
-        -- a pinch falls under the finger, and a tap on the other moves to it
-        check(results, near(cam:toLevel(base, w, h, drawn(f, 640, 650)), 640),
-            'zoom: on %s a pinch at x 640 falls elsewhere', name)
-        local sx, sy = drawn(f, 680 - 24, 700)
-        check(results, sx > 0 and sx < w and sy > 0 and sy < h,
-            'zoom: on %s the next one along (at %.0f) is off the close view', name, sx)
-        tap(sx, sy)
+        -- a pinch falls under the finger, and a tap on another moves to it, near or far
+        check(results, near(jarAt(drawn(base, 640, 650)), 640), 'zoom: on %s a pinch at x 640 falls elsewhere', name)
+        tap(drawn(base, 680 - 24, 700))
         check(results, lantern.who == 2 and cam.on, 'zoom: on %s a tap on another creature picked %s', name, tostring(lantern.who))
-        for _ = 1, 120 do cam:update(1 / 60, lantern:following(world)) end
+        run(cam, lantern, 2)
         check(results, near(cam.x, 680, 0.1), 'zoom: on %s it stayed at %.1f, not with the new one at 680', name, cam.x)
+        tap(drawn(base, 1800 - 24, 560))
+        check(results, lantern.who == 3 and cam.on, 'zoom: on %s a tap across the jar picked %s', name, tostring(lantern.who))
+        run(cam, lantern, 2)
+        inset = cam:inset(base, w, h)
+        check(results, near(cam.x, 1800, 0.1) and (inset.lens.x > w / 2) ~= (inset.ring.x > w / 2),
+            'zoom: on %s the loupe did not move across the jar with them', name)
+        tap(drawn(base, 600 - 24, 700))
+        run(cam, lantern, 2)
 
-        -- a tap on nothing lets go; the whole jar again in half a second, and exactly
-        f = cam:fit(base, w, h)
-        v = Camera.stretch(f, w, h)
-        local ax, ay = Tank.level(cam.x, cam.y - (v[4] - v[2]) * 0.45)
-        tap(ax * f.k + f.x, ay * f.k + f.y)
+        -- a tap on the lens lets go, even with someone behind it
+        inset = cam:inset(base, w, h)
+        local under = body(0, 0, 24)
+        under.x, under.y = jarAt(inset.lens.x, inset.lens.y)
+        under = body(under.x, under.y, 24)
+        world.creatures[4] = under
+        check(results, Lantern.creatureAt(world, jarAt(inset.lens.x, inset.lens.y)) == 4,
+            'zoom: on %s no one is behind the lens to test with', name)
+        check(results, cam:over(base, w, h, inset.lens.x + inset.R - 2, inset.lens.y)
+            and not cam:over(base, w, h, inset.lens.x + inset.R + 2, inset.lens.y),
+            "zoom: on %s the lens's edge isn't where it's drawn", name)
+        tap(inset.lens.x, inset.lens.y)
+        check(results, not cam.on and lantern.who == nil, 'zoom: on %s a tap on the lens picked %s', name, tostring(lantern.who))
+        world.creatures[4] = nil
+        run(cam, lantern, 0.52)
+        check(results, cam:amount() == 0, 'zoom: on %s a tap on the lens did not shut it', name)
+
+        -- a tap on nothing lets go, and it's shut in half a second
+        tap(drawn(base, 600 - 24, 700))
+        run(cam, lantern, 1)
+        check(results, cam.on and lantern.who == 1, 'zoom: on %s it did not open again', name)
+        tap(drawn(base, 1000, 300))
         check(results, not cam.on and lantern.who == nil, 'zoom: on %s a tap on empty glass did not let go', name)
-        for _ = 1, 31 do cam:update(1 / 60, lantern:following(world)) end
-        check(results, cam:fit(base, w, h) == base, 'zoom: on %s a tap away did not come back to the whole jar', name)
+        run(cam, lantern, 0.52)
+        check(results, cam:amount() == 0, 'zoom: on %s a tap away did not shut it', name)
 
-        -- going back to the moss: the one looked at lets go and it eases out
-        -- from where it was, and one before it being taken out changes nothing
-        tap(drawn(base, 1800 - 24, 200))
+        -- going back to the moss: the one looked at lets go and it shuts on where
+        -- they were, and one before it being taken out changes nothing
+        tap(drawn(base, 1800 - 24, 560))
         check(results, lantern.who == 3, 'zoom: on %s the far one was not picked', name)
-        for _ = 1, 40 do cam:update(1 / 60, lantern:following(world)) end
+        run(cam, lantern, 40 / 60)
         lantern:forget(1)
         check(results, lantern.who == 2, 'zoom: on %s the followed one was not kept up with', name)
         lantern:forget(2)
@@ -660,10 +769,10 @@ test('zoom', function(j, results)
         check(results, not cam.on and cam.z > 0.9 and near(cam.x, 1800, 1),
             'zoom: on %s one going back to the moss left it at %.2f on %.0f', name, cam.z, cam.x or -1)
         for _ = 1, 31 do cam:update(1 / 60, nil) end
-        check(results, cam:fit(base, w, h) == base, 'zoom: on %s it did not ease out after a return to the moss', name)
+        check(results, cam:amount() == 0, 'zoom: on %s it did not shut after a return to the moss', name)
     end
 
-    -- Watching close up, every body in turn, changes nothing in a real jar
+    -- Watching through the loupe, every body in turn, changes nothing in a real jar
     local function watched(close)
         rng.seed(42)
         local w = World.new(level_data, {cast = CLASSIC, wander = true, selected = 0})
@@ -678,18 +787,21 @@ test('zoom', function(j, results)
                 end
                 lantern:update(1 / 60, w)
                 cam:update(1 / 60, lantern:following(w))
-                local f = cam:fit(base, 1280, 720)
-                check(results, f.k == f.k and f.x == f.x and f.y == f.y, 'zoom: a live jar gave the camera a NaN at step %d', s)
+                if cam:amount() > 0 then
+                    local lens = cam:inset(base, 1280, 720).lens
+                    check(results, lens.x == lens.x and lens.y == lens.y and lens.r == lens.r,
+                        'zoom: a live jar gave the loupe a NaN at step %d', s)
+                end
             end
         end
         return statehash.of(w).total, cam.z
     end
     local plain = watched(false)
     local looked, z = watched(true)
-    check(results, z > 0, 'zoom: the camera never came in on a live jar')
+    check(results, z > 0, 'zoom: the loupe never opened on a live jar')
     check(results, plain == looked, 'zoom: looking closer changed the jar, %s vs %s', plain, looked)
-    log.info('selftest', 'zoom         in and out in %.1f s, up to %.1f times; taps and pinches land under the finger in every fit; '
-        .. 'watching changes nothing', Camera.EASE, closest)
+    log.info('selftest', 'zoom         opens in %.1f s, %.1f to %.1f times the jar; taps and pinches land under the finger in every fit; '
+        .. 'watching changes nothing', Camera.EASE, nearest, widest)
 end)
 
 -- Terrarium: 3c. The M1 gate (#9). All six residents live through a whole

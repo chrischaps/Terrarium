@@ -23,7 +23,7 @@
 #    the compiler work out differently (x ^ 2, #94) makes processes disagree.
 # 5. With $WINDOW set, a jar opened in a real window and drawn as it runs, in
 #    each style (#94), against one opened with none. They must hash the same,
-#    because rendering never touches the sim. And close up (#120), coming in on
+#    because rendering never touches the sim. And with the loupe (#120, #122), opening on
 #    each creature in turn and going out, in the looks that draw it differently.
 #    And the Pi frame's mode (#90), started and stopped the way its launcher
 #    does: --frame, then SIGTERM, which must quit through love.quit and leave
@@ -97,13 +97,13 @@ if [ -n "${WINDOW:-}" ]; then
         fi
     done
 
-    echo "== a jar watched close up, against a jar with none (#120)"
+    echo "== a jar watched through the loupe, against a jar with none (#120, #122)"
     for style in none pencil-each ascii-each watercolour-each; do
         w=$(hash_of $WINDOW "$LOVE" "$GAME" --replay 60 --window --close --style "$style")
         if [ -n "$w" ] && [ "$w" = "$h" ]; then
-            echo "window: watched close up in $style and unwatched both hash $w"
+            echo "window: watched through the loupe in $style and unwatched both hash $w"
         else
-            echo "window: FAIL watching close up in $style changed the jar ('$w' watched vs '$h' headless)"
+            echo "window: FAIL watching through the loupe in $style changed the jar ('$w' watched vs '$h' headless)"
             failed=1
         fi
     done

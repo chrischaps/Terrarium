@@ -8,7 +8,8 @@
 --   lovec . --day <sec>      a time-compressed day, e.g. --day 120 to watch one pass
 --   lovec . --snap - <sec> <file.png>   run <sec> of sim, save a screenshot to the save dir
 --   lovec . --follow <who>   hold the lantern up to the worm, blob or spider (click to follow in play)
---   click a creature         and the view comes in close on it (#120); click anything else to go out
+--   click a creature         and a loupe opens on it (#120, #122), the jar whole behind it;
+--                            click anything else, or the loupe, to let go
 --   right-click              drop a pinch of food into the jar there (a few a day)
 --   the book on the desk, b  open the family book (#32); click a page to turn it, off it to close
 --   m                        hush the jar, or listen again (--mute opens it hushed)
@@ -17,7 +18,7 @@
 --   tab                      the next style
 --   [ ]                      smaller or larger cells, in a style that has them (ascii; --cell 6x9)
 --   love . --frame           the Pi frame (#90): fullscreen, no cursor, no keys; a tap
---                            follows and comes in close, a long press drops food, and SIGTERM quits
+--                            follows and opens the loupe, a long press drops food, and SIGTERM quits
 --                            through love.quit, leaving $EASEL_DATA/thumb.png if it's set
 --   love . --away <time>     come back to a jar left that long ago: 90m, 36h, 2d (jar days)
 --                            or seconds, lived on the coarse step while the glass is fogged
@@ -57,6 +58,7 @@ local Catchup = require('jar.catchup')
 local Passing = require('jar.passing')
 local Lantern = require('jar.lantern')
 local Camera = require('jar.camera')
+local Loupe = require('jar.loupe')
 local Ballistics = require('nav.ballistics')
 local Genome = require('genome')
 local Synth = require('core.synth')
@@ -78,7 +80,7 @@ local accumulator = 0
 local snapFrames -- --snap: frames drawn since the sim was fast-forwarded
 local objects = {} -- stones and plants, back to front
 local lantern = Lantern.new() -- you watch with it; the World never knows it's there
-local camera = Camera.new() -- and it brings the view in on whoever it follows (#120)
+local camera = Camera.new() -- and it opens a loupe on whoever it follows (#120, #122)
 local synth -- the jar heard through its glass (#28), only while you watch it live
 local bench -- --bench: frame, update and draw times, once the eggs have hatched
 local capture -- --script: {co = coroutine, last = canvas}
@@ -108,16 +110,14 @@ local function tabOn(f, w, h)
     local x, y = Screen.toView(f, w - Pages.TAB_X, h)
     return { x = x, y = y, k = f.k }
 end
--- (a close view has lost the desk too, in a window: past this far in, the book
--- is found the same way there, #120)
-local TUCK = 0.5
 local function tuck()
-    if not pages then return end
-    if args.frame or camera:amount() > TUCK then
-        pages.tab = tabOn(view, love.graphics.getDimensions())
-    else
-        pages.tab = nil
-    end
+    if pages and args.frame then pages.tab = tabOn(view, love.graphics.getDimensions()) end
+end
+
+-- A point on the screen, on the creatures' plane: the view is always the whole
+-- jar, loupe or no loupe
+local function jarAt(x, y)
+    return Tank.toLevel(Screen.toView(view, x, y))
 end
 
 -- A point on the screen, in the view's pixels the book is drawn in: the
@@ -288,12 +288,11 @@ function love.load()
         lantern:update(10, world) -- already up to full brightness
     end
     if args.close then
-        -- (close up already, on the one followed or the first, #120)
+        -- (the loupe open already, on the one followed or the first, #120)
         lantern.who = lantern.who or 1
         lantern:update(10, world)
         camera:hold()
         camera:update(Camera.EASE, lantern:following(world))
-        tuck()
     end
     if args.script then
         local chunk, err = love.filesystem.load(args.script)
@@ -333,17 +332,22 @@ end
 
 -- Follow whoever is at a point on the screen with the lantern, or let go.
 -- Terrarium: or, on the family book (#32), open it, turn its pages, close it.
--- Terrarium: and the view comes in on whoever it finds, and lets go on no one
--- or on the book (#120).
+-- Terrarium: and the loupe opens on whoever it finds, and lets go on no one, on
+-- the book, or on the loupe itself, whoever is behind it (#120, #122).
 local function followAt(x, y)
     if pages and pages:press(onBook(x, y)) then
         camera:letGo()
         return
     end
     local w, h = love.graphics.getDimensions()
-    local lx, ly = camera:toLevel(view, w, h, x, y)
-    if lantern:pick(world, lx, ly, camera:reach(view, w, h)) then
-        if not passing then camera:hold() end -- (a fogged glass has no close view)
+    if camera:over(view, w, h, x, y) then
+        lantern.who = nil
+        camera:letGo()
+        return
+    end
+    local lx, ly = jarAt(x, y)
+    if lantern:pick(world, lx, ly) then
+        if not passing then camera:hold() end -- (a fogged glass has no loupe)
         if synth then synth:chime(lx) end
     else
         camera:letGo()
@@ -353,8 +357,7 @@ end
 -- Drop a pinch of food in at a point on the screen, if it's over the jar and
 -- there's one left to give (#25)
 local function pinchAt(x, y)
-    local w, h = love.graphics.getDimensions()
-    local lx, ly = camera:toLevel(view, w, h, x, y)
+    local lx, ly = jarAt(x, y)
     return lx > C.GLASS_L and lx < C.GLASS_R and ly < C.GLASS_B and world:pinch(lx)
 end
 
@@ -384,7 +387,6 @@ function love.update(dt)
     lantern:update(dt, world)
     if pages and pages.open then camera:letGo() end -- (the book takes the whole view)
     camera:update(dt, lantern:following(world))
-    if pages and not args.frame and (pages.tab ~= nil) ~= (camera:amount() > TUCK) then tuck() end
     if synth then synth:update(dt, world, lantern:following(world)) end
 
     -- A finger held still on the frame's glass drops a pinch of food there
@@ -404,8 +406,8 @@ function love.update(dt)
         if not (pages and pages.open) then
             local w, h = love.graphics.getDimensions()
             local mx, my = love.mouse.getPosition()
-            local lx, ly = camera:toLevel(view, w, h, mx, my)
-            over = over or Lantern.creatureAt(world, lx, ly, camera:reach(view, w, h))
+            local lx, ly = jarAt(mx, my)
+            over = over or (not camera:over(view, w, h, mx, my) and Lantern.creatureAt(world, lx, ly))
         end
         love.mouse.setCursor(over and love.mouse.getSystemCursor("hand") or nil)
     end
@@ -626,7 +628,7 @@ local function drawScene(light, plane)
     Glass.drawFront(light, not args.frame and (Screen.toView(view, love.mouse.getPosition())) or nil)
     lantern:drawGlass(light)
     -- (the family book lies on the desk in front of the glass, #32)
-    -- (its ribbon's light is wanted however the frame is drawn, close views too)
+    -- (its ribbon's light is wanted however the frame is drawn, a loupe's plate too)
     if pages and (plane ~= false or pages.tab) then pages:drawClosed(light) end
     love.graphics.setCanvas()
 end
@@ -681,7 +683,7 @@ end
 -- resolution. Behind it is the window's own frame, enlarged and blurred
 -- (`blur`), so the plane stands sharp in a shallow depth of field.
 -- Terrarium: `live` is for a plate that's part of the jar's own picture (the
--- close view, #120), where a portrait is its own: drawn between the last two
+-- loupe, #120, #122), where a portrait is its own: drawn between the last two
 -- steps at the frame's `live.alpha`, lit by the lamp where the lamp really is,
 -- and with the lantern's pool on the plane.
 local function plate(target, v, light, blur, live)
@@ -752,39 +754,19 @@ local function sit(c, into)
     return plate(into or love.graphics.newCanvas(P.w * 2, P.h * 2), v, DayCycle.evaluate(PORTRAIT_HOUR), 2.2)
 end
 
--- Terrarium: the close view (#120), onto `out` (the screen, if nil): what
--- `base` would show on a w x h screen, as far in as the camera is. The whole
--- finished frame goes onto a canvas of the screen's size, as a style and the
--- glass make it, and is scaled by the camera; a plate of what the camera now
--- shows, in the same place to the pixel, fades in over it, and once it has
--- come up it's all there is. A frame comes through the seams of the jar's
--- picture and a portrait's, so it's right in every style.
-local CLOSE_BLUR = 3
+-- Terrarium: the loupe (#120, #122), onto `out` (the screen, if nil): the jar
+-- whole through `base` on a w x h screen, as it's always drawn, and over it what
+-- the camera says, as far open as it is. The lens's plate is only the lens's
+-- size, and comes through the seams of a portrait, so it's right in every style.
+local CLOSE_BLUR = 1
 local function drawClose(light, w, h, base, time, out)
-    local f = camera:fit(base, w, h)
-    local a = camera:sharp()
-    local whole, sharp
-    if a < 1 then
-        whole = canvas('whole', w, h)
-        drawScene(light)
-        love.graphics.setCanvas(whole)
-        love.graphics.clear(0, 0, 0, 1)
-        composite(nil, nil, nil, time, base)
-    end
-    if a > 0 then
-        sharp = plate(canvas('close', w, h), Camera.stretch(f, w, h), light, CLOSE_BLUR, { alpha = accumulator / STEP })
-    end
+    local inset = camera:inset(base, w, h)
+    local lens = plate(canvas('lens', inset.size, inset.size), inset.view, light, CLOSE_BLUR, { alpha = accumulator / STEP })
+    drawScene(light)
     love.graphics.setCanvas(out)
-    love.graphics.setShader()
-    if whole then
-        local r = f.k / base.k
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(whole, f.x - r * base.x, f.y - r * base.y, 0, r, r)
-    end
-    if sharp then
-        love.graphics.setColor(1, 1, 1, a)
-        love.graphics.draw(sharp)
-    end
+    if out then love.graphics.clear(0, 0, 0, 1) end
+    composite(nil, nil, nil, time, base)
+    Loupe.draw(Styles.ring(style), inset, lens, world.time, base.k)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -808,8 +790,8 @@ function watchReplay(w, s)
     end
     local light = DayCycle.evaluate(DayCycle.hourAt(startHour, w.time, daySeconds))
     if args.close then
-        -- --close (#120): close up on each in turn, and all the way out between,
-        -- so it's watched coming in, held and going out
+        -- --close (#120): the loupe on each in turn, and shut between, so it's
+        -- watched opening, held and closing
         local turn = math.floor(s / 600)
         lantern.who = turn % 3 < 2 and (turn % #w.creatures + 1) or nil
         if lantern.who then camera:hold() end
@@ -853,9 +835,9 @@ function scriptApi()
         return name
     end
 
-    -- Terrarium: a tap (#120). Come in close on creature `who` (an index or
+    -- Terrarium: a tap (#120). Open the loupe on creature `who` (an index or
     -- the creature itself), the lantern with it, or with nil let go and ease
-    -- out. It eases as api.step moves the jar's time, so a capture is exact;
+    -- it shut. It eases as api.step moves the jar's time, so a capture is exact;
     -- api.render shows it, whichever fit it's given.
     local zoomed = false
     function api.zoom(who)
@@ -915,8 +897,8 @@ function scriptApi()
         if not v then
             local fit, tab = opts.frame and Screen.tank(w, h) or opts.fit, pages and pages.tab
             local close = camera:amount() > 0
-            if close then fit = fit or Screen.fit(w, h, C.W, C.H) end -- (a close view is always through one)
-            if pages and (opts.frame or camera:amount() > TUCK) then pages.tab = tabOn(fit, w, h) end
+            if close then fit = fit or Screen.fit(w, h, C.W, C.H) end -- (a loupe is always through one)
+            if pages and opts.frame then pages.tab = tabOn(fit, w, h) end
             if close then
                 drawClose(light, w, h, fit, world.time, { target, stencil = true })
             else
@@ -1063,8 +1045,8 @@ function love.resize(w, h)
     tuck()
 end
 
--- Click a creature to follow it with the lantern and come in close; click
--- anywhere else to let go and go out. Right-click in the jar to drop in a pinch of food there (#25). On the
+-- Click a creature to follow it with the lantern and open the loupe on it; click
+-- anywhere else to let go and shut it. Right-click in the jar to drop in a pinch of food there (#25). On the
 -- frame, the left button is a finger too: a touchscreen may come as a pointer.
 function love.mousepressed(x, y, button, istouch)
     if not world or capture or istouch or (passing and passing:catching()) then return end
@@ -1085,7 +1067,7 @@ function love.mousereleased(x, y, button, istouch)
     if button == 1 and not istouch and touch:release('mouse', x, y) == 'tap' then followAt(x, y) end
 end
 
--- A tap follows and comes in close, as a click does; a long press is a pinch (Touch:update)
+-- A tap follows and opens the loupe, as a click does; a long press is a pinch (Touch:update)
 function love.touchpressed(id, x, y)
     if world and not capture and not (passing and passing:catching()) then touch:press(id, x, y) end
 end
