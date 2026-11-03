@@ -17,8 +17,6 @@ local EASE = 7            -- how quickly the pool catches up (per second)
 local FADE = 2.5          -- how quickly it comes up or goes out (per second)
 local WARM = { 1.00, 0.70, 0.38 }
 
-Lantern.PICK = PICK
-
 function Lantern.new()
     return setmetatable({ who = nil, x = nil, y = nil, feet = nil, glow = 0 }, Lantern)
 end
@@ -34,11 +32,10 @@ local function locate(c)
 end
 
 --- The creature nearest a point in level coordinates, if one is close enough.
--- Terrarium: `reach` is how close, in a close view (jar/camera.lua), where it's
--- smaller, and a blob's points are too far round its rim to find its middle,
--- so anywhere within a body's bounds is on it too (the smallest, if there are two).
-function Lantern.creatureAt(world, lx, ly, reach)
-    local best, bestD = nil, (reach or PICK) ^ 2
+-- Terrarium: a blob's points can be too far round its rim to find its middle, so
+-- anywhere within a body's bounds is on it too (the smallest, if there are two).
+function Lantern.creatureAt(world, lx, ly)
+    local best, bestD = nil, PICK * PICK
     local within, least = nil, math.huge
     for i, c in ipairs(world.creatures) do
         local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
@@ -49,7 +46,7 @@ function Lantern.creatureAt(world, lx, ly, reach)
             x1, y1 = math.max(x1, p.x), math.max(y1, p.y)
         end
         local size = (x1 - x0) * (y1 - y0)
-        if reach and lx >= x0 and lx <= x1 and ly >= y0 and ly <= y1 and size < least then
+        if lx >= x0 and lx <= x1 and ly >= y0 and ly <= y1 and size < least then
             within, least = i, size
         end
     end
@@ -57,8 +54,8 @@ function Lantern.creatureAt(world, lx, ly, reach)
 end
 
 --- Follow whoever is under the click, or let go
-function Lantern:pick(world, lx, ly, reach)
-    self.who = Lantern.creatureAt(world, lx, ly, reach)
+function Lantern:pick(world, lx, ly)
+    self.who = Lantern.creatureAt(world, lx, ly)
     return self.who
 end
 
