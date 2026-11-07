@@ -362,6 +362,7 @@ function Keep.decode(s)
             i = i + 1
         else
             local j = find(s, ';', i, true)
+            if not j then error('book: it ends too soon', 0) end
             local id = tonumber(sub(s, i + 1, j - 1))
             local kind = sub(s, j + 1, j + 1)
             local r = {kind = kind}

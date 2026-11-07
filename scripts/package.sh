@@ -6,8 +6,8 @@
 #
 # The .love is a git archive of one commit, so only what's committed ships:
 # never an uncommitted edit, renders/ or a month's CSVs. Left out are the
-# things only a developer runs or reads: tests/, CI, the claim tools, and
-# the agents' settings and CLAUDE.md. The capture scripts (scripts/*.lua)
+# things only a developer runs or reads: tests/, CI, the claim tools, docs/,
+# and the agents' settings and CLAUDE.md. The capture scripts (scripts/*.lua)
 # stay, since --script loads them from inside the game. Easel checks the
 # download against SHA256SUMS before it swaps the game on the frame.
 
@@ -19,7 +19,7 @@ rm -f dist/terrarium.love dist/SHA256SUMS
 git archive --format=zip -9 -o dist/terrarium.love "$ref" -- . \
     ':(exclude)tests' ':(exclude).github' ':(exclude).claude' \
     ':(exclude).gitignore' ':(exclude).gitattributes' ':(exclude)CLAUDE.md' \
-    ':(exclude)scripts/issue*' || exit 1
+    ':(exclude)scripts/issue*' ':(exclude)docs' || exit 1
 # (the sed keeps Git Bash's binary-mode '*' out, so it reads as on Linux)
 (cd dist && sha256sum terrarium.love | sed 's/ \*/  /' > SHA256SUMS) || exit 1
 
