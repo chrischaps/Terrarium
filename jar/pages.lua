@@ -228,8 +228,26 @@ function Pages.closedRect()
     return x0 - 14, y0 - 16, x1 + 14, y1 + 10
 end
 
+-- On the frame (#110) the desk is off the screen, so the book is found by its
+-- ribbon, left hanging over the jar's foot at the screen's bottom edge.
+-- `self.tab` is {x, y, k}: where on the view the ribbon meets that edge, and
+-- the screen's scale, so it's the same size on any screen. Nil in a window.
+-- (the frame's 7" panel is about 210 px to the inch, so the ribbon is some 6 mm
+-- tall, and its touch room twice that)
+local TAB = {w = 13, h = 54, notch = 9, lean = 5, x = 64} -- screen px
+
+-- Where the ribbon is on the screen, from its bottom edge, for main.lua to place it
+Pages.TAB_X = TAB.x
+
+-- The ribbon's room for a fingertip, on the view: x0, y0, x1, y1
+function Pages:tabRect()
+    local t, s = self.tab, 1 / self.tab.k
+    return t.x - 44 * s, t.y - 100 * s, t.x + 44 * s, t.y
+end
+
 function Pages:overClosed(vx, vy)
-    local x0, y0, x1, y1 = Pages.closedRect()
+    local x0, y0, x1, y1
+    if self.tab then x0, y0, x1, y1 = self:tabRect() else x0, y0, x1, y1 = Pages.closedRect() end
     return self.shown < 0.5 and vx >= x0 and vx <= x1 and vy >= y0 and vy <= y1
 end
 
@@ -240,6 +258,10 @@ function Pages:drawClosed(light)
     local rm, l = light.room, light.lamp
     local k = {}
     for i = 1, 3 do k[i] = rm[i] * 0.85 + l[i] * 0.30 end
+    if self.tab then
+        self.tabLight = k -- (the ribbon is drawn over the glass, after it bends the view: drawTab)
+        return
+    end
     local function quad(a, b, c, d, h1, h2, h3, h4)
         local ax, ay = at(a[1], a[2], h1)
         local bx, by = at(b[1], b[2], h2)
@@ -321,6 +343,50 @@ function Pages:drawClosed(light)
         love.graphics.setLineWidth(0.7)
         love.graphics.polygon('line', pts)
     end
+    love.graphics.pop()
+end
+
+-- On the frame: the ribbon's swallowtail end, up over the jar's foot from the
+-- book below the screen, and a slip of paper beside it when there's news. Lit
+-- as the desk is, but never quite lost, so a finger can find it at night. In
+-- the view's pixels, over the finished frame, since it's in front of the
+-- glass and isn't bent by it; it hides while the book is open.
+function Pages:drawTab()
+    local k = self.tabLight
+    if not (self.tab and k) or self.shown >= 1 then return end
+    local t, s = self.tab, 1 / self.tab.k
+    local lit = {}
+    -- (darkened as the room's vignette darkens the screen's corner, composite.glsl)
+    for i = 1, 3 do lit[i] = math.max(k[i], 0.55) * 0.62 * (1 - self.shown) end
+    local x, y = t.x, t.y + 4 * s -- (from just under the edge)
+    local hw, h, notch, lean = TAB.w / 2 * s, (TAB.h + 4) * s, TAB.notch * s, TAB.lean * s
+    love.graphics.push('all')
+    if self.book:news() then
+        -- the slip, standing up out of the leaves behind the ribbon
+        love.graphics.push()
+        love.graphics.translate(x - 18 * s, y)
+        love.graphics.rotate(-0.10)
+        shade({0, 0, 0}, lit, 0.25)
+        love.graphics.rectangle('fill', -9 * s, -38 * s, 22 * s, 38 * s)
+        shade({0.98, 0.95, 0.87}, lit)
+        love.graphics.rectangle('fill', -11 * s, -40 * s, 22 * s, 40 * s)
+        shade({0.5, 0.42, 0.33}, lit, 0.5)
+        love.graphics.setLineWidth(s)
+        love.graphics.rectangle('line', -11 * s, -40 * s, 22 * s, 40 * s)
+        love.graphics.pop()
+    end
+    -- its shadow on the glass, then the silk in two halves (each convex), the
+    -- notch between them
+    shade({0, 0, 0}, lit, 0.30)
+    love.graphics.polygon('fill', x - hw + 2 * s, y, x + hw + 2 * s, y, x + hw + lean + 2 * s, y - h + 2 * s,
+        x - hw + lean + 2 * s, y - h + 2 * s)
+    shade(RIBBON, lit)
+    love.graphics.polygon('fill', x - hw, y, x, y, x + lean, y - h + notch, x - hw + lean, y - h)
+    love.graphics.polygon('fill', x, y, x + hw, y, x + hw + lean, y - h, x + lean, y - h + notch)
+    -- a sheen down the silk
+    shade({RIBBON[1] * 1.7, RIBBON[2] * 2.2, RIBBON[3] * 2.2}, lit, 0.55)
+    love.graphics.setLineWidth(1.6 * s)
+    love.graphics.line(x - hw * 0.4, y, x - hw * 0.4 + lean, y - h + notch * 0.5)
     love.graphics.pop()
 end
 
