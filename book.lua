@@ -246,6 +246,26 @@ function Book:close()
     self.seen = self.world.time
 end
 
+-- What the jar's book (#30, keep.lua) keeps of this one: the entries, the
+-- clutches, when it was last closed, and who each living page belongs to
+-- (creatures and eggs, written in the same graph as the World, so they read
+-- back as the World's own). Plain tables: the weak ones are made again.
+function Book:state()
+    local laid = {}
+    for egg, parents in pairs(self.laid) do laid[egg] = parents end
+    return {entries = self.entries, clutches = self.clutches, seen = self.seen, alive = self.alive, laid = laid}
+end
+
+-- This book as it was kept, over the one composed for the jar read back
+function Book:restore(s)
+    self.entries, self.clutches, self.seen = s.entries, s.clutches, s.seen
+    self.alive = s.alive
+    self.of = setmetatable({}, {__mode = 'k'})
+    for n, c in pairs(self.alive) do self.of[c] = self.entries[n] end
+    self.laid = setmetatable({}, {__mode = 'k'})
+    for egg, parents in pairs(s.laid or {}) do self.laid[egg] = parents end
+end
+
 -- How many live in the jar now
 function Book:living()
     local n = 0

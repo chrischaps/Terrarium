@@ -178,9 +178,27 @@ end
 
 function Plants.all() return list end
 
---- World's flora hook: step on the fixed step with the creatures' influencers
-function Plants:update(dt, near)
-    time = time + dt
+-- Terrarium: what the book keeps of them (#30): composed again from the
+-- seed, they take the angles and swing the saved fronds had
+function Plants.state() return {list = list, time = time} end
+function Plants.restore(s)
+    local seen = {}
+    local function overlay(live, saved)
+        if seen[saved] then return end
+        seen[saved] = true
+        for k, v in pairs(saved) do
+            if type(v) == 'table' and type(live[k]) == 'table' then overlay(live[k], v) else live[k] = v end
+        end
+    end
+    overlay(list, s.list)
+    time = s.time
+end
+
+--- World's flora hook: step on the fixed step with the creatures' influencers.
+-- Terrarium: `now` is the jar's clock, which this one keeps step for step, so
+-- a jar read back from its book (#30) sways on from where it was.
+function Plants:update(dt, near, now)
+    time = now or time + dt
     for _, p in ipairs(list) do
         if p.leaves then
             for _, c in ipairs(p.leaves) do simulate(c, dt, p.x, p.y, p.d, near, 0.4) end

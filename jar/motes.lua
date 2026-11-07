@@ -46,6 +46,14 @@ function Motes.init(generator, count)
     end
 end
 
+-- Terrarium: what the book keeps of them (#30). They draw from rng.look as
+-- the creatures' eyes do, so a jar read back has to have the same motes for
+-- its eyes to glance the same way.
+function Motes.state() return {list = list, time = time} end
+function Motes.restore(s)
+    list, time = s.list, s.time
+end
+
 function Motes.update(dt)
     time = time + dt
     for _, m in ipairs(list) do

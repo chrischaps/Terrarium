@@ -56,6 +56,7 @@ local R = 21 -- Terrarium: the ring's radius at size 1 (Character's blob)
 -- the biggest can no longer fit through the gaps it jumps over. One table per
 -- size, so blobs of a size share it (and a nav graph).
 local profiles = {}
+Blob.profiles = profiles -- (a cache: the book, #30, puts it back as it was)
 function Blob.profile_for(size)
     if size == 1 then return Blob.profile end
     local p = profiles[size]
@@ -83,6 +84,7 @@ end
 Blob.BUCKETS = 8
 Blob.BUCKET_GENE = 'size' -- (#73: the gene the buckets divide, for the self-test)
 local navs = {}
+Blob.navs = navs -- (so does this one)
 function Blob.nav_profile(genome)
     local k, lo, hi = Genome.bucket('blob', 'size', genome and genome.size or 1, Blob.BUCKETS)
     if navs[k] then return navs[k] end
@@ -429,7 +431,7 @@ function Blob:draw(ctx)
         r, g, b = r + rim * 0.45, g + rim * 0.35, b + rim * 0.15
         verts[#verts + 1] = {x, y, 0, 0, r, g, b, a}
     end
-    if self.mesh:getVertexCount() ~= #verts then
+    if not self.mesh or self.mesh:getVertexCount() ~= #verts then -- (none in a body read from its book, #30)
         self.mesh = love.graphics.newMesh(#verts, 'fan', 'stream')
     end
     self.mesh:setVertices(verts)

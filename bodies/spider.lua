@@ -53,6 +53,7 @@ Spider.profile = {
 
 -- Terrarium: one profile per reach, so spiders with the same legs share a graph
 local profiles = {}
+Spider.profiles = profiles -- (a cache: the book, #30, puts it back as it was)
 function Spider.profile_for(reach)
     if reach == 1 then return Spider.profile end
     local p = profiles[reach]
@@ -73,6 +74,7 @@ end
 Spider.BUCKETS = 8
 Spider.BUCKET_GENE = 'reach' -- (#73: the gene the buckets divide, for the self-test)
 local navs = {}
+Spider.navs = navs -- (so does this one)
 function Spider.nav_profile(genome)
     local k, lo, hi = Genome.bucket('spider', 'reach', genome and genome.reach or 1, Spider.BUCKETS)
     if navs[k] then return navs[k] end
